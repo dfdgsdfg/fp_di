@@ -217,6 +217,57 @@ remove only their own element. The [CRDT entry](#adjacent-work-verified-sources)
 below states the commutativity condition that makes such operations
 converge.
 
+### Use cases in applications
+
+The obligation matters only where two nodes without a read path between them
+operate at one shared thing. The runtime overlaps such nodes at three points:
+`initialize`, the disposal of a scope, and a reactivation after a publisher
+returns. The cases below are common in Dart and Flutter applications. They
+are illustrations, not incidents found in a codebase.
+
+**Operations that do not commute.**
+
+| Shared thing | Operations of two unordered nodes | Point | Outcome |
+|---|---|---|---|
+| A `Database` key | A migrator changes the schema in `create`; a repository warms its cache in `create` | Start | The repository reads the old schema |
+| A `Database` key | At logout, a sync service flushes pending writes in `dispose`; a cache cleaner clears tables in `dispose` | Release | A flush after the clear restores user data, or the clear drops the flush |
+| A key-value store key | Two features write one entry, or one writes and one removes it | Start, release | The final value depends on the completion order |
+| An HTTP client key | An auth interceptor and a logging interceptor each add themselves in `create` | Start | The chain order depends on the completion order (the middleware case of p. 29) |
+| A socket key | One node sends a subscribe message after connect; another closes the socket in `dispose` | Release, reconnect | A send on a closed socket |
+
+The release cases are the likelier defects. An author orders the start in
+mind, but the runtime releases unordered nodes at the same time.
+
+**Operations that commute.** Listeners on an event bus or an analytics SDK
+that each remove their own handle, route or deep-link registrations of
+distinct paths, subscriptions to distinct socket topics, and queries that only
+read. A classification would mark these keys commutative, so that their
+readers do not conflict.
+
+**Shared state outside the keys.** `Logger.level`, `Intl.defaultLocale`,
+`HttpOverrides.global`, `FlutterError.onError`, an audio session category,
+and `setMethodCallHandler` on one channel. Two features that set and restore
+one of them do not commute, and no key mediates the sharing. A classification
+does not see them. The only remedy is one owner component and a token key that
+the other components read, as the
+[lifecycle notes](../../../../packages/fp_di/doc/lifecycle.md#effects-that-overlap)
+state.
+
+**What the cases show.**
+
+- A classification adds no capability. A read edge or a token key already
+  orders each conflicting pair. A classification moves the discovery from a
+  run with an unlucky completion order to `initialize`.
+- A classification per key is coarse. A `Database` key marked ordered makes
+  every pair of its repositories conflict, though most of them only query. A
+  useful check needs reads and writes per operation, as Bernstein's conditions
+  state, which is the [footprint proposal](footprint-independence.researches.md)
+  and the open question on a query-only read form.
+- Key kinds for common structures, as in
+  [the structural case](#collection-keys-as-a-structural-case), remove the
+  registry and the interceptor chain from the obligation without a
+  classification.
+
 ### Adjacent work (verified sources)
 
 Databases, transactional memory, replication, and effect theory solve the same
