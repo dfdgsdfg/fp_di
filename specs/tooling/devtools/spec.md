@@ -1,0 +1,255 @@
+---
+type: spec
+title: "DevTools Extension Specification"
+description: "Design of the inspector that a debug build of an fp_di app serves, its JSON protocol, and the DevTools extension app that shows it."
+tags: [tooling, devtools, observation]
+depends_on: ["specs/runtime/lifecycle/spec.md", "specs/architecture/spec.md"]
+---
+
+# DevTools Extension Specification
+
+[Requirements](requirements.md) · [Decision log](log.md) · [Known gaps](gap.md)
+
+Architecture: [Project architecture](../../architecture/spec.md). Observation
+contract: [Runtime lifecycle, Observation](../../runtime/lifecycle/spec.md#observation).
+
+## Overview
+
+A debug build of an app that uses `fp_di` serves an **inspector** to Dart
+DevTools: a set of service extensions that answer queries in JSON, and events
+for each change. A DevTools **extension app** reads them through the VM
+service and shows the scopes, the nodes, the transitions, and the shape graph
+of the running app ([requirements](requirements.md)). The inspector reads the
+same state as the observation layer of the runtime and changes nothing. It
+exists only when Dart assertions are enabled, so a release build carries no
+inspector work. The design is not implemented; [G-TL-DT-001](gap.md#g-tl-dt-001)
+records the difference.
+
+## Context & Boundaries
+
+```mermaid
+flowchart LR
+  subgraph App["Running app, debug build"]
+    RT["fp_di runtime"] --> INS["inspector"]
+  end
+  subgraph DevTools["Dart DevTools in a browser"]
+    EXT["fp_di extension app"]
+  end
+  INS -->|"service extension answers"| EXT
+  INS -->|"posted events"| EXT
+  EXT -->|"queries and listen"| INS
+```
+
+| Part | Owner | Responsibility |
+|---|---|---|
+| Inspector | `packages/fp_di/lib/src/runtime/` | Registers the service extensions, keeps the registry of live roots, builds answers and events from the runtime state |
+| Protocol | This topic | The names of the service extensions, the JSON of each answer and event, and its `version` |
+| Extension app | A new package `packages/fp_di_devtools/`, a Flutter web app that is not published | The views of R-UC-TL-DT-005 |
+| Built extension | `packages/fp_di/extension/devtools/` | The `config.yaml` and the built web app that DevTools loads |
+
+The inspector uses `dart:developer` only, so the core package still imports no
+Flutter library. The extension app depends on Flutter and on
+`devtools_extensions`; it is a separate package, and `fp_di` does not depend
+on it. DevTools loads the built app from the `extension/devtools/` folder of a
+package that the connected app depends on.
+
+The inspector is part of the runtime library, because it reads internal state
+that no public API gives: the id of each scope, the nodes that read a node,
+and the stack trace of a failure.
+
+## Runtime Behavior
+
+### Registration
+
+```mermaid
+stateDiagram-v2
+  [*] --> Absent: isolate starts
+  Absent --> Served: first root created, assertions enabled
+  Absent --> Absent: root created, assertions disabled
+  Served --> Streaming: listen with enabled true
+  Streaming --> Served: listen with enabled false
+  Streaming --> Streaming: transition, error, or slow mutation posts an event
+```
+
+The constructor of a root runs the registration inside an `assert`. The first
+registration in an isolate registers each service extension with
+`registerExtension` of `dart:developer`. Later roots only join the registry. A
+name can be registered one time in an isolate, so the inspector keeps one flag
+for the isolate.
+
+The registry holds each root through a `WeakReference`, and the end of the
+disposal of a root removes it. Ids come from counters of the inspector: a root
+id, and a scope id for each scope that the inspector has listed. Node ids are
+the `NodeState.id` values of the runtime.
+
+### Queries
+
+| Service extension | Arguments | Answer |
+|---|---|---|
+| `ext.fp_di.roots` | none | `roots`: for each live root, `id`, `label`, `revision` |
+| `ext.fp_di.state` | `root`, optional `values` | `scope`: a tree; each scope has `id`, `phase`, `module`, `children`, and `nodes`; each node has `id`, `label`, `key`, `phase`, `missing`, `failure`, `commits`, the `origin` of its component, and `value` when `values` is true |
+| `ext.fp_di.node` | `node`, optional `values` | `reads`: for each key, `kind`, `resolves`, and the `publisher` id; `readers`: the ids of the nodes that read this node; `failure`: `cause`, `stackTrace`; `cause`: the steps of the search for an unavailable key |
+| `ext.fp_di.shape` | `scope` | `shape`: the `ShapeGraph` JSON of the scope, with the modules of its ancestors |
+| `ext.fp_di.listen` | `enabled`, optional `values` | `listening`: the new setting |
+
+Each answer is a JSON object with `format: "fp_di.devtools"` and
+`version: 1`. An error answer has `error` with a message that names the
+argument, and the handler returns it instead of throwing. A key is its
+`toString()`, such as `DiKey<Api>(timeout)`. A phase is the name of its
+`NodePhase` or `ScopePhase` value.
+
+A query reads `Scope.state`, `NodeState`, and the internal tables of the
+runtime, and it starts no mutation, as the reads of the observation layer do.
+The `cause` steps follow the search of
+[R-UC-RT-LC-030](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-030):
+each step names a node, its phase, and the keys that it waits for.
+
+### Events
+
+```mermaid
+sequenceDiagram
+  participant App as runtime and inspector
+  participant DT as extension app
+  DT->>App: ext.fp_di.listen enabled true
+  App-->>DT: listening true
+  Note over App: transitions in one event-loop turn
+  App->>App: collect changed node states per root
+  App-->>DT: fp_di:transition with root, revision, changed
+  App-->>DT: fp_di:error for a report on Scope.errors
+  DT->>App: ext.fp_di.listen enabled false
+```
+
+The inspector adds one listener of the runtime for each root while the
+extension listens. The listener keeps the root and nothing else. A microtask
+at the end of the turn posts one `fp_di:transition` event for each root that
+changed, with `changed` built by `ScopeState.changedSince` from the value of
+the last event. `fp_di:error` carries the type, the message, and a cut stack
+trace of each report. `fp_di:slowMutation` carries the fields of
+`SlowMutation`. A root measures its mutations only when it was created with
+`onSlowMutation`; the inspector wraps that listener and starts no timer of
+its own, so a root without it posts no such event.
+
+A text longer than 4 KiB is cut and marked with `truncated: true`, and an event
+lists at most 500 changed nodes and states the rest as a count. The bounds keep
+one event far below the size that the VM service accepts.
+
+### Values
+
+A value appears only when the extension asks for it, in the query or with
+`listen`. The inspector calls `toString()` of the value, cuts the text at
+4 KiB, and gives the text `<toString threw>` when the call throws. A value can
+hold a secret, so the default is off.
+
+## Extension App
+
+| View | Content | Source |
+|---|---|---|
+| Scope tree | Roots and their scopes, with the phase of each scope | `roots`, `state` |
+| Nodes | The nodes of the selected scope: label, key, phase, missing keys, commits, origin; a filter by phase and a search by key | `state` |
+| Details | The reads of the selected node with their publishers, its readers, its failure, and the cause of an unavailable key. A key or a reader opens its node. | `node` |
+| Timeline | Transitions, errors, and slow mutations since the extension connected, newest last | events |
+| Graph | The shape graph of the selected scope in depth order, with each member colored by phase, and the cycles, the longest chain, and the undeclared and duplicate keys | `shape`, `state` |
+
+The extension app starts with the `DevToolsExtension` widget of
+`devtools_extensions` and reaches the app through the service manager that
+the framework gives. It calls `listen` when it opens and when the app
+restarts, and reloads `state` after each transition event of the selected
+root. It reads the protocol `version` first and shows a message instead of
+the views when the version differs.
+
+## Packaging
+
+```text
+packages/fp_di/extension/devtools/
+  config.yaml      name: fp_di, issueTracker, version, materialIconCodePoint
+  build/           output of: dart run devtools_extensions build_and_copy
+packages/fp_di_devtools/
+  pubspec.yaml     publish_to: none; depends on devtools_extensions
+  lib/             the views
+```
+
+`dart run devtools_extensions validate --package=packages/fp_di` checks the
+folder. Whether a release of `fp_di` contains the built folder is
+TBD(Q-TL-DT-001).
+
+## Verification
+
+### <a id="v-t-tl-dt-001"></a>V-T-TL-DT-001 — `[test]` Registration only in debug builds
+
+- **Layer:** Unit, Dart VM
+- **Target:** the registration of the inspector in [Registration](#registration)
+- **Files:** `packages/fp_di/test/devtools_inspector_test.dart` and a second run without `--enable-asserts`
+- **Fixtures:** a recording hook for `registerExtension` and `postEvent`; two roots, one disposed
+- **Pass:** with assertions, each service extension is registered one time and `roots` lists only the live root; without assertions, the hook records nothing
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-t-tl-dt-002"></a>V-T-TL-DT-002 — `[test]` Query answers
+
+- **Layer:** Unit, Dart VM
+- **Target:** the handlers of [Queries](#queries)
+- **Files:** `packages/fp_di/test/devtools_inspector_test.dart`
+- **Fixtures:** a root with a child initialized before its parent, a waiting node, a failed automatic activation, a collection reader, and a node disposed alone
+- **Pass:** each answer has `format` and `version`; the tree, the reads, the readers, the failure, and the `cause` steps equal the values that the runtime gives; an unknown id gives an error answer; `revision` is unchanged
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-t-tl-dt-003"></a>V-T-TL-DT-003 — `[test]` Events
+
+- **Layer:** Unit, Dart VM
+- **Target:** [Events](#events)
+- **Files:** `packages/fp_di/test/devtools_inspector_test.dart`
+- **Fixtures:** the recording hook; transitions in one turn and in two turns; an error; a slow mutation of a root created with `onSlowMutation` and a short threshold; a stack trace over 4 KiB
+- **Pass:** no event before `listen`; one transition event for each turn and root; the error and the slow mutation are posted; the long text is cut and marked; `listen` with `enabled: false` stops the events
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-t-tl-dt-004"></a>V-T-TL-DT-004 — `[test]` Values on request
+
+- **Layer:** Unit, Dart VM
+- **Target:** [Values](#values)
+- **Files:** `packages/fp_di/test/devtools_inspector_test.dart`
+- **Fixtures:** values whose `toString` returns a secret, a text over 4 KiB, and a throw
+- **Pass:** no value text without the request; the long text is cut; the throwing value gives `<toString threw>`
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-t-tl-dt-005"></a>V-T-TL-DT-005 — `[test]` Extension views
+
+- **Layer:** Flutter widget
+- **Target:** the views of [Extension App](#extension-app)
+- **Files:** `packages/fp_di_devtools/test/`
+- **Fixtures:** a fake service that serves recorded answers and events; an answer with another `version`; no connected app
+- **Pass:** each view shows the recorded data; a key opens its publisher; the filter and the search narrow the nodes; the two messages appear
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-l-tl-dt-001"></a>V-L-TL-DT-001 — `[lint]` Packaging and the core boundary
+
+- **Layer:** Static
+- **Target:** [Packaging](#packaging)
+- **Command:** `dart run devtools_extensions validate --package=packages/fp_di`, and the import check of [V-L-AR-DI-001](../../architecture/requirements.md#v-l-ar-di-001)
+- **Pass:** the validation passes and no file of `packages/fp_di/lib` imports Flutter
+- **Evidence:** missing — not implemented; see G-TL-DT-001
+
+### <a id="v-q-tl-dt-001"></a>V-Q-TL-DT-001 — `[qa]` DevTools with a running app
+
+A manual run of `packages/fp_di/example/session_scope.dart` and of the Flutter
+example `packages/fp_di_flutter/example/session_scope.dart` in debug mode,
+with DevTools in a browser, following V-Q-TL-DT-001 of the requirements. The
+checklist lives beside the extension app when it exists.
+
+## Risks & Trade-offs
+
+- **Automatic registration.** The inspector needs no call in the app, so it is
+  there whenever DevTools is. The cost is one registration and a weak registry
+  in each debug isolate; events cost nothing until the extension listens. An
+  opt-in call was rejected: an author forgets it exactly when debugging needs
+  it. See the [decision](log.md).
+- **Internal access.** The inspector reads internal tables, so a change of the
+  runtime can break it. Its tests live with the core tests and run on each
+  change.
+- **Protocol drift.** The extension and the inspector ship in one package
+  version, and the extension refuses another `version`, so a mismatch shows a
+  message instead of wrong data.
+- **Package size.** The built web app adds to the size of `fp_di` when it is
+  published. Q-TL-DT-001 decides when.
+- **Unverified framework API.** The design relies on `registerExtension` and
+  `postEvent` of `dart:developer`, and on the service manager of
+  `devtools_extensions`. The exact calls are checked against their
+  documentation when the work starts.
