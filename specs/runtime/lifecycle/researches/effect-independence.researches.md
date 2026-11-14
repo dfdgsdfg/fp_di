@@ -173,6 +173,50 @@ The read edges force `Db` before `A` and `B`, and release `A` and `B` before
 commutative. The discipline turns "are `A` and `B` independent?" into "is the
 interface of `Db` commutative?". The publisher of `Db` answers that once.
 
+### Collection keys as a structural case
+
+The [collection keys](../spec.md#collection-keys) already reach the result of
+the discipline for one shared structure, without a classification.
+
+A registry to which many components add their own entry is the commutative
+case that the paper names on p. 29: each adds a listener and removes its own
+handle. A naive registry is one shared location. Its contributors would
+operate at one key, and Theorem 47 would then need that key to be commutative.
+
+The runtime reduces the registry instead. Each set contribution publishes
+under an internal contribution key of its own. Each map entry publishes under
+its entry key `map.entryKey(id)`. A collection read expands to plain reads of
+those keys. The contributors therefore operate at distinct keys, and
+Theorem 45 (p. 29) makes them independent. No key needs a commutativity
+attribute, and no author can classify one wrongly.
+
+The reduction also covers the ordered case. Insertion into an ordered chain
+does not commute (p. 29), because the completion order would decide the
+position. A collection value is not built by insertion. The runtime folds it
+from the resolved publishers in an order that the declarations fix: ancestors
+first, then declaration order. The completion order of the contributors
+therefore does not change the value.
+
+| Paper concept | Collection key |
+|---|---|
+| Commutative key: each operation adds or removes its own contribution | One key for each contribution; distinct keys are independent (Theorem 45) |
+| Ordered key: insertion into an ordered chain | An order fixed by declarations; a fold over published values, not an insertion |
+| Mediation: shared state passes through a key (§3.3.1) | The runtime owns the registry; contributors do not mutate it |
+
+The reduction has two limits:
+
+- It covers membership and the collection value only. A reader that calls
+  methods of an element, or elements that share state outside the keys, fall
+  under [the obligation](#the-obligation) again.
+- Decoration, which the collection decision excludes, wraps one value in
+  order: `d₂(d₁(v))`. It does not commute. A decoration key would need an
+  order fixed by declarations, as the collection order is.
+
+A set or map contribution resembles an op-based CRDT whose operations add and
+remove only their own element. The [CRDT entry](#adjacent-work-verified-sources)
+below states the commutativity condition that makes such operations
+converge.
+
 ### Adjacent work (verified sources)
 
 Databases, transactional memory, replication, and effect theory solve the same
@@ -310,6 +354,22 @@ These obligations are a candidate, not an accepted contract.
 With this check, Theorem 47 discharges independence for every pair that the
 runtime overlaps. Theorem 43 and Theorem 68 then give recovery for concurrent
 activation, concurrent teardown, and `zipPar`.
+
+### Candidate: commutative structures as key kinds
+
+This direction is a candidate, not an accepted contract. It complements the
+classification check above.
+
+- Offer a common shared structure as a key kind that the runtime reduces to
+  distinct keys, as the [collection keys](#collection-keys-as-a-structural-case)
+  do. Candidates are a registry, a counter, an ordered chain, and decoration.
+- Fix each order by declarations, and build each value as a fold over
+  published values.
+- Leave the classification check for shared state that no key kind expresses,
+  such as a database or a global setting.
+
+A key kind gives independence by construction and needs no attribute. The
+classification check covers the rest, and it relies on the author.
 
 ### Residual obligations
 
