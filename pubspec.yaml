@@ -1,0 +1,17 @@
+name: fp_di_workspace
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+workspace:
+  - packages/fp_di
+  - packages/fp_di_flutter
+  - packages/fp_di_fpdart
+
+dev_dependencies:
+  analyzer: ^12.1.0
+  lints: ^6.0.0
+  test: ^1.25.0
+  yaml: ^3.1.3
+

@@ -1,0 +1,17 @@
+.dart_tool/
+.DS_Store
+.idea/
+.metadata
+.packages
+build/
+coverage/
+output/
+tmp/pdfs/
+
+# Agent-local state; keep reusable rules and scripts tracked.
+agents/agent-memory/
+agents/scratchpads/
+specs/**/plan.md
+
+# Downloaded formal toolchain; pinned by verification/toolchain.lock.json.
+verification/.toolchain/

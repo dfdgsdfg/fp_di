@@ -1,0 +1,90 @@
+version: 1
+description: >-
+  Workspace packages and the platforms they need, with the edges whose source is one of them. The root
+  pubspec.yaml owns workspace membership, and the architecture spec owns the accepted dependency direction.
+  This file names stable anchors and accepted edges only.
+nodes:
+  fp_di_core:
+    kind: component
+    definition: >-
+      Dart-only runtime package for the component algebra, keys, context, activation and cleanup
+      transactions, dependency tracking, and runtime errors.
+    domain: architecture
+    bindings:
+      - type: package
+        path: packages/fp_di
+      - type: spec
+        path: specs/architecture/spec.md
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - pubspec.yaml
+      - specs/architecture/spec.md
+  fp_di_flutter:
+    kind: component
+    definition: >-
+      Flutter adapter package that publishes a caller-owned scope to the widget tree and reads it from a
+      BuildContext, over the public runtime API. It owns no scope.
+    domain: architecture
+    bindings:
+      - type: package
+        path: packages/fp_di_flutter
+      - type: spec
+        path: specs/architecture/spec.md
+    evidence:
+      - pubspec.yaml
+      - specs/architecture/spec.md
+  fp_di_fpdart:
+    kind: component
+    definition: >-
+      Optional package that puts the scope lifecycle, lookups, and Dependency steps of the public runtime
+      API into fpdart types.
+    domain: architecture
+    bindings:
+      - type: package
+        path: packages/fp_di_fpdart
+      - type: spec
+        path: specs/architecture/spec.md
+    evidence:
+      - pubspec.yaml
+      - specs/architecture/spec.md
+  dart_sdk:
+    kind: platform
+    definition: Dart SDK and VM that build and run the core package without Flutter.
+    domain: architecture
+    evidence:
+      - packages/fp_di/pubspec.yaml
+  flutter_sdk:
+    kind: platform
+    definition: Flutter SDK and engine that the adapter package builds and runs against.
+    domain: architecture
+    evidence:
+      - packages/fp_di_flutter/pubspec.yaml
+relations:
+  - from: fp_di_flutter
+    type: depends_on
+    to: fp_di_core
+    description: The adapter composes over the public lifecycle and lookup APIs of the core.
+    evidence:
+      - packages/fp_di_flutter/pubspec.yaml
+      - specs/architecture/spec.md
+  - from: fp_di_flutter
+    type: depends_on
+    to: flutter_sdk
+    description: The adapter requires the Flutter SDK to build and run.
+    evidence:
+      - packages/fp_di_flutter/pubspec.yaml
+  - from: fp_di_fpdart
+    type: depends_on
+    to: fp_di_core
+    description: The fpdart package composes over the public lifecycle and lookup APIs of the core.
+    evidence:
+      - packages/fp_di_fpdart/pubspec.yaml
+      - specs/architecture/spec.md
+  - from: fp_di_core
+    type: runs_on
+    to: dart_sdk
+    description: The core runs on the Dart VM without Flutter.
+    evidence:
+      - packages/fp_di/pubspec.yaml
+      - agents/scripts/test_core.dart

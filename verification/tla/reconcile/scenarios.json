@@ -1,0 +1,102 @@
+{
+  "module": "Reconcile.tla",
+  "source": [
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/scope.dart",
+    "packages/fp_di/lib/src/runtime/runtime_state.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "ReconcileG002",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileShadow",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileChain",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileFeedback",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileCollection",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileFeedbackProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileCollectionProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileNegSkipRecheck",
+      "expect": {
+        "invariant": "StableTargets"
+      }
+    },
+    {
+      "name": "ReconcileNegOptionalRequired",
+      "expect": {
+        "invariant": "OptionalEligibility"
+      }
+    },
+    {
+      "name": "ReconcileNegPublisherFirst",
+      "expect": {
+        "invariant": "DependentFirst"
+      }
+    },
+    {
+      "name": "ReconcileNegRebuildUnchanged",
+      "expect": {
+        "invariant": "NoNeutralReload"
+      }
+    },
+    {
+      "name": "ReconcileNegResurrectRemoved",
+      "expect": {
+        "invariant": "NoResurrection"
+      }
+    },
+    {
+      "name": "ReconcileNegOmitOptional",
+      "expect": {
+        "invariant": "StableTargets"
+      }
+    },
+    {
+      "name": "ReconcileNegUnsettledSucceeds",
+      "expect": {
+        "invariant": "UnsettledFailsInit"
+      }
+    },
+    {
+      "name": "ReconcileNegCaptureMembership",
+      "expect": {
+        "invariant": "StableTargets"
+      }
+    },
+    {
+      "name": "ReconcileNegOwnMember",
+      "expect": {
+        "invariant": "StableTargets"
+      }
+    },
+    {
+      "name": "ReconcileNegChildVisible",
+      "expect": {
+        "invariant": "VisibleBinding"
+      }
+    }
+  ]
+}

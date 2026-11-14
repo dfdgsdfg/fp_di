@@ -1,0 +1,28 @@
+# The categories follow the layers of the public API in
+# specs/architecture/spec.md (Chaining and arguments). Each public type
+# names its category with `{@category ...}` in its doc comment. A category
+# without a markdown file has no topic page.
+dartdoc:
+  categoryOrder:
+    - Dependency
+    - Declaration
+    - Keys
+    - Instance
+    - Observation
+    - Errors
+    - Exceptions
+  categories:
+    Dependency:
+      markdown: doc/topics/dependency.md
+    Declaration:
+      markdown: doc/topics/declaration.md
+    Keys:
+      markdown: doc/topics/keys.md
+    Instance:
+      markdown: doc/lifecycle.md
+    Observation:
+      markdown: doc/topics/observation.md
+    Errors:
+      markdown: doc/topics/errors.md
+    Exceptions:
+      markdown: doc/topics/exceptions.md

@@ -1,0 +1,633 @@
+version: 1
+description: >-
+  Domain concepts of the runtime lifecycle model, with one preferred term and one meaning each. The lifecycle
+  spec owns their behavior, ordering, and failure policy. A file binding with a symbol names the public Dart
+  identifier for the concept; a concept without a symbol has no public type.
+nodes:
+  component_description:
+    kind: concept
+    term: Component
+    identifiers: [component, components, effect]
+    definition: >-
+      An immutable `Component<A>` description: a `Dependency` source plus the key it
+      publishes. It does no work until a scope creates a node from it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/component.dart
+        symbol: Component
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart
+      - packages/fp_di/lib/src/model/lease.dart
+  component_node:
+    kind: concept
+    term: Node
+    identifiers: [node, nodes, find]
+    definition: The runtime form of one declared component description, which a scope creates in `initialize`. A `ComponentNode` denotes it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/component.dart
+        symbol: ComponentNode
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart
+  scope:
+    kind: concept
+    term: Scope
+    identifiers: [scope, child, ancestor, initialize, initialized]
+    definition: >-
+      A visibility and ownership level of the runtime. The term does not name failure handling; that is a
+      failure region.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/runtime/scope.dart
+        symbol: Scope
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/context.dart
+  dependency_key:
+    kind: concept
+    term: Dependency key
+    identifiers: [key, keys, name, needs, type, unavailable, undeclared, unreachable, duplicate, duplicates, missing]
+    definition: >-
+      The address of a binding: a Dart type with an optional qualifier. Shapes are sets of keys. A component
+      label is not a key.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/key.dart
+        symbol: DiKey
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/key.dart
+  binding_record:
+    kind: concept
+    term: Binding record
+    definition: One committed key-to-value entry in a scope. Its identity is the publisher identity.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  publisher:
+    kind: concept
+    term: Publisher
+    identifiers: [publishes]
+    avoid: [provision]
+    definition: The node that owns a binding record.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  publication:
+    kind: concept
+    term: Publication
+    definition: A binding record staged by an activation episode and not yet committed.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  activation_episode:
+    kind: concept
+    term: Activation episode
+    identifiers: [activation, active, inactive, outside]
+    definition: >-
+      One activation attempt of a node, from the start of setup until its rollback or deactivation finishes.
+      The short form is episode. The runtime reads keys, publishes, and records dispose functions for the
+      component during the episode. The episode context has no public type.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/context.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/context.dart
+  lease:
+    kind: concept
+    term: Lease
+    definition: An acquired value paired with its dispose function. The runtime keeps it internal; no public type exists.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/lease.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/lease.dart
+  dispose_function:
+    kind: concept
+    term: Dispose function
+    identifiers: [dispose, disposing]
+    definition: >-
+      The function that reverses one acquisition. A `dispose` argument of a `Dependency` step states it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/dependency.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/dependency.dart
+      - packages/fp_di/lib/src/model/lease.dart
+  release:
+    kind: concept
+    term: Release
+    identifiers: [failure, failures, owner]
+    definition: >-
+      Running the dispose function of one lease. A dispose failure is one release that threw, with its owner.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  rollback:
+    kind: concept
+    term: Rollback
+    identifiers: [rollback]
+    definition: The releases of a failed or canceled activation episode before commit.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  cleanup:
+    kind: concept
+    term: Cleanup
+    definition: The releases of a committed activation episode during deactivation.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  deactivation:
+    kind: concept
+    term: Deactivation
+    definition: The teardown of an active node.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  withdrawal:
+    kind: concept
+    term: Withdrawal
+    definition: The loss of a publisher's availability for new lookup.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  disposal:
+    kind: concept
+    term: Disposal
+    identifiers: [dispose, disposed]
+    definition: The permanent removal of a node or a scope from the runtime.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/runtime/scope.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/runtime/scope.dart
+      - packages/fp_di/lib/src/model/component.dart
+  declaration:
+    kind: concept
+    term: Declaration
+    definition: >-
+      The listing of one component description in the module of a scope, before a node exists for it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/runtime/scope.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/runtime/scope.dart
+      - packages/fp_di/lib/src/model/module.dart
+  reader:
+    kind: concept
+    term: Reader
+    definition: A component that reads a key, or the node that a scope creates from it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  dependent:
+    kind: concept
+    term: Dependent
+    definition: >-
+      A node that reads a value of a publisher, directly or through the values of other readers.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  mutation:
+    kind: concept
+    term: Mutation
+    identifiers: [mutation]
+    definition: >-
+      One lifecycle operation that a caller requests and that the runtime runs from its queue, such as an
+      `initialize` or a `dispose` call.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/change.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/change.dart
+  runtime_state:
+    kind: concept
+    term: State of the runtime
+    definition: >-
+      The state of each scope of one root and of each of their nodes, as one immutable value that the runtime
+      replaces at each transition. A phase is the place of one scope or one node in its state machine.
+    domain: lifecycle
+    identifiers:
+      - changed
+      - commits
+      - deactivating
+      - declared
+      - initializing
+      - phase
+      - requested
+      - since
+      - states
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/state.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/state.dart
+  setup:
+    kind: concept
+    term: Setup
+    definition: >-
+      The part of an activation episode that runs the steps of the `Dependency`, before the commit.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  dormant:
+    kind: concept
+    term: Dormant
+    definition: >-
+      A node that is not active and has no running activation, and that the runtime tries to activate when its
+      required keys resolve.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  shape:
+    kind: concept
+    term: Shape
+    identifiers: [shape]
+    definition: >-
+      The sets of keys that a component or a module reads and publishes, derived from its description
+      before anything runs.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/component.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart
+      - packages/fp_di/lib/src/model/module.dart
+      - packages/fp_di/lib/src/model/shape_graph.dart
+  failure_region:
+    kind: concept
+    term: Failure region
+    definition: A rollback site in an activation episode that has its own cancellation token.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  cancellation_token:
+    kind: concept
+    term: Cancellation token
+    identifiers: [cancellation, cancel, canceled, token, controller, none]
+    avoid: [signal, signals]
+    definition: >-
+      The `CancellationToken` of one failure region: canceled when the work of that region must stop.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/cancellation.dart
+        symbol: CancellationToken
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/cancellation.dart
+  collection_key:
+    kind: concept
+    term: Collection key
+    identifiers: [collection, set, map, entry, id]
+    definition: >-
+      A key that many contributions belong to and a reader reads as one value: a set key for anonymous
+      contributions, or a map key whose entries are binding records of entry keys. An entry key has the id of
+      its entry in the map. It is not the address of a
+      binding; a collection read expands to plain reads of the keys of its contributions.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/key.dart
+        symbol: DiCollectionKey
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/key.dart
+  contribution:
+    kind: concept
+    term: Contribution
+    identifiers: [contributes]
+    definition: >-
+      The binding record that one component adds to a collection key: a set contribution under the internal key of its
+      declaration, or a map entry under its entry key.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/component.dart
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart
+  membership:
+    kind: concept
+    term: Membership
+    definition: >-
+      The contributions to a collection key that one reader sees: the declared contributions in its scope and
+      its ancestors that are not disposed, without its own. It has no public type.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  dependency_source:
+    kind: concept
+    term: Dependency
+    identifiers: [dependency, create, require, requires, maybe, optional, reads, zip, record, n, map]
+    avoid: [watches]
+    definition: >-
+      An immutable `Dependency<A>` description of one value: the keys it reads and the steps that create it,
+      each with an optional dispose function.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/dependency.dart
+        symbol: Dependency
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/dependency.dart
+  module:
+    kind: concept
+    term: Module
+    identifiers: [module, modules, origins, overridden, replacing, requiring, where]
+    definition: An immutable list of component descriptions that a scope declares.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/module.dart
+        symbol: Module
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/module.dart
+  lazy_value:
+    kind: concept
+    term: Lazy value
+    identifiers: [lazy, force, created]
+    definition: A value of a component that is created on its first `force()` and owned by that component.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: file
+        path: packages/fp_di/lib/src/model/lease.dart
+        symbol: Lazy
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/lease.dart
+relations:
+  - from: component_node
+    type: belongs_to
+    to: scope
+    description: A scope owns each node that it creates.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: binding_record
+    type: part_of
+    to: scope
+    description: A binding record is an entry of the scope that holds it.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: binding_record
+    type: belongs_to
+    to: publisher
+    description: The publisher owns the binding record and withdraws it.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: publication
+    type: specializes
+    to: binding_record
+    description: A publication is a binding record that is still staged.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: publication
+    type: part_of
+    to: activation_episode
+    description: The episode that stages a publication holds it until commit or rollback.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: activation_episode
+    type: belongs_to
+    to: component_node
+    description: An episode is one activation attempt of its node.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: lease
+    type: belongs_to
+    to: activation_episode
+    description: A successful acquisition belongs to the activation episode that made it.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: dispose_function
+    type: part_of
+    to: lease
+    description: Each lease carries the dispose function that reverses its acquisition.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/lease.dart
+  - from: release
+    type: acts_on
+    to: lease
+    description: A release runs the dispose function of one lease.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: release
+    type: part_of
+    to: rollback
+    description: A rollback consists of releases.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: release
+    type: part_of
+    to: cleanup
+    description: A cleanup consists of releases.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: rollback
+    type: acts_on
+    to: activation_episode
+    description: A rollback releases the leases of an episode that did not commit.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: cleanup
+    type: acts_on
+    to: activation_episode
+    description: A cleanup releases the leases of a committed episode.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: cleanup
+    type: part_of
+    to: deactivation
+    description: The cleanup of a node is a step of its deactivation.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: withdrawal
+    type: part_of
+    to: deactivation
+    description: The withdrawal of a node's binding records is a step of its deactivation.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: withdrawal
+    type: acts_on
+    to: publisher
+    description: A withdrawal removes a publisher from new lookup.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: deactivation
+    type: acts_on
+    to: component_node
+    description: A deactivation tears down one active node.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: failure_region
+    type: part_of
+    to: activation_episode
+    description: The failure regions of an episode form its tree of cancellation tokens.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: cancellation_token
+    type: belongs_to
+    to: failure_region
+    description: A failure region has its own cancellation token.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: contribution
+    type: specializes
+    to: binding_record
+    description: A contribution is the binding record that one component adds to a collection key.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: contribution
+    type: part_of
+    to: membership
+    description: The contributions that a reader sees form its membership of a collection key.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: disposal
+    type: acts_on
+    to: component_node
+    description: A disposal removes one node for good.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart
+  - from: disposal
+    type: acts_on
+    to: scope
+    description: A disposal removes a scope, its descendants, and their nodes for good.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/runtime/scope.dart
+  - from: declaration
+    type: belongs_to
+    to: scope
+    description: A scope owns the declarations of its module from its creation.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/runtime/scope.dart
+  - from: dependent
+    type: specializes
+    to: component_node
+    description: A dependent is a node.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: setup
+    type: part_of
+    to: activation_episode
+    description: Setup is the first part of an activation episode.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: dormant
+    type: specializes
+    to: component_node
+    description: A dormant node is a node.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+  - from: dependency_key
+    type: part_of
+    to: shape
+    description: A shape consists of dependency keys.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - packages/fp_di/lib/src/model/component.dart

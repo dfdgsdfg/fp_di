@@ -1,0 +1,17 @@
+name: fp_di_fpdart
+description: fpdart-shaped API for fp_di scopes, nodes, and dependencies.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: ^3.9.0
+
+resolution: workspace
+
+dependencies:
+  fp_di:
+    path: ../fp_di
+  fpdart: ^1.2.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

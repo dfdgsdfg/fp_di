@@ -1,0 +1,184 @@
+{
+  "module": "Cancellation.tla",
+  "source": [
+    "packages/fp_di/lib/src/model/cancellation.dart",
+    "packages/fp_di/lib/src/runtime/runtime_mutation_queue.dart",
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/runtime_state.dart",
+    "packages/fp_di/lib/src/runtime/runtime_context.dart",
+    "packages/fp_di/lib/src/runtime/scope.dart",
+    "packages/fp_di/lib/src/model/dependency.dart",
+    "packages/fp_di/lib/src/model/lease.dart",
+    "packages/fp_di/lib/src/model/context.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "CancelConformingSingle",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingSingleComposite",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingSinglePropagate",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingIndependent",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingChain",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingChainComposite",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingChainPropagate",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingChain3",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingWide",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelConformingWideComposite",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelProgressChain3",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelWitnessCommit",
+      "expect": {
+        "invariant": "WitnessCommit"
+      }
+    },
+    {
+      "name": "CancelWitnessCancelledRollback",
+      "expect": {
+        "invariant": "WitnessCancelledRollback"
+      }
+    },
+    {
+      "name": "CancelWitnessLateLease",
+      "expect": {
+        "invariant": "WitnessLateLeaseReleased"
+      }
+    },
+    {
+      "name": "CancelWitnessAwaitingWithdrawal",
+      "expect": {
+        "invariant": "WitnessAwaitingWithdrawal"
+      }
+    },
+    {
+      "name": "CancelWitnessWithdrawalDormant",
+      "expect": {
+        "invariant": "WitnessWithdrawalThenDormant"
+      }
+    },
+    {
+      "name": "CancelWitnessCaughtCommit",
+      "expect": {
+        "invariant": "WitnessCaughtCommit"
+      }
+    },
+    {
+      "name": "CancelWitnessSkippedSetup",
+      "expect": {
+        "invariant": "WitnessSkippedSetup"
+      }
+    },
+    {
+      "name": "CancelWitnessSetupAfterDisposal",
+      "expect": {
+        "invariant": "WitnessSetupAfterDisposal"
+      }
+    },
+    {
+      "name": "CancelWitnessTransitiveCancel",
+      "expect": {
+        "invariant": "WitnessTransitiveCancel"
+      }
+    },
+    {
+      "name": "CancelNegNoSignal",
+      "expect": {
+        "invariant": "CancelPrompt"
+      }
+    },
+    {
+      "name": "CancelNegCommitAfterCancel",
+      "expect": {
+        "invariant": "NoCommitAfterCancel"
+      }
+    },
+    {
+      "name": "CancelNegSkipCheckpoint",
+      "expect": {
+        "invariant": "NoStepAfterCancel"
+      }
+    },
+    {
+      "name": "CancelNegRootRollbackFirst",
+      "expect": {
+        "invariant": "SignalBeforeInverse"
+      }
+    },
+    {
+      "name": "CancelNegAbandonUncoop",
+      "expect": {
+        "invariant": "LeaseAccounted"
+      }
+    },
+    {
+      "name": "CancelNegChildRollbackFirst",
+      "expect": {
+        "invariant": "SignalBeforeInverse"
+      }
+    },
+    {
+      "name": "CancelNegCaughtLeaksParent",
+      "expect": {
+        "invariant": "CaughtFailureIsolated"
+      }
+    },
+    {
+      "name": "CancelNegSetupAfterCancel",
+      "expect": {
+        "invariant": "NoSetupAfterCancel"
+      }
+    },
+    {
+      "name": "CancelNegOverlapSetup",
+      "expect": {
+        "invariant": "CleanupBeforeNextSetup"
+      }
+    },
+    {
+      "name": "CancelNegOnlyOwnEpisode",
+      "expect": {
+        "invariant": "CancelPropagatesToDependents"
+      }
+    },
+    {
+      "name": "CancelNegKeepEligible",
+      "expect": {
+        "invariant": "NoCancelLivelock"
+      }
+    }
+  ]
+}

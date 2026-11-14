@@ -1,0 +1,174 @@
+{
+  "module": "Initialize.tla",
+  "source": [
+    "packages/fp_di/lib/src/runtime/scope.dart",
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/runtime_state.dart",
+    "packages/fp_di/lib/src/runtime/runtime_context.dart",
+    "packages/fp_di/lib/src/model/exception.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "InitConforming",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingWake",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingRetry",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingWakeRetry",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingWide",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingWakeWide",
+      "expect": "pass"
+    },
+    {
+      "name": "InitProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "InitProgressModules",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingRebuild",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingRebuildRetry",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingRebuildWide",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingRebuildLate",
+      "expect": "pass"
+    },
+    {
+      "name": "InitConformingClosed",
+      "expect": "pass"
+    },
+    {
+      "name": "InitProgressRebuild",
+      "expect": "pass"
+    },
+    {
+      "name": "InitProgressClosed",
+      "expect": "pass"
+    },
+    {
+      "name": "InitNegEarlyRollback",
+      "expect": {
+        "invariant": "SettleBeforeRollback"
+      }
+    },
+    {
+      "name": "InitNegPublishEarly",
+      "expect": {
+        "invariant": "AtomicPublication"
+      }
+    },
+    {
+      "name": "InitNegAcqOrder",
+      "expect": {
+        "invariant": "ReverseAcquisition"
+      }
+    },
+    {
+      "name": "InitNegEarlyStart",
+      "expect": {
+        "invariant": "PublishersFirst"
+      }
+    },
+    {
+      "name": "InitNegStartAfterFailure",
+      "expect": {
+        "invariant": "NoStartAfterFailure"
+      }
+    },
+    {
+      "name": "InitNegSkipDependents",
+      "expect": {
+        "invariant": "DependentFirst"
+      }
+    },
+    {
+      "name": "InitNegSkipDependentsWake",
+      "expect": {
+        "invariant": "WokenDormantAfterRollback"
+      }
+    },
+    {
+      "name": "InitNegDoubleRelease",
+      "expect": {
+        "invariant": "ReleaseAtMostOnce"
+      }
+    },
+    {
+      "name": "InitNegDropLease",
+      "expect": {
+        "invariant": "LeaseAccounted"
+      }
+    },
+    {
+      "name": "InitNegDeclOrder",
+      "expect": {
+        "invariant": "ReverseDeclaration"
+      }
+    },
+    {
+      "name": "InitNegRethrowEarliest",
+      "expect": {
+        "invariant": "RethrowFirstDeclared"
+      }
+    },
+    {
+      "name": "InitNegSkipRebuild",
+      "expect": {
+        "invariant": "ScopeOutcome"
+      }
+    },
+    {
+      "name": "InitNegReleaseRebuilt",
+      "expect": {
+        "invariant": "ReleaseAtMostOnce"
+      }
+    },
+    {
+      "name": "InitNegRebuildLosesEdge",
+      "expect": {
+        "invariant": "DependentFirst"
+      }
+    },
+    {
+      "name": "InitNegMutateAfterClose",
+      "expect": {
+        "invariant": "ClosedActivation"
+      }
+    },
+    {
+      "name": "InitNegStageAfterClose",
+      "expect": {
+        "invariant": "ClosedActivation"
+      }
+    },
+    {
+      "name": "InitNegLateLeak",
+      "expect": {
+        "invariant": "LeaseAccounted"
+      }
+    }
+  ]
+}

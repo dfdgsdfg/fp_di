@@ -1,0 +1,121 @@
+version: 1
+description: >-
+  Words that public identifiers take with their ordinary meaning from one source: the Dart SDK, Flutter,
+  fpdart, the diagnostics of the runtime, or the naming of the packages. A domain word belongs to a concept
+  node in another topic instead. agents/scripts/check_vocabulary.dart checks every public identifier against
+  these words and the identifiers of the concept nodes.
+nodes:
+  dart_words:
+    kind: vocabulary
+    term: Dart vocabulary
+    definition: Words with the meaning that the Dart SDK and its conventions give them.
+    identifiers:
+      - add
+      - cause
+      - error
+      - errors
+      - exception
+      - format
+      - get
+      - json
+      - kind
+      - message
+      - object
+      - operation
+      - path
+      - reentrant
+      - remove
+      - stack
+      - trace
+      - value
+      - version
+    evidence:
+      - packages/fp_di/lib/src/model/error.dart
+      - packages/fp_di/lib/src/model/exception.dart
+      - packages/fp_di/lib/src/runtime/scope.dart
+  flutter_words:
+    kind: vocabulary
+    term: Flutter vocabulary
+    definition: >-
+      Words with the meaning that Flutter and the Provider package give them in widgets and in the lookup
+      from a BuildContext.
+    identifiers:
+      - build
+      - child
+      - context
+      - fixed
+      - listen
+      - listenable
+      - provider
+      - watch
+    evidence:
+      - packages/fp_di_flutter/lib/src/di_extensions.dart
+      - packages/fp_di_flutter/lib/src/scope_provider.dart
+  fpdart_words:
+    kind: vocabulary
+    term: fpdart vocabulary
+    definition: Words with the meaning that fpdart gives them, and the failure names of the fpdart package.
+    identifiers:
+      - data
+      - either
+      - failed
+      - failure
+      - left
+      - option
+      - task
+      - use
+    evidence:
+      - packages/fp_di_fpdart/lib/src/failure.dart
+      - packages/fp_di_fpdart/lib/fp_di_fpdart.dart
+  observation_words:
+    kind: vocabulary
+    term: Observation vocabulary
+    definition: >-
+      Words of the read-only views of the runtime: labels, node states, listeners, slow-mutation reports,
+      and the shape graph of the tooling library.
+    identifiers:
+      - activating
+      - chain
+      - collapsed
+      - cycle
+      - cycles
+      - debug
+      - depths
+      - describe
+      - edge
+      - edges
+      - elapsed
+      - graph
+      - ignoring
+      - label
+      - labels
+      - listener
+      - longest
+      - mermaid
+      - passes
+      - queued
+      - revision
+      - running
+      - slow
+      - state
+      - threshold
+      - waiting
+      - unsettled
+    evidence:
+      - packages/fp_di/lib/src/model/change.dart
+      - packages/fp_di/lib/src/model/shape_graph.dart
+      - packages/fp_di/lib/src/runtime/scope.dart
+  naming_prefixes:
+    kind: vocabulary
+    term: Package prefixes
+    definition: >-
+      The prefixes and suffixes that mark a public name as part of a package of this workspace, and the
+      suffix that marks a supertype without a type argument.
+    identifiers:
+      - di
+      - fpdart
+      - base
+    evidence:
+      - packages/fp_di/lib/src/runtime/scope.dart
+      - packages/fp_di/lib/src/model/key.dart
+      - packages/fp_di_fpdart/lib/fp_di_fpdart.dart

@@ -1,0 +1,72 @@
+{
+  "module": "Teardown.tla",
+  "source": [
+    "packages/fp_di/lib/src/runtime/runtime_teardown.dart",
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/runtime_state.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "TeardownDiamond",
+      "expect": "pass"
+    },
+    {
+      "name": "TeardownCycle",
+      "expect": "pass"
+    },
+    {
+      "name": "TeardownLowReadsHigh",
+      "expect": "pass"
+    },
+    {
+      "name": "TeardownProgressDiamond",
+      "expect": "pass"
+    },
+    {
+      "name": "TeardownProgressCycle",
+      "expect": "pass"
+    },
+    {
+      "name": "TeardownWitnessOverlap",
+      "expect": {
+        "invariant": "NoOverlap"
+      }
+    },
+    {
+      "name": "TeardownWitnessCycleDisposeFailures",
+      "expect": {
+        "invariant": "NoCycleDisposeFailurePair"
+      }
+    },
+    {
+      "name": "TeardownNegNoWait",
+      "expect": {
+        "invariant": "DependentsFirst"
+      }
+    },
+    {
+      "name": "TeardownNegAnyFallback",
+      "expect": {
+        "invariant": "DependentsFirst"
+      }
+    },
+    {
+      "name": "TeardownNegParallelSteps",
+      "expect": {
+        "invariant": "OneStepPerNode"
+      }
+    },
+    {
+      "name": "TeardownNegCompletionOrder",
+      "expect": {
+        "invariant": "ReportOrder"
+      }
+    },
+    {
+      "name": "TeardownNegNoFallback",
+      "expect": {
+        "temporal": "TeardownCompletes"
+      }
+    }
+  ]
+}

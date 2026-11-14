@@ -1,0 +1,71 @@
+{
+  "module": "Lazy.tla",
+  "source": [
+    "packages/fp_di/lib/src/model/lease.dart",
+    "packages/fp_di/lib/src/model/dependency.dart",
+    "packages/fp_di/lib/src/model/cancellation.dart",
+    "packages/fp_di/lib/src/runtime/runtime.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "LazyConforming",
+      "expect": "pass"
+    },
+    {
+      "name": "LazyConformingWide",
+      "expect": "pass"
+    },
+    {
+      "name": "LazyProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "LazyNegEagerAcquire",
+      "expect": {
+        "invariant": "AcquireOnlyOnUse"
+      }
+    },
+    {
+      "name": "LazyNegNoMemo",
+      "expect": {
+        "invariant": "AtMostOneSuccess"
+      }
+    },
+    {
+      "name": "LazyNegNoSingleFlight",
+      "expect": {
+        "invariant": "SingleFlight"
+      }
+    },
+    {
+      "name": "LazyNegAcquireAfterRelease",
+      "expect": {
+        "invariant": "NoAcquireAfterRelease"
+      }
+    },
+    {
+      "name": "LazyNegSelfRelease",
+      "expect": {
+        "invariant": "ReleaseAtMostOnce"
+      }
+    },
+    {
+      "name": "LazyNegDropLease",
+      "expect": {
+        "invariant": "LeaseAccounted"
+      }
+    },
+    {
+      "name": "LazyNegNoSettleWait",
+      "expect": {
+        "invariant": "DependentFirst"
+      }
+    },
+    {
+      "name": "LazyNegWaitForCallers",
+      "expect": {
+        "temporal": "ReleaseCompletes"
+      }
+    }
+  ]
+}

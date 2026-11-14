@@ -1,0 +1,5 @@
+version: 1
+description: Stable domain IDs that group workspace nodes; a registry, not a hierarchy.
+domains:
+  architecture: Workspace packages, the runtimes they need, and the accepted dependency direction between them.
+  lifecycle: Domain concepts of the runtime lifecycle model and their preferred terms.

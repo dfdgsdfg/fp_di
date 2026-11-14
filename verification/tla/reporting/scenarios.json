@@ -1,0 +1,64 @@
+{
+  "module": "Reporting.tla",
+  "source": [
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/scope.dart",
+    "packages/fp_di/lib/src/model/dependency.dart",
+    "packages/fp_di/lib/src/model/lease.dart",
+    "packages/fp_di/lib/src/model/exception.dart"
+  ],
+  "scenarios": [
+    {
+      "name": "ReportingMembers",
+      "expect": "pass"
+    },
+    {
+      "name": "ReportingMembersProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReportingLazy",
+      "expect": "pass"
+    },
+    {
+      "name": "ReportingLazyProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReportingNegDropLater",
+      "expect": {
+        "invariant": "NoLostDisposeFailure"
+      }
+    },
+    {
+      "name": "ReportingNegDisposeFailureReplacesCause",
+      "expect": {
+        "invariant": "CausePreserved"
+      }
+    },
+    {
+      "name": "ReportingNegSwallowShutdown",
+      "expect": {
+        "invariant": "NoLostDisposeFailure"
+      }
+    },
+    {
+      "name": "ReportingNegMisrouteShutdown",
+      "expect": {
+        "invariant": "RecipientsExact"
+      }
+    },
+    {
+      "name": "ReportingNegDisposedEarly",
+      "expect": {
+        "invariant": "CausePreserved"
+      }
+    },
+    {
+      "name": "ReportingNegNoDeliver",
+      "expect": {
+        "temporal": "ReportingCompletes"
+      }
+    }
+  ]
+}
