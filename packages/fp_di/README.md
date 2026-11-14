@@ -62,6 +62,9 @@ releases it last. The list order does not matter.
   are still alive. Members that do not read each other activate and release at
   the same time.
 
+[Motivation](https://github.com/dfdgsdfg/fp_di#motivation) compares fp_di with other containers and explains the
+paper that the design adapts.
+
 The core package has no dependencies and does not import Flutter.
 [`fp_di_flutter`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di_flutter) publishes a scope to the widget tree.
 
@@ -247,7 +250,7 @@ In the sequence line, `dep` is the step `(c₁, d₁)`. `·` is associative and 
 the unit `(id, no-op)`, so a chain of steps is one pair whatever its grouping.
 In the runtime, the unit and the regrouping hold for the published value of an
 activation that no cancellation interrupts, as [Laws](#laws) states. The
-paper in [Inspiration](#inspiration) calls this composition of a function
+[paper](https://github.com/dfdgsdfg/fp_di#motivation) calls this composition of a function
 with its inverse the twisted composition (Definition 1). The pairs are the
 effect algebra of the paper: the temporal half.
 
@@ -383,7 +386,7 @@ The value laws have a condition because a `map` step is a cancellation
 checkpoint: when a cancellation arrives between two steps, `d.map(id)` stops
 where `d` completes. `e⁻¹` is the dispose function of a step that has one.
 The laws are about `fp_di` itself. They do not import the theorems of the
-paper in [Inspiration](#inspiration), whose premises `fp_di` does not check.
+[paper](https://github.com/dfdgsdfg/fp_di#motivation), whose premises `fp_di` does not check.
 
 ### Limits
 
@@ -402,24 +405,6 @@ paper in [Inspiration](#inspiration), whose premises `fp_di` does not check.
   components is a new child scope.
 - Each member publishes when it commits. Publish one record under one key when
   several values must become visible together.
-
-### Inspiration
-
-The design adapts a subset of *A Programming Paradigm for Spatiotemporal
-Composability* by Yifan Shi, Wei Zhang, and Tianyi Cui
-([arXiv:2608.25512](https://arxiv.org/abs/2608.25512v1)): revertible effects,
-whose release is tracked with their creation, and reactive coeffects, whose
-declared reads drive activation. [Pairs](#pairs) are its effects, and
-[Shapes](#shapes) are its coeffects.
-
-Two parts of the paper are not adopted. An effect of the paper carries a
-witness that its inverse restores the state, and a `dispose` function does
-not. A key of the paper carries operations with inverses and a commutativity
-contract, which connect effects to coeffects, and a `DiKey` carries only a
-value. The independence and confluence theorems of the paper rest on those
-parts, so `fp_di` does not import them as guarantees. The
-[paper adoption](https://github.com/dfdgsdfg/fp_di/blob/main/specs/architecture/spec.md#paper-adoption) table states
-what is adopted, what is adapted, and what is left out.
 
 ## Learn more
 
