@@ -34,7 +34,7 @@ The workspace has three packages:
 - [`fp_di_flutter`](packages/fp_di_flutter): publishes a caller-owned scope to
   the widget tree, with `BuildContext` reads.
 - [`fp_di_fpdart`](packages/fp_di_fpdart): the scope lifecycle, lookups, and
-  `Dependency` steps as fpdart types. It is experimental and not published.
+  `Dependency` steps as fpdart types. It is experimental.
 
 Start with the [`fp_di` README](packages/fp_di/README.md).
 
