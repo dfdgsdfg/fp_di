@@ -1,5 +1,7 @@
 # fp_di - Algebraic dependency injection for Dart
 
+[![CI](https://github.com/dfdgsdfg/fp_di/actions/workflows/ci.yml/badge.svg)](https://github.com/dfdgsdfg/fp_di/actions/workflows/ci.yml)
+
 **Automatic ordering. Safe release. Composed like functions and their
 inverses.**
 

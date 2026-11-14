@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Analyze, test, and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        run: echo "version=$(sed -n 's/^flutter = "\(.*\)"/\1/p' .mise.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: dart analyze --fatal-infos
+
+      - name: Core tests
+        run: dart run agents/scripts/test_core.dart
+
+      - name: fpdart tests
+        run: dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test
+
+      - name: Flutter tests
+        run: flutter test packages/fp_di_flutter/test
+
+      - name: DevTools extension tests
+        run: flutter test packages/fp_di_devtools/test
+
+      - name: Core examples
+        run: |
+          for example in packages/fp_di/example/*.dart; do
+            echo "::group::$example"
+            dart run "$example"
+            echo "::endgroup::"
+          done
+
+      - name: Specs
+        run: dart run agents/scripts/validate_specs.dart --final
+
+      - name: Vocabulary
+        run: dart run agents/scripts/check_vocabulary.dart --prose
+
+      - name: Publication dry run of fp_di
+        working-directory: packages/fp_di
+        run: dart pub publish --dry-run
+
+      - name: Publication dry run of fp_di_flutter
+        working-directory: packages/fp_di_flutter
+        run: flutter pub publish --dry-run
+
+  minimum-sdk:
+    name: Published packages on the minimum SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # The lower bounds in the pubspecs: sdk ^3.10.0 and flutter >=3.38.1.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.38.1
+          channel: stable
+          cache: true
+
+      # The workspace root needs a newer SDK for its tools, so the two
+      # published packages run outside it, as a user resolves them.
+      - name: Copy the packages out of the workspace
+        run: |
+          mkdir -p "$RUNNER_TEMP/minimum"
+          cp -R packages/fp_di packages/fp_di_flutter "$RUNNER_TEMP/minimum/"
+          cd "$RUNNER_TEMP/minimum"
+          sed -i '/^resolution: workspace/d' fp_di/pubspec.yaml fp_di_flutter/pubspec.yaml
+          printf '\ndependency_overrides:\n  fp_di:\n    path: ../fp_di\n' >> fp_di_flutter/pubspec.yaml
+
+      - name: fp_di tests
+        working-directory: ${{ runner.temp }}/minimum/fp_di
+        run: |
+          dart pub get
+          dart test
+
+      - name: fp_di_flutter tests
+        working-directory: ${{ runner.temp }}/minimum/fp_di_flutter
+        run: |
+          flutter pub get
+          flutter test
+
+  formal:
+    name: TLA+ models
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        run: echo "version=$(sed -n 's/^flutter = "\(.*\)"/\1/p' .mise.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/cache@v4
+        with:
+          path: verification/.toolchain
+          key: tlc-${{ hashFiles('verification/toolchain.lock.json') }}
+
+      - run: flutter pub get
+
+      - name: Evidence rules of the runner
+        run: dart run agents/scripts/test_core.dart verification/test
+
+      # --fetch downloads the pinned TLC jar on a cache miss; the runner
+      # checks its SHA-256 against verification/toolchain.lock.json.
+      - name: Model check every scenario
+        run: dart run verification/check.dart --fetch
+
+      - name: Keep the evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-report
+          path: output/verification/
+          if-no-files-found: ignore

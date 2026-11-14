@@ -30,7 +30,9 @@ This rule owns operating instructions. The canonical topic owns properties and
 assumptions.
 
 This rule adapts the formal-verification workflow of the reference repository.
-`fp_di` has no native modules or CI workflow. The formal runner, eight
+`fp_di` has no native modules. [CI](../../.github/workflows/ci.yml) runs the
+checks below and every formal scenario on each push to `main` and each pull
+request. The formal runner, eight
 focused models, and one integration model exist under `verification/tla/`:
 `lifecycle/Lazy.tla`, `reconcile/Reconcile.tla`, `initialize/Initialize.tla`,
 `cancellation/Cancellation.tla`, `disposal/Disposal.tla`,

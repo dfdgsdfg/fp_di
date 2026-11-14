@@ -138,7 +138,11 @@ flutter test packages/fp_di_devtools/test
 ```
 
 Examples should remain runnable with `dart run`, as the example table of
-each package README lists them. Use [`agents/rules/verification.rules.md`](agents/rules/verification.rules.md)
+each package README lists them. [CI](.github/workflows/ci.yml) runs these
+checks, the format check, the examples, the spec and vocabulary checks, the
+publication dry runs, the published packages on their minimum SDK, and every
+formal scenario. Run `dart format .` before a commit; the CI pins the
+Flutter version of `.mise.toml`. Use [`agents/rules/verification.rules.md`](agents/rules/verification.rules.md)
 for lifecycle-boundary verification and evidence.
 
 ## Documentation boundaries
