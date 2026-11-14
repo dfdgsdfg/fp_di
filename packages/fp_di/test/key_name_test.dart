@@ -136,10 +136,7 @@ void main() {
 
     test('of a core value type builds with Component.value', () {
       expect(
-        () => Component.value(
-          value: 1,
-          key: const DiKey<int>(name: 'port'),
-        ),
+        () => Component.value(value: 1, key: const DiKey<int>(name: 'port')),
         returnsNormally,
       );
     });

@@ -184,38 +184,35 @@ void main() {
     await scope.dispose();
   });
 
-  test(
-    '5. a callback registered in a finished mutation may mutate',
-    () async {
-      final events = StreamController<void>.broadcast();
-      late final Scope target;
-      final done = Completer<Object?>();
-      final root = Scope(
-        module: Module(
-          components: [
-            Component<StreamSubscription<void>>.effect(
-              dependency: Dependency(
-                create: () => events.stream.listen((_) {
-                  target.initialize().then(
-                    (_) => done.complete(null),
-                    onError: (Object e) => done.complete(e),
-                  );
-                }),
-                dispose: (subscription) => subscription.cancel(),
-              ),
+  test('5. a callback registered in a finished mutation may mutate', () async {
+    final events = StreamController<void>.broadcast();
+    late final Scope target;
+    final done = Completer<Object?>();
+    final root = Scope(
+      module: Module(
+        components: [
+          Component<StreamSubscription<void>>.effect(
+            dependency: Dependency(
+              create: () => events.stream.listen((_) {
+                target.initialize().then(
+                  (_) => done.complete(null),
+                  onError: (Object e) => done.complete(e),
+                );
+              }),
+              dispose: (subscription) => subscription.cancel(),
             ),
-          ],
-        ),
-      );
-      target = root.child(); // the same runtime as the listener
-      await root.initialize();
-      events.add(null); // after initialize has finished
-      expect(await done.future, isNull);
-      expect(target.isInitialized, isTrue);
-      await root.dispose();
-      await events.close();
-    },
-  );
+          ),
+        ],
+      ),
+    );
+    target = root.child(); // the same runtime as the listener
+    await root.initialize();
+    events.add(null); // after initialize has finished
+    expect(await done.future, isNull);
+    expect(target.isInitialized, isTrue);
+    await root.dispose();
+    await events.close();
+  });
 
   group('6. a dispose from inside its own disposal is reentrant', () {
     test('scope', () async {

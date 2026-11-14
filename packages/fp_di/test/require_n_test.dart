@@ -76,9 +76,7 @@ void main() {
         key1: const DiKey(name: 'text'),
         key2: const DiKey(name: 'count'),
       );
-      final other = Dependency.maybe<bool>(
-        key: const DiKey(name: 'enabled'),
-      );
+      final other = Dependency.maybe<bool>(key: const DiKey(name: 'enabled'));
       final both = Component.effect(dependency: (consumer, other).zip);
       expect(both.requires, {
         DiKey<String>(name: 'text'),
@@ -94,14 +92,8 @@ void main() {
       final di = Scope(
         module: Module(
           components: [
-            Component.value(
-              value: true,
-              key: DiKey<bool>(name: 'enabled'),
-            ),
-            Component.value(
-              value: 8080,
-              key: DiKey<int>(name: 'count'),
-            ),
+            Component.value(value: true, key: DiKey<bool>(name: 'enabled')),
+            Component.value(value: 8080, key: DiKey<int>(name: 'count')),
             Component.value(
               value: 'api',
               key: DiKey<String>(name: 'text'),
@@ -224,10 +216,7 @@ void main() {
       final bools = ints.child(
         module: Module(
           components: [
-            Component.value(
-              value: false,
-              key: DiKey<bool>(name: 'enabled'),
-            ),
+            Component.value(value: false, key: DiKey<bool>(name: 'enabled')),
           ],
         ),
       );
@@ -260,11 +249,9 @@ void main() {
       expect(
         () => handle.value,
         throwsA(
-          isA<InactiveNodeException>().having(
-            (e) => e.missing,
-            'missing',
-            [DiKey<bool>(name: 'enabled')],
-          ),
+          isA<InactiveNodeException>().having((e) => e.missing, 'missing', [
+            DiKey<bool>(name: 'enabled'),
+          ]),
         ),
       );
 
@@ -358,10 +345,7 @@ void main() {
       final host = di.nodes.first;
       final pool = di.nodes.last;
       expect(pool.value, 'db/5');
-      expect(
-        di.get<String>(key: const DiKey<String>(name: 'pool')),
-        'db/5',
-      );
+      expect(di.get<String>(key: const DiKey<String>(name: 'pool')), 'db/5');
 
       await host.dispose();
       expect(pool.isActive, isFalse);

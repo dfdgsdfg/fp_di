@@ -11,9 +11,7 @@ void main() {
     test(
       'a 5000-deep Dependency.map chain computes every shape within a bound',
       () {
-        var chain = Dependency.require<int>(
-          key: const DiKey(name: 'shared'),
-        );
+        var chain = Dependency.require<int>(key: const DiKey(name: 'shared'));
         for (var i = 1; i < depth; i++) {
           chain = chain.map((v) => v + i);
         }
@@ -65,10 +63,7 @@ void main() {
         key: const DiKey(name: 'r0'),
       );
       for (var i = 1; i < width; i++) {
-        zip = (
-          zip,
-          Dependency.require<int>(key: DiKey<int>(name: 'r$i')),
-        ).zip;
+        zip = (zip, Dependency.require<int>(key: DiKey<int>(name: 'r$i'))).zip;
       }
       final component = Component.effect(dependency: zip);
       final requires = component.requires;

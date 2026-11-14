@@ -13,16 +13,12 @@ void main() {
     // widgets build, so their publications arrive as late changes.
     final root = Scope(
       module: Module(
-        components: [
-          Component.value(value: 1, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 1, key: DiKey<int>(name: 'count'))],
       ),
     );
     final local = root.child(
       module: Module(
-        components: [
-          Component.value(value: 2, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 2, key: DiKey<int>(name: 'count'))],
       ),
     );
     final unrelated = local.child(

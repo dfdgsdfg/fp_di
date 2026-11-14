@@ -184,10 +184,7 @@ void main() {
       expect(di.isInitialized, isFalse);
       expect(di.nodes, isEmpty);
       expect(di.maybeGet<int>(key: const DiKey(name: 'count')), isNull);
-      expect(
-        di.maybeGet<String>(key: const DiKey(name: 'text')),
-        isNull,
-      );
+      expect(di.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
       expect(events, ['good+', 'good-']);
 
       await di.initialize();
@@ -711,12 +708,11 @@ void main() {
 
       void release(int value) => events.add('$value-');
       final composed = Component.effect(
-        dependency:
-            Dependency.require<int>(key: DiKey<int>(name: 'seed'))
-                .map(step, dispose: release)
-                .map((value) => value + 1)
-                .map(step, dispose: release)
-                .map((value) => step(value + 1), dispose: release),
+        dependency: Dependency.require<int>(key: DiKey<int>(name: 'seed'))
+            .map(step, dispose: release)
+            .map((value) => value + 1)
+            .map(step, dispose: release)
+            .map((value) => step(value + 1), dispose: release),
       );
       final di = Scope(
         module: Module(
@@ -853,9 +849,7 @@ void main() {
           components: [
             Component.effect(
               dependency:
-                  Dependency.require<int>(
-                    key: const DiKey(name: 'count'),
-                  ).map(
+                  Dependency.require<int>(key: const DiKey(name: 'count')).map(
                     (_) => ++activations,
                     dispose: (_) => throw StateError('not released'),
                   ),

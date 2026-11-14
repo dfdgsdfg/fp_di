@@ -212,52 +212,48 @@ void main() {
   tearDown(RuntimeFaults.reset);
 
   for (final control in _controls) {
-    property(
-      'control ${control.name} detects ${control.prefix}',
-      () {
-        // The prefixes that each graph run reported, by graph index.
-        final seen = <int, Set<String>>{};
-        // The graph runs that reported a violation with the expected prefix.
-        final detected = <int>{};
-        _apply(control.switches);
-        addTearDown(() {
-          RuntimeFaults.reset();
-          if (detected.isNotEmpty) return;
-          final report = seen.isEmpty
-              ? 'no graph run reported any violation'
-              : seen.entries
-                    .map((e) => 'graph ${e.key}: ${e.value.toList()..sort()}')
-                    .join('; ');
-          fail(
-            'Control ${control.name} was not detected. '
-            'Expected a ${control.prefix} violation with seed=${control.seed} '
-            'over ${control.graphs} graphs. Saw: $report',
-          );
-        });
-        for (var g = 0; g < control.graphs; g++) {
-          final graph = buildGraph(control.seed, g);
-          runBehavior<FuzzModel, Harness>(
-            FuzzBehavior(graph),
-            seed: graph.propertySeed,
-            maxCycles: control.cycles,
-            maxSteps: control.steps,
-            maxCommandTries: control.steps * 12,
-            maxShrinkingCycles: 0,
-            ignoreFalsify: true,
-            onFalsify: (example) {
-              final error = example.exception;
-              final report = error is HistoryViolation
-                  ? error.report
-                  : 'non-violation: $error';
-              final prefixes = _prefixesIn(report);
-              seen[g] = prefixes;
-              if (prefixes.contains(control.prefix)) detected.add(g);
-            },
-          );
-        }
-      },
-      timeout: const Timeout(Duration(minutes: 2)),
-    );
+    property('control ${control.name} detects ${control.prefix}', () {
+      // The prefixes that each graph run reported, by graph index.
+      final seen = <int, Set<String>>{};
+      // The graph runs that reported a violation with the expected prefix.
+      final detected = <int>{};
+      _apply(control.switches);
+      addTearDown(() {
+        RuntimeFaults.reset();
+        if (detected.isNotEmpty) return;
+        final report = seen.isEmpty
+            ? 'no graph run reported any violation'
+            : seen.entries
+                  .map((e) => 'graph ${e.key}: ${e.value.toList()..sort()}')
+                  .join('; ');
+        fail(
+          'Control ${control.name} was not detected. '
+          'Expected a ${control.prefix} violation with seed=${control.seed} '
+          'over ${control.graphs} graphs. Saw: $report',
+        );
+      });
+      for (var g = 0; g < control.graphs; g++) {
+        final graph = buildGraph(control.seed, g);
+        runBehavior<FuzzModel, Harness>(
+          FuzzBehavior(graph),
+          seed: graph.propertySeed,
+          maxCycles: control.cycles,
+          maxSteps: control.steps,
+          maxCommandTries: control.steps * 12,
+          maxShrinkingCycles: 0,
+          ignoreFalsify: true,
+          onFalsify: (example) {
+            final error = example.exception;
+            final report = error is HistoryViolation
+                ? error.report
+                : 'non-violation: $error';
+            final prefixes = _prefixesIn(report);
+            seen[g] = prefixes;
+            if (prefixes.contains(control.prefix)) detected.add(g);
+          },
+        );
+      }
+    }, timeout: const Timeout(Duration(minutes: 2)));
   }
 
   group('control RuntimeDefect.dropLate on its fixed history', () {

@@ -625,16 +625,17 @@ void main() {
                 dispose: (_) => gate.future,
               ),
             ),
-            Component<_B>(key: k2, dependency: Dependency(create: _B.new)),
+            Component<_B>(
+              key: k2,
+              dependency: Dependency(create: _B.new),
+            ),
           ],
         ),
       );
       final mid = root.child(
         module: Module(
           components: [
-            Component<_V>(
-              dependency: Dependency1<_A, _V>(create: (_) => _V()),
-            ),
+            Component<_V>(dependency: Dependency1<_A, _V>(create: (_) => _V())),
             Component<_N>(
               dependency: Dependency2<_A, _B, _N>(create: (_, _) => _N()),
             ),
@@ -649,9 +650,7 @@ void main() {
               key: k1,
               dependency: Dependency(create: () => _A('leaf')),
             ),
-            Component<_C>(
-              dependency: Dependency1<_A, _C>(create: (_) => _C()),
-            ),
+            Component<_C>(dependency: Dependency1<_A, _C>(create: (_) => _C())),
           ],
         ),
       );
@@ -679,12 +678,9 @@ void main() {
       // `whenActive` completes at once only in the phase `active`.
       var completed = false;
       unawaited(
-        publisher.whenActive.then<void>(
-          (_) {
-            completed = true;
-          },
-          onError: (Object _) {},
-        ),
+        publisher.whenActive.then<void>((_) {
+          completed = true;
+        }, onError: (Object _) {}),
       );
       await _settle();
       expect(completed, isFalse);

@@ -124,10 +124,7 @@ void main() {
         throwsA(isA<ActivationException>()),
       );
       expect(feature.isInitialized, isFalse);
-      expect(
-        feature.maybeGet<String>(key: const DiKey(name: 'text')),
-        isNull,
-      );
+      expect(feature.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
       expect(log, ['up api'], reason: 'nothing was created to release');
       await di.dispose();
     });
@@ -200,10 +197,7 @@ void main() {
       );
       await di.initialize();
       await feature.initialize();
-      expect(
-        feature.get<String>(key: const DiKey(name: 'text')),
-        'MAIN',
-      );
+      expect(feature.get<String>(key: const DiKey(name: 'text')), 'MAIN');
       await di.dispose();
     });
   });

@@ -216,20 +216,14 @@ void main() {
       final outer = di.child(
         module: Module(
           components: [
-            Component<int>.value(
-              value: 2,
-              key: DiKey<int>(name: 'count'),
-            ),
+            Component<int>.value(value: 2, key: DiKey<int>(name: 'count')),
           ],
         ),
       );
       final inner = outer.child(
         module: Module(
           components: [
-            Component<int>.value(
-              value: 1,
-              key: DiKey<int>(name: 'count'),
-            ),
+            Component<int>.value(value: 1, key: DiKey<int>(name: 'count')),
           ],
         ),
       );
@@ -404,18 +398,14 @@ void main() {
       expect(created.key, primary);
       expect(valued.key, const DiKey<Database>(name: 'replica'));
       final module = Module(components: [created, valued]);
-      expect(
-        module.publishes,
-        {primary, const DiKey<Database>(name: 'replica')},
-        reason: 'the default key DiKey<Database>() is not published',
-      );
+      expect(module.publishes, {
+        primary,
+        const DiKey<Database>(name: 'replica'),
+      }, reason: 'the default key DiKey<Database>() is not published');
 
       final di = await Scope(module: module).initialize();
       expect(di.get<Database>(key: primary).dsn, 'created');
-      expect(
-        di.get<Database>(key: const DiKey(name: 'replica')).dsn,
-        'valued',
-      );
+      expect(di.get<Database>(key: const DiKey(name: 'replica')).dsn, 'valued');
       expect(di.maybeGet<Database>(), isNull);
       await di.dispose();
     });

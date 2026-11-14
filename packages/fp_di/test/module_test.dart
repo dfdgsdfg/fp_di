@@ -902,11 +902,9 @@ void main() {
         expect(
           read,
           throwsA(
-            isA<InactiveNodeException>().having(
-              (e) => e.missing,
-              'missing',
-              [_k('gate')],
-            ),
+            isA<InactiveNodeException>().having((e) => e.missing, 'missing', [
+              _k('gate'),
+            ]),
           ),
         );
       }
@@ -1078,11 +1076,9 @@ void main() {
       expect(
         () => di.nodes[1].value,
         throwsA(
-          isA<InactiveNodeException>().having(
-            (e) => e.missing,
-            'missing',
-            [_k('p')],
-          ),
+          isA<InactiveNodeException>().having((e) => e.missing, 'missing', [
+            _k('p'),
+          ]),
         ),
       );
 
@@ -1288,9 +1284,8 @@ void main() {
         throwsUnsupportedError,
       );
       expect(
-        () => Dependency.maybeSet(
-          key: features,
-        ).optionalCollectionKeys.add(tabs),
+        () =>
+            Dependency.maybeSet(key: features).optionalCollectionKeys.add(tabs),
         throwsUnsupportedError,
       );
       expect(
@@ -1316,7 +1311,11 @@ void main() {
           ),
         ],
       );
-      final childModule = Module(components: [_node('b', ['a'])]);
+      final childModule = Module(
+        components: [
+          _node('b', ['a']),
+        ],
+      );
       final root = Scope(module: rootModule);
       final child = root.child(module: childModule);
 
@@ -1804,22 +1803,21 @@ void main() {
 
       test('requiring holds the members behind a lost key, in order', () {
         final source = childModule();
-        final (:removed, :rest) = check(
-          source,
-          {gone, ...lost},
-          ancestorKeys: kept,
-        );
+        final (:removed, :rest) = check(source, {
+          gone,
+          ...lost,
+        }, ancestorKeys: kept);
         expect(labels(removed), ['h', 'k', 'm']);
         expect(labels(rest), ['i', 'j']);
       });
 
       test('without the key of e, k stays', () {
         final source = childModule();
-        final (:removed, :rest) = check(
-          source,
-          {gone, _k('d'), _k('f')},
-          ancestorKeys: kept,
-        );
+        final (:removed, :rest) = check(source, {
+          gone,
+          _k('d'),
+          _k('f'),
+        }, ancestorKeys: kept);
         expect(labels(removed), ['h', 'm']);
         expect(labels(rest), ['i', 'j', 'k']);
       });
@@ -1827,11 +1825,10 @@ void main() {
       test('a child scope of withoutRequiring initializes below the parent, '
           'and the unedited module throws', () async {
         final source = childModule();
-        final (:removed, :rest) = check(
-          source,
-          {gone, ...lost},
-          ancestorKeys: kept,
-        );
+        final (:removed, :rest) = check(source, {
+          gone,
+          ...lost,
+        }, ancestorKeys: kept);
         expect(labels(removed), ['h', 'k', 'm']);
         final root = await Scope(
           module: variant().withoutRequiring(keys: {gone}),

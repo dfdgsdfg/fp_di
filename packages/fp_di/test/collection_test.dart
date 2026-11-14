@@ -58,8 +58,7 @@ Component<AppScope> _entry(String id, String value, List<String> log) =>
       ),
     );
 
-DiKey<List<String>> _out(String name) =>
-    DiKey<List<String>>(name: name);
+DiKey<List<String>> _out(String name) => DiKey<List<String>>(name: name);
 
 /// A reader of a set key. It publishes the ids of the elements, in order.
 Component<List<String>> _setReader(
@@ -71,13 +70,11 @@ Component<List<String>> _setReader(
   key: _out(name),
   debugLabel: name,
   dependency:
-      (strict
-              ? Dependency.requireSet(key: key)
-              : Dependency.maybeSet(key: key))
+      (strict ? Dependency.requireSet(key: key) : Dependency.maybeSet(key: key))
           .map((set) {
-        log.add('up $name');
-        return [for (final element in set) element.id];
-      }, dispose: (_) => log.add('down $name')),
+            log.add('up $name');
+            return [for (final element in set) element.id];
+          }, dispose: (_) => log.add('down $name')),
 );
 
 /// A reader of a map key. It publishes `id=value` for each element, in order.
@@ -90,13 +87,11 @@ Component<List<String>> _mapReader(
   key: _out(name),
   debugLabel: name,
   dependency:
-      (strict
-              ? Dependency.requireMap(key: key)
-              : Dependency.maybeMap(key: key))
+      (strict ? Dependency.requireMap(key: key) : Dependency.maybeMap(key: key))
           .map((map) {
-        log.add('up $name');
-        return [for (final e in map.entries) '${e.key}=${e.value.id}'];
-      }, dispose: (_) => log.add('down $name')),
+            log.add('up $name');
+            return [for (final e in map.entries) '${e.key}=${e.value.id}'];
+          }, dispose: (_) => log.add('down $name')),
 );
 
 List<String> _read(Scope scope, String name) =>
@@ -154,11 +149,11 @@ void main() {
       expect(_read(parent, 'pSet'), ['a1', 'a2', 'b1']);
       expect(_read(child, 'cSet'), ['a1', 'a2', 'b1', 'c1']);
       expect(_read(parent, 'pMap'), ['home=pHome', 'settings=pSettings']);
-      expect(
-        _read(child, 'cMap'),
-        ['home=cHome', 'settings=pSettings', 'extra=cExtra'],
-        reason: 'the child entry sits at the position of the parent entry',
-      );
+      expect(_read(child, 'cMap'), [
+        'home=cHome',
+        'settings=pSettings',
+        'extra=cExtra',
+      ], reason: 'the child entry sits at the position of the parent entry');
       await parent.dispose();
     });
 
@@ -788,9 +783,9 @@ void main() {
       final runs = <String>[];
       final dependency =
           (
-            Dependency.requireSet(key: features),
-            Dependency.maybeMap(key: routes),
-          ).zip
+                Dependency.requireSet(key: features),
+                Dependency.maybeMap(key: routes),
+              ).zip
               .mapN((set, map) {
                 runs.add('create');
                 return [

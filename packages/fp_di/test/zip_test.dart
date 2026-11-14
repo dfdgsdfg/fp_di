@@ -26,8 +26,7 @@ Dependency<String> _logged(String tag, List<String> events) =>
 
 /// Declares one seed key per tag so that a Dependency reading it can resolve.
 List<ComponentBase> _seeds(Iterable<String> tags) => [
-  for (final tag in tags)
-    Component.value(value: 0, key: DiKey<int>(name: tag)),
+  for (final tag in tags) Component.value(value: 0, key: DiKey<int>(name: tag)),
 ];
 
 void main() {
@@ -41,31 +40,18 @@ void main() {
               value: 'b',
               key: DiKey<String>(name: 'text'),
             ),
-            Component.value(
-              value: true,
-              key: DiKey<bool>(name: 'enabled'),
-            ),
+            Component.value(value: true, key: DiKey<bool>(name: 'enabled')),
             Component.effect(
               dependency: (
-                Dependency.require<int>(
-                  key: const DiKey(name: 'count'),
-                ),
-                Dependency.require<String>(
-                  key: const DiKey(name: 'text'),
-                ),
+                Dependency.require<int>(key: const DiKey(name: 'count')),
+                Dependency.require<String>(key: const DiKey(name: 'text')),
               ).zip,
             ),
             Component.effect(
               dependency: (
-                Dependency.require<int>(
-                  key: const DiKey(name: 'count'),
-                ),
-                Dependency.require<String>(
-                  key: const DiKey(name: 'text'),
-                ),
-                Dependency.require<bool>(
-                  key: const DiKey(name: 'enabled'),
-                ),
+                Dependency.require<int>(key: const DiKey(name: 'count')),
+                Dependency.require<String>(key: const DiKey(name: 'text')),
+                Dependency.require<bool>(key: const DiKey(name: 'enabled')),
               ).zip,
             ),
           ],
@@ -165,12 +151,8 @@ void main() {
           components: [
             Component.effect(
               dependency: (
-                Dependency.require<String>(
-                  key: const DiKey(name: 'text'),
-                ),
-                Dependency.require<int>(
-                  key: const DiKey(name: 'count'),
-                ),
+                Dependency.require<String>(key: const DiKey(name: 'text')),
+                Dependency.require<int>(key: const DiKey(name: 'count')),
               ).zip,
             ),
           ],

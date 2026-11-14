@@ -259,10 +259,7 @@ void main() {
       expect(handle.value, 'db');
       expect(di.get<String>(key: const DiKey(name: 'text')), 'db');
       await handle.dispose();
-      expect(
-        di.maybeGet<String>(key: const DiKey(name: 'text')),
-        isNull,
-      );
+      expect(di.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
       expect(events, ['released']);
       await di.dispose();
     });
@@ -270,13 +267,12 @@ void main() {
     test('a failed composition publishes nothing', () async {
       final events = <String>[];
       final failing = Component(
-        dependency:
-            Dependency.require<int>(key: const DiKey(name: 'count'))
-                .map<String>((_) {
-                  events.add('acquired');
-                  return 'staged';
-                }, dispose: (_) => events.add('released'))
-                .map<String>((_) => throw StateError('boom')),
+        dependency: Dependency.require<int>(key: const DiKey(name: 'count'))
+            .map<String>((_) {
+              events.add('acquired');
+              return 'staged';
+            }, dispose: (_) => events.add('released'))
+            .map<String>((_) => throw StateError('boom')),
         key: DiKey<String>(name: 'text'),
       );
       final di = Scope(
@@ -289,10 +285,7 @@ void main() {
       );
       await expectLater(di.initialize(), throwsA(isA<ActivationException>()));
       expect(di.isInitialized, isFalse);
-      expect(
-        di.maybeGet<String>(key: const DiKey(name: 'text')),
-        isNull,
-      );
+      expect(di.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
       expect(events, ['acquired', 'released']);
       await di.dispose();
     });
@@ -314,10 +307,7 @@ void main() {
       );
       await expectLater(di.initialize(), throwsA(isA<DuplicateKeyError>()));
       expect(di.isInitialized, isFalse);
-      expect(
-        di.maybeGet<String>(key: const DiKey(name: 'text')),
-        isNull,
-      );
+      expect(di.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
       await di.dispose();
     });
   });

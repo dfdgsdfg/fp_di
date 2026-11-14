@@ -654,9 +654,8 @@ GraphDesc buildGraph(int seed, int index, {bool gatesOnly = false}) {
         d.global < reader.global,
   );
   final hasOptionalValue = drafts.any(
-    (x) => x.reads.any(
-      (r) => r.kind == ReadKind.optional && sameScopeKey(x, r),
-    ),
+    (x) =>
+        x.reads.any((r) => r.kind == ReadKind.optional && sameScopeKey(x, r)),
   );
   if (!gatesOnly && !hasOptionalValue) {
     final candidates = <(_Draft, int)>[
@@ -810,9 +809,12 @@ GraphDesc buildGraph(int seed, int index, {bool gatesOnly = false}) {
     });
     bool shadows(_Draft d) =>
         d.pub.keyId != null &&
-        chainOf(d.scope).skip(1).any(
-          (j) => drafts.any((o) => o.scope == j && o.pub.keyId == d.pub.keyId),
-        );
+        chainOf(d.scope)
+            .skip(1)
+            .any(
+              (j) =>
+                  drafts.any((o) => o.scope == j && o.pub.keyId == d.pub.keyId),
+            );
     for (final chance in const [85, 65, 45]) {
       List<_Draft> candidates() => [
         for (final d in drafts)
@@ -885,9 +887,7 @@ GraphDesc buildGraph(int seed, int index, {bool gatesOnly = false}) {
           for (final o in drafts)
             if (ancestorScopes.contains(o.scope) &&
                 o.pub.keyId != null &&
-                !drafts.any(
-                  (m) => m.scope == sc && m.pub.keyId == o.pub.keyId,
-                ))
+                !drafts.any((m) => m.scope == sc && m.pub.keyId == o.pub.keyId))
               o,
         ];
         if (ancestorKeys.isEmpty) continue;
@@ -1062,9 +1062,11 @@ GraphDesc buildGraph(int seed, int index, {bool gatesOnly = false}) {
     final keys = <String>[];
     final ancestors = <String>[];
     if (pool.isNotEmpty) {
-      keys.add(heads.isNotEmpty && partitionRnd.nextInt(100) < 60
-          ? pick(heads)
-          : pick());
+      keys.add(
+        heads.isNotEmpty && partitionRnd.nextInt(100) < 60
+            ? pick(heads)
+            : pick(),
+      );
       if (partitionRnd.nextInt(100) < 35) {
         final second = pick();
         if (!keys.contains(second)) keys.add(second);
@@ -1864,11 +1866,7 @@ final class Harness {
         in graph.lookupKeys(s).entries) {
       attempt('maybeGet($keyId)', () => scope.maybeGet<int>(key: key));
       attempt('findNode($keyId)', () => scope.findNode<int>(key: key));
-      attempt(
-        'get($keyId)',
-        () => scope.get<int>(key: key),
-        unavailable: true,
-      );
+      attempt('get($keyId)', () => scope.get<int>(key: key), unavailable: true);
     }
     final after = scope.revision;
     if (after != before) {
@@ -1930,9 +1928,7 @@ final class Harness {
     final label = 'create ${a.node}.s${a.step} a${a.id}';
     _siteReads(label, s);
     final scope = scopes[s]!.scope;
-    final handles = [
-      for (final info in live) ...?info.handles,
-    ];
+    final handles = [for (final info in live) ...?info.handles];
     (String, ComponentNode<Object?>)? member;
     if (target >= 0 && handles.isNotEmpty) {
       member = handles[target % handles.length];
@@ -1981,8 +1977,8 @@ final class Harness {
           info.scope.dispose,
         ),
     for (final info in live)
-      for (final (name, node) in info.handles ??
-          const <(String, ComponentNode<Object?>)>[])
+      for (final (name, node)
+          in info.handles ?? const <(String, ComponentNode<Object?>)>[])
         if (firstDisposal.containsKey('node:$name') ||
             _inFlight.contains('node:$name'))
           ('member dispose($name)', ['node:$name'], node.dispose),
@@ -3115,9 +3111,7 @@ final class Harness {
         if (thrown == null) continue;
         FuzzStats.getsChecked++;
         if (thrown.key != key) {
-          _violate(
-            'UnavailableCause: $what threw for the key ${thrown.key}',
-          );
+          _violate('UnavailableCause: $what threw for the key ${thrown.key}');
         }
         final cause = _searchCause(info.index, keyId);
         final found = scope.findNode<int>(key: key);

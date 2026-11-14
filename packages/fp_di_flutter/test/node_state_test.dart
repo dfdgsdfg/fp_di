@@ -44,8 +44,7 @@ Module _childModule() => Module(
 String _describe(ComponentNode<String>? node) => switch (node?.state.phase) {
   null => 'none',
   NodePhase.active => 'value ${node!.value}',
-  NodePhase.activationFailed =>
-    'failed ${node!.activationException!.cause}',
+  NodePhase.activationFailed => 'failed ${node!.activationException!.cause}',
   _ => 'pending',
 };
 

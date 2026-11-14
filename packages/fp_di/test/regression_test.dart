@@ -67,16 +67,12 @@ void main() {
   test('a component whose own cleanup fails stays blocked', () async {
     final root = Scope(
       module: Module(
-        components: [
-          Component.value(value: 1, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 1, key: DiKey<int>(name: 'count'))],
       ),
     );
     final mid = root.child(
       module: Module(
-        components: [
-          Component.value(value: 2, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 2, key: DiKey<int>(name: 'count'))],
       ),
     );
     var activations = 0;
@@ -84,10 +80,8 @@ void main() {
       module: Module(
         components: [
           Component.effect(
-            dependency:
-                Dependency.require<int>(
-                  key: const DiKey(name: 'count'),
-                ).map(
+            dependency: Dependency.require<int>(key: const DiKey(name: 'count'))
+                .map(
                   (_) => ++activations,
                   dispose: (_) => throw StateError('own cleanup failed'),
                 ),
@@ -113,9 +107,7 @@ void main() {
     final di = Scope();
     final other = di.child(
       module: Module(
-        components: [
-          Component.value(value: 1, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 1, key: DiKey<int>(name: 'count'))],
       ),
     );
     final outer = di.child(
@@ -190,10 +182,7 @@ void main() {
       throwsA(isA<UnreachableKeyError>()),
     );
     expect(rejected.isInitialized, isFalse);
-    expect(
-      rejected.maybeGet<String>(key: const DiKey(name: 'text')),
-      isNull,
-    );
+    expect(rejected.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
     await rejected.dispose();
 
     // The explicit type argument is the documented way out.
@@ -212,50 +201,45 @@ void main() {
     await di.dispose();
   });
 
-  test(
-    'an unrelated caller may queue while a mutation is in flight',
-    () async {
-      final release = Completer<void>();
-      final root = Scope(
-        module: Module(
-          components: [
-            Component(
-              dependency: Dependency(
-                create: () async {
-                  await release.future;
-                  return 1;
-                },
-              ),
-              key: DiKey<int>(name: 'slow'),
+  test('an unrelated caller may queue while a mutation is in flight', () async {
+    final release = Completer<void>();
+    final root = Scope(
+      module: Module(
+        components: [
+          Component(
+            dependency: Dependency(
+              create: () async {
+                await release.future;
+                return 1;
+              },
             ),
-          ],
-        ),
-      );
-      final other = root.child(
-        module: Module(
-          components: [
-            Component.value(value: 2, key: DiKey<int>(name: 'queued')),
-          ],
-        ),
-      );
-      final slow = root.initialize();
-      // Issued from outside the mutation: must queue, not be rejected.
-      final queued = other.initialize();
-      release.complete();
-      await slow;
-      await queued;
-      expect(other.get<int>(key: DiKey<int>(name: 'queued')), 2);
-      await root.dispose();
-    },
-  );
+            key: DiKey<int>(name: 'slow'),
+          ),
+        ],
+      ),
+    );
+    final other = root.child(
+      module: Module(
+        components: [
+          Component.value(value: 2, key: DiKey<int>(name: 'queued')),
+        ],
+      ),
+    );
+    final slow = root.initialize();
+    // Issued from outside the mutation: must queue, not be rejected.
+    final queued = other.initialize();
+    release.complete();
+    await slow;
+    await queued;
+    expect(other.get<int>(key: DiKey<int>(name: 'queued')), 2);
+    await root.dispose();
+  });
 
   test('an optional reader sees a publisher that the same reconciliation '
       'activates (G-RT-LC-002, Reconcile.tla SkipRecheck)', () async {
     final di = Scope(
       module: Module(
-        components: [
-          Component.value(value: 1, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 1, key: DiKey<int>(name: 'count'))],
       ),
     );
     final consumers = di.child(
@@ -281,10 +265,7 @@ void main() {
     expect(consumers.nodes.first.value, isNull);
     // The producer activates and publishes in the mutation of the root.
     await di.initialize();
-    expect(
-      consumers.get<String>(key: const DiKey(name: 'text')),
-      'ready',
-    );
+    expect(consumers.get<String>(key: const DiKey(name: 'text')), 'ready');
     expect(consumers.nodes.first.value, 'ready');
     await di.dispose();
   });
@@ -379,9 +360,7 @@ void main() {
       'reconciliation and again on a later mutation', () async {
     final root = Scope(
       module: Module(
-        components: [
-          Component.value(value: 1, key: DiKey<int>(name: 'count')),
-        ],
+        components: [Component.value(value: 1, key: DiKey<int>(name: 'count'))],
       ),
     );
     var attempts = 0;
@@ -390,10 +369,8 @@ void main() {
         components: [
           Component<String>(
             key: DiKey<String>(name: 'text'),
-            dependency:
-                Dependency.require<int>(
-                  key: const DiKey(name: 'count'),
-                ).map((_) {
+            dependency: Dependency.require<int>(key: const DiKey(name: 'count'))
+                .map((_) {
                   attempts++;
                   if (attempts == 1) throw StateError('first attempt');
                   return 'ok';
@@ -410,10 +387,7 @@ void main() {
     expect(attempts, 1, reason: 'one attempt in that reconciliation');
     expect(root.isInitialized, isTrue, reason: 'the mutation succeeds');
     expect(errors.single, isA<ActivationException>());
-    expect(
-      consumers.maybeGet<String>(key: const DiKey(name: 'text')),
-      isNull,
-    );
+    expect(consumers.maybeGet<String>(key: const DiKey(name: 'text')), isNull);
 
     // A later mutation reconciles again, and the consumer activates.
     await root.child().initialize();
@@ -457,10 +431,7 @@ void main() {
     await root.node(key: key).dispose();
     await mid.initialize();
     expect(creations, 1, reason: 'a disposed member never activates again');
-    expect(
-      consumers.maybeGet<int>(key: DiKey<int>(name: 'consumer')),
-      isNull,
-    );
+    expect(consumers.maybeGet<int>(key: DiKey<int>(name: 'consumer')), isNull);
     await root.dispose();
   });
 }

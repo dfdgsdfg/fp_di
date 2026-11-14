@@ -112,9 +112,7 @@ void main() {
           Component.value(value: 1, key: DiKey<int>(name: 'count')),
           Component.effect(
             dependency: (
-              Dependency.require<int>(
-                key: const DiKey(name: 'count'),
-              ).map(
+              Dependency.require<int>(key: const DiKey(name: 'count')).map(
                 (_) => 'dep',
                 dispose: (_) => events.add('dependency released'),
               ),
