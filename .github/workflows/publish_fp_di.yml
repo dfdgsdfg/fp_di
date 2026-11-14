@@ -1,0 +1,62 @@
+name: Publish fp_di
+
+# pub.dev publishes only from a push of a tag that matches the tag pattern of
+# the package (admin page of fp_di): fp_di/v{{version}}.
+on:
+  push:
+    tags:
+      - 'fp_di/v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish fp_di to pub.dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # pub.dev requires this environment; its protection rules hold the run
+    # until a reviewer approves it.
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        run: echo "version=$(sed -n 's/^flutter = "\(.*\)"/\1/p' .mise.toml)" >> "$GITHUB_OUTPUT"
+
+      # The workspace contains Flutter packages, so pub resolves it with Flutter.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: The tag names the version of the pubspec
+        working-directory: packages/fp_di
+        run: |
+          version="$(sed -n 's/^version: *//p' pubspec.yaml)"
+          if [ "$GITHUB_REF_NAME" != "fp_di/v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match fp_di/v$version of pubspec.yaml"
+            exit 1
+          fi
+
+      - name: Tests
+        run: dart run agents/scripts/test_core.dart
+
+      - name: Dry run
+        working-directory: packages/fp_di
+        run: flutter pub publish --dry-run
+
+      # Mints the OIDC token for pub.dev just before the upload, so that it
+      # does not expire during the steps above.
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Publish
+        working-directory: packages/fp_di
+        run: flutter pub publish --force

@@ -145,6 +145,21 @@ formal scenario. Run `dart format .` before a commit; the CI pins the
 Flutter version of `.mise.toml`. Use [`agents/rules/verification.rules.md`](agents/rules/verification.rules.md)
 for lifecycle-boundary verification and evidence.
 
+## Release
+
+`fp_di` and `fp_di_flutter` are on pub.dev. A push of a tag publishes one
+package through its workflow in `.github/workflows/`, after a reviewer approves
+the `pub.dev` environment.
+
+1. Set `version` in the pubspec and move the `## Unreleased` entries of its
+   `CHANGELOG.md` under that version. A breaking change needs a new minor
+   version while the major version is 0.
+2. Commit, push `main`, and wait for CI to pass.
+3. Push the tag `fp_di/v<version>`. The workflow checks that the tag names the
+   pubspec version, runs the tests and a dry run, and publishes.
+4. Push `fp_di_flutter/v<version>` only after the `fp_di` version that its
+   pubspec requires is on pub.dev.
+
 ## Documentation boundaries
 
 | Topic | Rule |
