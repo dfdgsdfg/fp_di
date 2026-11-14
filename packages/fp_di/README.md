@@ -410,6 +410,9 @@ what is adopted, what is adapted, and what is left out.
   [`doc/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/doc), and
   [`doc/lifecycle.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/lifecycle.md)
   draws the states of a node and of a scope.
+- Coming from get_it? [`doc/from_get_it.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/from_get_it.md)
+  maps each get_it call to its `fp_di` form and suggests an order for moving
+  an application over.
 - Each file in [`example/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/example) runs with `dart run`:
 
   | Example | Shows |

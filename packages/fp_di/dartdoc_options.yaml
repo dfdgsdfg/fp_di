@@ -10,6 +10,7 @@ dartdoc:
     - Lifecycle
     - Observation
     - Errors
+    - Guides
   categories:
     Dependency:
       markdown: doc/dependency.md
@@ -24,3 +25,6 @@ dartdoc:
     Errors:
       displayName: Errors and exceptions
       markdown: doc/errors.md
+    Guides:
+      displayName: Coming from get_it
+      markdown: doc/from_get_it.md

@@ -208,8 +208,11 @@ exceptions. Each public type names its category in its doc comment, and
 categories and gives each one a guide page under `packages/fp_di/doc/`. The
 category Lifecycle holds the instance layer and the phases `NodePhase` and
 `ScopePhase`, and it explains the states of a node and of a scope. The keys and the two kinds of failure cross the layers, so
-each has a category of its own. The lint `public_member_api_docs` requires a
-doc comment on each public member of each package.
+each has a category of its own. A seventh category, Guides, shows the guide
+for readers who know get_it, `doc/from_get_it.md`; it tags `Scope` and
+`Module`, because `dart doc` builds no topic page for a category without a
+type. The lint `public_member_api_docs` requires a doc comment on each public
+member of each package.
 
 A public method MUST chain only for an algebraic step. Every constructor and
 configuration value, including the published key, MUST be a named argument.

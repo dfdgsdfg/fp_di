@@ -30,6 +30,7 @@ import 'key.dart';
 /// member, as [origins]. Only diagnostics and the shape export read it.
 ///
 /// {@category Declaration}
+/// {@category Guides}
 final class Module {
   /// A module of [components], listed in declaration order.
   ///

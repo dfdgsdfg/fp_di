@@ -23,6 +23,7 @@ part 'runtime_state.dart';
 /// A hierarchical dependency environment and lifecycle owner.
 ///
 /// {@category Declaration}
+/// {@category Guides}
 final class Scope {
   Scope._(this._runtime, this._scope);
 
