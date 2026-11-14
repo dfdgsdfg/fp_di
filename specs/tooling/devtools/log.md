@@ -24,3 +24,18 @@ Append accepted decisions only. Newest at the bottom.
 - Consequences: The inspector is there whenever DevTools is, with no call in the app. A release build has no registration, no registry, and no event. A debug build pays one registration and a registry of weak references; it builds events only while the extension listens.
 - Alternatives: An opt-in call is forgotten exactly when it is needed. Events from the start cost work in every debug build without DevTools.
 - References: [registration](spec.md#registration), [R-UC-TL-DT-001](requirements.md#r-uc-tl-dt-001).
+
+## [2026-11-14] decision | Post the transitions of a turn from a timer of the root zone
+
+- Context: R-UC-TL-DT-003 combines the transitions of one event-loop turn into one event, and it forbade a timer of the inspector, to keep slow mutations measured only by a root with `onSlowMutation`. A flush in a microtask runs before the later microtasks of the turn, so an awaited `initialize` gave ten events in the recorded scenario.
+- Decision: The first transition of a turn starts a timer of zero duration in the root zone, and the timer posts the event. The requirement now forbids a timer that measures a mutation, not every timer.
+- Consequences: An awaited `initialize` gives one event. The timer exists only while the extension listens and a transition happened. The root zone keeps it out of the zones of tests that stop their timers or microtasks.
+- References: [events](spec.md#events), [R-UC-TL-DT-003](requirements.md#r-uc-tl-dt-003).
+
+## [2026-11-14] decision | Keep the DevTools extension experimental and out of the release
+
+- Context: Q-TL-DT-001 asked whether a release of `fp_di` ships the built extension. The built web app is 43 MB, 36 MB of it CanvasKit. The extension app has passed only its widget tests, and V-Q-TL-DT-001 has not run. `dart pub publish` warns when `extension/devtools` exists without a build.
+- Decision: Resolves Q-TL-DT-001. The extension is experimental. A release of `fp_di` contains no `extension/` folder. The repository tracks the config in `packages/fp_di_devtools`, and the root `.gitignore` excludes `packages/fp_di/extension/`. The inspector stays in the runtime of each debug build.
+- Consequences: The package keeps its size, and publishing gives no extension warning. Only an author with a path dependency on the workspace sees the tab, after a local build. The protocol can change without a compatibility duty while the extension is experimental.
+- References: [packaging](spec.md#packaging), [R-UC-TL-DT-006](requirements.md#r-uc-tl-dt-006).
+

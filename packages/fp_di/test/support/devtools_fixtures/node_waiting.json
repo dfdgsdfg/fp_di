@@ -1,0 +1,28 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "reads": [
+    {
+      "key": "DiKey<int>(token)",
+      "kind": "require",
+      "resolves": false,
+      "publisher": 0
+    }
+  ],
+  "readers": [],
+  "failure": null,
+  "cause": [
+    {
+      "node": 1,
+      "phase": "waiting",
+      "waitsFor": [
+        "DiKey<int>(token)"
+      ]
+    },
+    {
+      "node": 0,
+      "phase": "activationFailed",
+      "waitsFor": []
+    }
+  ]
+}

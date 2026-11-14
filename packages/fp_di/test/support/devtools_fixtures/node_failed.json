@@ -1,0 +1,24 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "reads": [
+    {
+      "key": "DiKey<int>(base)",
+      "kind": "require",
+      "resolves": true,
+      "publisher": 3
+    }
+  ],
+  "readers": [],
+  "failure": {
+    "cause": "Bad state: boom",
+    "stackTrace": "#0      Login.start (package:shop/session/login.dart:41:7)\n#1      Session.open (package:shop/session/session.dart:18:12)\n#2      main (package:shop/main.dart:9:3)"
+  },
+  "cause": [
+    {
+      "node": 0,
+      "phase": "activationFailed",
+      "waitsFor": []
+    }
+  ]
+}

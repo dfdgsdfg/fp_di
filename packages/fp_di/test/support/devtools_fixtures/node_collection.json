@@ -1,0 +1,29 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "reads": [
+    {
+      "key": "DiSetKey<String>(plugins)",
+      "kind": "collection",
+      "resolves": true,
+      "publisher": null,
+      "members": [
+        {
+          "key": "contribution to DiSetKey<String>(plugins)",
+          "kind": "member",
+          "resolves": true,
+          "publisher": 5
+        },
+        {
+          "key": "contribution to DiSetKey<String>(plugins)",
+          "kind": "member",
+          "resolves": true,
+          "publisher": 6
+        }
+      ]
+    }
+  ],
+  "readers": [],
+  "failure": null,
+  "cause": null
+}

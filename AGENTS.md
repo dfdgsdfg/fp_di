@@ -94,9 +94,13 @@ split, shared responsibilities, paper adoption, and fpdart interoperability.
 - fpdart API: `packages/fp_di_fpdart/lib/fp_di_fpdart.dart`, with the
   example `packages/fp_di_fpdart/example/checkout.dart`. The core never
   depends on fpdart or on this package.
+- DevTools inspector: `packages/fp_di/lib/src/runtime/runtime_inspector.dart`.
+  The experimental extension app is `packages/fp_di_devtools/`. A local build
+  goes in `packages/fp_di/extension/devtools/`, which Git ignores. Contract:
+  [DevTools extension](specs/tooling/devtools/spec.md).
 - Runtime examples: `packages/fp_di/example/`
-- Tests: `packages/fp_di/test/`, `packages/fp_di_fpdart/test/`, and
-  `packages/fp_di_flutter/test/`
+- Tests: `packages/fp_di/test/`, `packages/fp_di_fpdart/test/`,
+  `packages/fp_di_flutter/test/`, and `packages/fp_di_devtools/test/`
 - Lifecycle notes: `packages/fp_di/doc/lifecycle.md`
 
 ## Durable invariants
@@ -130,6 +134,7 @@ dart analyze
 dart run agents/scripts/test_core.dart
 dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test
 flutter test packages/fp_di_flutter/test
+flutter test packages/fp_di_devtools/test
 ```
 
 Examples should remain runnable with `dart run`, as the example table of

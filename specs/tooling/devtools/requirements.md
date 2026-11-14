@@ -9,7 +9,7 @@ depends_on: ["specs/runtime/lifecycle/spec.md", "specs/architecture/spec.md"]
 
 # DevTools Extension Requirements
 
-[Design](spec.md) · [Decisions](log.md) · [Known gaps](gap.md)
+[Design](spec.md) · [Decisions](log.md)
 
 ## Problem Statement
 
@@ -31,7 +31,7 @@ must not make the core package depend on Flutter.
 - An inspector in the core package that a debug build of an app serves to DevTools, with no call in the app.
 - A versioned JSON protocol: the live roots, the state tree of a root, the details of one node, the shape of one scope, and events for transitions, errors, and slow mutations.
 - A DevTools extension app that shows the scope tree, the nodes of a scope, the details of a node, a timeline of transitions, and the shape graph.
-- The packaging of the extension in the `fp_di` package, as the DevTools extension framework requires.
+- A local build of the extension in the `fp_di` package folder, as the DevTools extension framework requires. The extension is experimental.
 - An opt-in display of the values of nodes.
 
 ## Out of Scope
@@ -40,7 +40,7 @@ must not make the core package depend on Flutter.
 - An inspector in a release or profile build.
 - A separate extension for `fp_di_flutter` or `fp_di_fpdart`. The widget tree stays the business of the Flutter inspector.
 - A stable public Dart API for the protocol. The protocol is a contract between the inspector and the extension of the same version.
-- Timing of the publication of the built extension in a package release; Q-TL-DT-001 holds it.
+- The built extension in a release of `fp_di`, while the extension is experimental.
 
 ## User Stories
 
@@ -56,7 +56,7 @@ must not make the core package depend on Flutter.
   - Actor: runtime
   - Trigger: the creation of the first root scope in an isolate
   - Preconditions: Dart assertions are enabled, as in a Flutter debug build, `dart run --enable-asserts`, and `package:test`
-  - Main flow: the runtime MUST register the service extensions of the inspector one time in the isolate, inside an assertion. It MUST keep each live root in a registry that holds a weak reference, so that the registry keeps no root alive. A root MUST leave the registry when its disposal ends.
+  - Main flow: the runtime MUST register the service extensions of the inspector one time in the isolate, inside an assertion. It MUST keep each live root in a registry that holds a weak reference, so that the registry keeps no root alive. A root MUST leave the registry when its disposal ends. The creation and the disposal of a root MUST take constant time in the registry on average, also with many live roots.
   - Alternative flows: without assertions, the runtime MUST NOT register a service extension, MUST NOT keep a registry, and MUST NOT post an event. A second root MUST NOT register the service extensions again.
   - Postcondition: the app needs no call to serve the inspector, and a release build carries no inspector work.
 
@@ -72,7 +72,7 @@ must not make the core package depend on Flutter.
   - Actor: runtime, DevTools extension
   - Trigger: a transition, a report on `Scope.errors`, or a slow mutation, after the extension called `ext.fp_di.listen`
   - Preconditions: the inspector is served
-  - Main flow: the inspector MUST post no event until the extension calls `ext.fp_di.listen`. After that call, it MUST post `fp_di:transition` with the id of the root, the `revision`, and the node states that changed since the last event of that root. It MUST combine the transitions of one event-loop turn into one event. It MUST post `fp_di:error` for each report on `Scope.errors`, and `fp_di:slowMutation` for each slow mutation that a root reports. A root reports one only when it was created with `onSlowMutation`, and the inspector MUST NOT start a timer of its own.
+  - Main flow: the inspector MUST post no event until the extension calls `ext.fp_di.listen`. After that call, it MUST post `fp_di:transition` with the id of the root, the `revision`, and the node states that changed since the last event of that root. It MUST combine the transitions of one event-loop turn into one event. It MUST post `fp_di:error` for each report on `Scope.errors`, and `fp_di:slowMutation` for each slow mutation that a root reports. A root reports one only when it was created with `onSlowMutation`, and the inspector MUST NOT start a timer to measure a mutation.
   - Alternative flows: a call of `ext.fp_di.listen` with `enabled: false` MUST stop the events. An event MUST NOT exceed a size bound; a longer stack trace or list is cut, and the event states that it is cut.
   - Postcondition: an app whose DevTools does not show the extension builds no event.
 
@@ -96,26 +96,19 @@ must not make the core package depend on Flutter.
   - Actor: package maintainer
   - Trigger: a build of the extension app
   - Preconditions: the extension app builds for the web
-  - Main flow: the built extension MUST be in `packages/fp_di/extension/devtools/build/`, with a `config.yaml` whose `name` is `fp_di`, as the DevTools extension framework requires. `dart run devtools_extensions validate --package=packages/fp_di` MUST pass.
-  - Alternative flows: whether a release of `fp_di` contains the built extension is TBD(Q-TL-DT-001).
-  - Postcondition: the core library code still imports no Flutter library.
+  - Main flow: a local build MUST put the extension in `packages/fp_di/extension/devtools/build/`, with a `config.yaml` whose `name` is `fp_di`, as the DevTools extension framework requires. `dart run devtools_extensions validate --package=packages/fp_di` MUST pass.
+  - Alternative flows: the repository MUST NOT track the folder `packages/fp_di/extension/`, and a release of `fp_di` MUST NOT contain it, while the extension is experimental.
+  - Postcondition: the core library code still imports no Flutter library, and a release of `fp_di` has no extension folder.
 
 ## Verification
 
-- <a id="v-t-tl-dt-001"></a>**V-T-TL-DT-001** `[test]` Given a Dart VM test with assertions and a second run without them, when two roots are created and one is disposed, then with assertions the service extensions are registered once and the registry lists only the live root; without assertions nothing is registered, nothing is kept, and nothing is posted. Covers: R-US-TL-DT-005, R-UC-TL-DT-001.
+- <a id="v-t-tl-dt-001"></a>**V-T-TL-DT-001** `[test]` Given a Dart VM test with assertions and a second run without them, when two roots are created and one is disposed, then with assertions the service extensions are registered once and the registry lists only the live root, and 40000 roots are created and disposed within a time bound; without assertions nothing is registered, nothing is kept, and nothing is posted. Covers: R-US-TL-DT-005, R-UC-TL-DT-001.
 - <a id="v-t-tl-dt-002"></a>**V-T-TL-DT-002** `[test]` Given a root with a child initialized before its parent, a waiting node, a node whose automatic activation failed, a node that reads a collection key, and a node disposed alone, when the handlers of `roots`, `state`, `node`, and `shape` are called directly, then each answer has the `format` and `version`, the tree, the node details, the readers, the failure, and the search steps match the runtime, an unknown id gives an error answer, and `revision` is unchanged by the calls. Covers: R-US-TL-DT-001, R-US-TL-DT-002, R-US-TL-DT-004, R-UC-TL-DT-002.
 - <a id="v-t-tl-dt-003"></a>**V-T-TL-DT-003** `[test]` Given a root and a recorder of posted events, when transitions, an error, and a slow mutation happen before and after a call of `listen`, then nothing is posted before it, one transition event is posted for each event-loop turn with the changed node states, the error and the slow mutation are posted, a stack trace over the bound is cut and marked, and `listen` with `enabled: false` stops the events. Covers: R-US-TL-DT-003, R-UC-TL-DT-003.
 - <a id="v-t-tl-dt-004"></a>**V-T-TL-DT-004** `[test]` Given nodes whose values have a `toString` that returns a secret, a long text, and a throw, when the handlers answer with and without the request for values, then no value text appears without the request, a long text is cut, and a throwing `toString` gives the placeholder. Covers: R-UC-TL-DT-004.
 - <a id="v-t-tl-dt-005"></a>**V-T-TL-DT-005** `[test]` Given the extension app with a fake service that serves recorded answers and events, when it starts, a scope and a node are selected, a key is followed, and the phase filter is set, then each view shows the recorded data, following a key selects its publisher, a missing app shows the connection message, and another protocol version shows the version message. Covers: R-UC-TL-DT-005.
-- <a id="v-l-tl-dt-001"></a>**V-L-TL-DT-001** `[lint]` Given the built extension in `packages/fp_di/extension/devtools/`, when `dart run devtools_extensions validate --package=packages/fp_di` runs and the imports of `packages/fp_di/lib` are checked, then the validation passes and no file of the core library imports Flutter. Covers: R-UC-TL-DT-006.
+- <a id="v-l-tl-dt-001"></a>**V-L-TL-DT-001** `[lint]` Given the built extension in `packages/fp_di/extension/devtools/`, when `dart run devtools_extensions validate --package=packages/fp_di` runs and the imports of `packages/fp_di/lib` are checked, then the validation passes, no file of the core library imports Flutter, and `dart pub publish --dry-run` of `fp_di` lists no file of the folder. Covers: R-UC-TL-DT-006.
 - <a id="v-q-tl-dt-001"></a>**V-Q-TL-DT-001** `[qa]` Given a Flutter example and a Dart example of `fp_di` run in debug mode with DevTools in a browser, when the `fp_di` tab is opened during startup, a logout, and a failed activation, then each view of R-UC-TL-DT-005 shows the state of the app, and a release build of the same app shows no `fp_di` service extension. Covers: R-US-TL-DT-001, R-US-TL-DT-002, R-US-TL-DT-003, R-US-TL-DT-004, R-US-TL-DT-005.
-
-## Open Questions
-
-- <a id="q-tl-dt-001"></a>**Q-TL-DT-001** — Ship the built extension in the first published release of `fp_di`, or in a later one
-  - Options: (a) in 0.1.0, which adds the size of the built web app to the package, (b) in a later minor release, after V-Q-TL-DT-001 passes
-  - Blocks: R-UC-TL-DT-006
-  - Resolve when: the extension app passes V-T-TL-DT-005 and its built size is known
 
 ## References
 

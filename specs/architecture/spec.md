@@ -70,10 +70,13 @@ flowchart LR
 | `fp_di_fpdart` | The scope lifecycle, lookups, and `Dependency` steps as fpdart types; no lifecycle logic of its own | [fp_di_fpdart.dart](../../packages/fp_di_fpdart/lib/fp_di_fpdart.dart) |
 | Host | Root scope, concrete services, truthful acquire/release adapters, application state | Host composition root; [examples](../../packages/fp_di/example) |
 | Verification tooling | Checks and evidence about contracts; no production runtime dependencies | [Test specification](../verification/test/spec.md), [formal specification](../verification/formal/spec.md) |
+| `fp_di_devtools` | The DevTools extension app, an experimental and unpublished Flutter web app; a local build puts it in `packages/fp_di/extension/devtools/`, and a release of `fp_di` does not ship it | [DevTools extension](../tooling/devtools/spec.md) |
 
 Source dependency direction is `host -> fp_di_flutter -> fp_di` and
 `host -> fp_di_fpdart -> fp_di, fpdart`; a host without either imports `fp_di`
-directly. `fp_di_flutter` and `fp_di_fpdart` do not depend on each other. Adapter imports MUST use `package:fp_di/fp_di.dart`,
+directly. `fp_di_flutter` and `fp_di_fpdart` do not depend on each other.
+`fp_di_devtools` reads a running app only through the inspector protocol of
+the VM service. It does not depend on `fp_di`, and no package depends on it. Adapter imports MUST use `package:fp_di/fp_di.dart`,
 not core `src/` internals. Tooling and tests MUST NOT become production imports.
 The workspace includes Flutter for dependency resolution even though the core's
 runtime and core unit tests are Dart-only. Manifests own exact SDK constraints;

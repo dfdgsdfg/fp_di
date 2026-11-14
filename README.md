@@ -27,7 +27,7 @@ before them. A failure disposes what was created, in reverse. Modules of
 components are values that you combine, edit, and inspect before anything
 runs.
 
-The workspace has three packages:
+The workspace has four packages:
 
 - [`fp_di`](packages/fp_di): the Dart runtime. It has no dependencies and does
   not import Flutter.
@@ -35,6 +35,9 @@ The workspace has three packages:
   the widget tree, with `BuildContext` reads.
 - [`fp_di_fpdart`](packages/fp_di_fpdart): the scope lifecycle, lookups, and
   `Dependency` steps as fpdart types. It is experimental.
+- [`fp_di_devtools`](packages/fp_di_devtools): a DevTools extension that shows
+  the scopes and nodes of a running app. It is experimental, and a release of
+  `fp_di` does not ship it.
 
 Start with the [`fp_di` README](packages/fp_di/README.md).
 

@@ -1,0 +1,13 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "root": 2,
+  "operation": "initialize",
+  "elapsedMs": 20,
+  "running": [
+    "warm cache"
+  ],
+  "ignoringCancellation": [],
+  "disposing": [],
+  "queued": 0
+}

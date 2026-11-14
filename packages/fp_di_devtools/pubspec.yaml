@@ -1,0 +1,24 @@
+name: fp_di_devtools
+description: "The DevTools extension app of fp_di: scopes, nodes, timeline, and shape graph of a running app."
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.38.1'
+
+resolution: workspace
+
+dependencies:
+  devtools_app_shared: ^0.5.1
+  devtools_extensions: ^0.5.1
+  flutter:
+    sdk: flutter
+  vm_service: '>=15.0.0 <16.0.0'
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

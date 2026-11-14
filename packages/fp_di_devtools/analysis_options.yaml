@@ -1,0 +1,11 @@
+include: ../../analysis_options.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - web/**
+
+# The app is not published, so its members need no API documentation.
+linter:
+  rules:
+    public_member_api_docs: false

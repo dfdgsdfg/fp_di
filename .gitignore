@@ -4,6 +4,9 @@
 .metadata
 .packages
 build/
+.flutter-plugins-dependencies
+# The DevTools extension is experimental; a local build only (specs/tooling/devtools).
+packages/fp_di/extension/
 coverage/
 output/
 tmp/pdfs/

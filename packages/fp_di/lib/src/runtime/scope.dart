@@ -10,14 +10,17 @@ import '../model/exception.dart';
 import '../model/key.dart';
 import '../model/lease.dart';
 import '../model/module.dart';
+import '../model/shape_graph.dart';
 import '../model/state.dart';
 import 'runtime_faults.dart';
+import 'runtime_inspector_hooks.dart';
 import 'runtime_teardown.dart';
 
 part 'runtime_change_broadcaster.dart';
 part 'runtime_mutation_queue.dart';
 part 'runtime.dart';
 part 'runtime_context.dart';
+part 'runtime_inspector.dart';
 part 'runtime_state.dart';
 
 /// A hierarchical dependency environment and lifecycle owner.
@@ -43,14 +46,23 @@ final class Scope {
     SlowMutationListener? onSlowMutation,
     Duration slowMutationThreshold = const Duration(seconds: 2),
   }) {
+    _RuntimeInspectorSlowRelay? relay;
+    assert(() {
+      relay = _RuntimeInspectorSlowRelay.of(onSlowMutation);
+      return true;
+    }());
     final runtime = _Runtime(
-      onSlowMutation: onSlowMutation,
+      onSlowMutation: relay?.report ?? onSlowMutation,
       slowMutationThreshold: slowMutationThreshold,
     );
     final scope = _RuntimeScope(null, module ?? Module(components: const []));
     final public = Scope._(runtime, scope);
     scope.public = public;
     runtime.scopes.add(public);
+    assert(() {
+      _RuntimeInspector.rootCreated(public, relay);
+      return true;
+    }());
     return public;
   }
 

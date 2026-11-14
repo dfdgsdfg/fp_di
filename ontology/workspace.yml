@@ -48,6 +48,20 @@ nodes:
     evidence:
       - pubspec.yaml
       - specs/architecture/spec.md
+  fp_di_devtools:
+    kind: component
+    definition: >-
+      Experimental, unpublished Flutter web app that DevTools loads as the fp_di extension. It reads a running app through
+      the inspector protocol of the VM service and changes nothing.
+    domain: architecture
+    bindings:
+      - type: package
+        path: packages/fp_di_devtools
+      - type: spec
+        path: specs/tooling/devtools/spec.md
+    evidence:
+      - pubspec.yaml
+      - specs/architecture/spec.md
   dart_sdk:
     kind: platform
     definition: Dart SDK and VM that build and run the core package without Flutter.
@@ -80,6 +94,13 @@ relations:
     description: The fpdart package composes over the public lifecycle and lookup APIs of the core.
     evidence:
       - packages/fp_di_fpdart/pubspec.yaml
+      - specs/architecture/spec.md
+  - from: fp_di_devtools
+    type: depends_on
+    to: flutter_sdk
+    description: The extension app is a Flutter web app; it does not depend on the core.
+    evidence:
+      - packages/fp_di_devtools/pubspec.yaml
       - specs/architecture/spec.md
   - from: fp_di_core
     type: runs_on

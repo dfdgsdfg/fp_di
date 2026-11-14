@@ -311,3 +311,10 @@ Current definitions live in YAML. Authoring guidance lives in [AGENTS.md](AGENTS
 - Decision: The key concept lists `available`. A key is available when `get` returns a value for it, and `getWhenAvailable` waits for that.
 - Consequences: `available` and `unavailable` name one condition and its negation. The edits of a module still take `ancestorKeys`, not `available`.
 - References: [lifecycle.yml](lifecycle.yml), [lifecycle log](../specs/runtime/lifecycle/log.md).
+
+## [2026-11-14] decision | Add the DevTools extension app as a workspace package
+
+- Context: The DevTools topic requires an extension app, a Flutter web app that reads a running app through the inspector protocol. The core package must not depend on Flutter, and the app needs `devtools_extensions`.
+- Decision: `workspace.yml` declares `fp_di_devtools` as a component of the architecture domain, with an edge to `flutter_sdk` and no edge to `fp_di_core`. The inspector stays inside `fp_di_core` and adds no node.
+- Consequences: The workspace has a fourth package that is not published. The protocol, and not a Dart dependency, joins the app and the core, so the app cannot import a runtime type.
+- References: [workspace.yml](workspace.yml), [DevTools extension](../specs/tooling/devtools/spec.md), [architecture spec](../specs/architecture/spec.md).

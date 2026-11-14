@@ -1,0 +1,78 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "shape": {
+    "format": "fp_di.shape",
+    "version": 1,
+    "label": "session",
+    "members": [
+      {
+        "index": 0,
+        "label": "login",
+        "origin": "session",
+        "publishes": "DiKey<int>(token)",
+        "contributesTo": null,
+        "requires": [
+          "DiKey<int>(base)"
+        ],
+        "optional": [],
+        "collections": [],
+        "optionalCollections": [],
+        "depth": 1
+      },
+      {
+        "index": 1,
+        "label": "profile",
+        "origin": "session",
+        "publishes": "DiKey<String>(profile)",
+        "contributesTo": null,
+        "requires": [
+          "DiKey<int>(token)"
+        ],
+        "optional": [],
+        "collections": [],
+        "optionalCollections": [],
+        "depth": 2
+      }
+    ],
+    "edges": [
+      {
+        "from": 1,
+        "to": 0,
+        "key": "DiKey<int>(token)",
+        "kind": "require"
+      }
+    ],
+    "publishes": [
+      "DiKey<int>(token)",
+      "DiKey<String>(profile)"
+    ],
+    "requires": [
+      "DiKey<int>(base)"
+    ],
+    "reads": [
+      "DiKey<int>(base)"
+    ],
+    "contributes": {},
+    "ancestors": {
+      "labels": [
+        "app"
+      ],
+      "publishes": [
+        "DiKey<String>(config)",
+        "DiKey<int>(base)",
+        "DiKey<String>(greeting)",
+        "DiKey<List<String>>(registry)",
+        "DiKey<int>(doomed)",
+        "DiKey<int>(orphan)"
+      ]
+    },
+    "undeclared": [],
+    "duplicates": [],
+    "cycles": [],
+    "longestChain": [
+      0,
+      1
+    ]
+  }
+}

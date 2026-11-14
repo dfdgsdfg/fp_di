@@ -1,0 +1,145 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "scope": {
+    "id": 1,
+    "phase": "initialized",
+    "module": "app",
+    "children": [
+      {
+        "id": 2,
+        "phase": "initialized",
+        "module": "session",
+        "children": [],
+        "nodes": [
+          {
+            "id": 0,
+            "label": "login",
+            "key": "DiKey<int>(token)",
+            "phase": "activationFailed",
+            "missing": [],
+            "failure": {
+              "type": "StateError",
+              "message": "Bad state: boom"
+            },
+            "commits": 0,
+            "origin": "session",
+            "value": null
+          },
+          {
+            "id": 1,
+            "label": "profile",
+            "key": "DiKey<String>(profile)",
+            "phase": "waiting",
+            "missing": [
+              "DiKey<int>(token)"
+            ],
+            "failure": null,
+            "commits": 0,
+            "origin": "session",
+            "value": null
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "phase": "declared",
+        "module": null,
+        "children": [],
+        "nodes": []
+      }
+    ],
+    "nodes": [
+      {
+        "id": 2,
+        "label": "config",
+        "key": "DiKey<String>(config)",
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "prod"
+      },
+      {
+        "id": 3,
+        "label": "base",
+        "key": "DiKey<int>(base)",
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "1"
+      },
+      {
+        "id": 4,
+        "label": "greeter",
+        "key": "DiKey<String>(greeting)",
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "hello prod"
+      },
+      {
+        "id": 5,
+        "label": "pluginA",
+        "key": null,
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "a"
+      },
+      {
+        "id": 6,
+        "label": "pluginB",
+        "key": null,
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "b"
+      },
+      {
+        "id": 7,
+        "label": "registry",
+        "key": "DiKey<List<String>>(registry)",
+        "phase": "active",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": "[a, b]"
+      },
+      {
+        "id": 8,
+        "label": "doomed",
+        "key": "DiKey<int>(doomed)",
+        "phase": "disposed",
+        "missing": [],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": null
+      },
+      {
+        "id": 9,
+        "label": "orphan",
+        "key": "DiKey<int>(orphan)",
+        "phase": "waiting",
+        "missing": [
+          "DiKey<int>(doomed)"
+        ],
+        "failure": null,
+        "commits": 1,
+        "origin": "app",
+        "value": null
+      }
+    ]
+  }
+}

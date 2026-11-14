@@ -1,0 +1,16 @@
+{
+  "format": "fp_di.devtools",
+  "version": 1,
+  "roots": [
+    {
+      "id": 1,
+      "label": "app",
+      "revision": 30
+    },
+    {
+      "id": 2,
+      "label": "slow app",
+      "revision": 4
+    }
+  ]
+}

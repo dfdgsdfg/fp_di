@@ -1262,6 +1262,10 @@ final class _Runtime {
       scopeTransition([current], disposed: current);
     }
     if (scope.parent == null) await changes.errors.close();
+    assert(() {
+      if (scope.parent == null) _RuntimeInspector.rootDisposed(this);
+      return true;
+    }());
     return disposeFailures;
   }
 
