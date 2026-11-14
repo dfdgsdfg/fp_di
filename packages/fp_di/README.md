@@ -1,6 +1,7 @@
-# fp_di
+# fp_di - Algebraic dependency injection for Dart
 
-Algebraic dependency injection for Dart.
+**Automatic ordering. Safe release. Composed like functions and their
+inverses.**
 
 Each dependency is a pair: `create` makes a value from the keys that it reads,
 and `dispose` releases that value. Pairs combine like functions with their
