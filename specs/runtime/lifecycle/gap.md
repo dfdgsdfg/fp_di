@@ -22,3 +22,11 @@ tags: [runtime, lifecycle, gap]
 - Impact: A tool that holds only the root cannot read the declarations of a child scope: `childStates` gives values without a module and without a scope. Two child scopes in the phase `declared` with different modules have equal values.
 - Resolution condition: `ScopeState` satisfies the sentences on the module of R-UC-RT-LC-028 and R-UC-RT-LC-029 and V-T-RT-LC-034 passes, or the accepted spec is revised.
 - Evidence: Inspected `packages/fp_di/lib/src/model/state.dart`: the constructor `ScopeState._` takes `phase`, `nodeStates`, and `childStates`, and `operator ==` compares those three members.
+
+## <a id="g-rt-lc-014"></a>G-RT-LC-014 — No order exploration for tests
+
+- Spec: [`spec.md#order-exploration`](spec.md#order-exploration) and R-UC-RT-LC-033 require `exploreOrders` in `package:fp_di/testing.dart`, and pumps that start one chosen ready item at a time during an exploration.
+- Implementation: `packages/fp_di/lib` has no `testing.dart` and no `exploreOrders` symbol. The pump of `activateMembers` in [`runtime.dart`](../../../packages/fp_di/lib/src/runtime/runtime.dart) and the pump of `releaseAlongReads` in [`runtime_teardown.dart`](../../../packages/fp_di/lib/src/runtime/runtime_teardown.dart) start every ready item and read no choice function.
+- Impact: An author who follows the lifecycle notes and tests a module in more than one completion order writes the gates by hand. An order dependence between overlapping effects shows only in a run whose completion order happens to expose it.
+- Resolution condition: The implementation satisfies the linked design and V-T-RT-LC-039 and V-T-RT-LC-040 pass, or the accepted spec is revised.
+- Evidence: Inspected `packages/fp_di/lib`: the libraries are `fp_di.dart` and `tooling.dart`. Inspected the two pumps, which call `start` for each ready item while items remain.

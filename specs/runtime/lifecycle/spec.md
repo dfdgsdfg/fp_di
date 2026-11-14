@@ -97,6 +97,7 @@ flowchart LR
 | Key reads and their shape | [Dependency](../../../packages/fp_di/lib/src/model/dependency.dart) |
 | Scope API, interpreter, staging, graph | [Scope](../../../packages/fp_di/lib/src/runtime/scope.dart), [runtime](../../../packages/fp_di/lib/src/runtime/runtime.dart), [runtime mutation queue](../../../packages/fp_di/lib/src/runtime/runtime_mutation_queue.dart), [runtime change broadcaster](../../../packages/fp_di/lib/src/runtime/runtime_change_broadcaster.dart), [runtime state](../../../packages/fp_di/lib/src/runtime/runtime_state.dart), [runtime context](../../../packages/fp_di/lib/src/runtime/runtime_context.dart), [state values](../../../packages/fp_di/lib/src/model/state.dart), [slow-mutation report](../../../packages/fp_di/lib/src/model/change.dart) |
 | Module value, edits, and shape | [Module](../../../packages/fp_di/lib/src/model/module.dart) |
+| Order exploration for tests (designed, not implemented; G-RT-LC-014) | `package:fp_di/testing.dart` |
 | Shape export for tool scripts | [ShapeGraph](../../../packages/fp_di/lib/src/model/shape_graph.dart), through [tooling.dart](../../../packages/fp_di/lib/tooling.dart) |
 | Acquisition, composition of dispose functions, and memoization (internal leases, `Lazy`) | [lease.dart](../../../packages/fp_di/lib/src/model/lease.dart) |
 | Lifecycle errors | [Errors](../../../packages/fp_di/lib/src/model/error.dart) and [exceptions](../../../packages/fp_di/lib/src/model/exception.dart) |
@@ -1882,6 +1883,77 @@ the only places that change the count, and the walk runs only when it is
 above zero. During a first `initialize`, a node that activates has no
 readers yet, so every check of that `initialize` skips its walk.
 
+### Order exploration
+
+The [independence contract](#composition-and-concurrency) is an obligation of
+the author, and the runtime does not check it. The
+[lifecycle notes](../../../packages/fp_di/doc/lifecycle.md#effects-that-overlap)
+tell an author to test a module in more than one completion order. The order
+exploration of [R-UC-RT-LC-033](requirements.md#r-uc-rt-lc-033) is that test.
+It is a search for a difference, not a proof of independence.
+
+**Control points.** The runtime overlaps work at two places only. The pump of
+`activateMembers` in [`runtime.dart`](../../../packages/fp_di/lib/src/runtime/runtime.dart)
+starts each member whose reads committed, and `releaseAlongReads` in
+[`runtime_teardown.dart`](../../../packages/fp_di/lib/src/runtime/runtime_teardown.dart)
+starts each node whose readers finished their release. A reconciliation
+activates and deactivates one node at a time, so it overlaps nothing. During
+an exploration, each pump starts a ready item only when no item is in flight,
+and it asks the exploration which ready item to start. The read order and the
+release order keep their rules, so a run is one linear extension of the read
+order at the start and of its reverse at the release.
+
+```mermaid
+sequenceDiagram
+  participant T as test
+  participant X as exploreOrders
+  participant R as runtime pump
+  T->>X: module, reset, observe, bound, seed
+  loop each order
+    X->>T: reset
+    X->>R: new root scope, scenario
+    R->>X: ready items a, b
+    X-->>R: start b
+    R->>R: b settles
+    R->>X: ready item a
+    X-->>R: start a
+    X->>T: observe
+  end
+  X-->>T: runs, complete, first difference
+```
+
+**Choices.** Each run is a sequence of choices among ready items. The
+exploration walks the tree of choices depth first while the number of runs is
+at most the bound, and it states a complete enumeration when the walk ends
+within the bound. Otherwise it draws each choice from a random generator with
+the given seed. An order is recorded as the labels of the nodes in the order
+of their start, separately for activations and releases.
+
+**Hook.** The pumps read the choice function from an internal holder, beside
+`RuntimeFaults` of [Self-checks and runtime cost](#self-checks-and-runtime-cost),
+and they read it only inside an `assert`. A build without assertions never
+sees an exploration, and `exploreOrders` fails with a `StateError` there. The
+default path MUST NOT gain an `await` or another step for the hook. One holder
+serves the isolate, so a second exploration during a run fails with a
+`StateError`. The check `ReleaseOverlap` of the random lifecycle histories does
+not apply during an exploration, because the exploration removes the overlap
+on purpose; the histories never run one.
+
+**Scenario.** Each run calls the reset callback, creates a root scope of the
+module, and runs the scenario on it. The default scenario is `initialize`, an
+observation, `dispose`, and an observation. A custom scenario receives the
+scope and a function that records an observation, so it can create a child
+scope or dispose one node. The work of child scopes runs on the same runtime,
+so the same pumps cover it. The exploration compares the lists of
+observations with `==` and reports the first two runs that differ.
+
+**Limits.** A run settles one item before it starts the next, so it shows a
+difference that depends on the order of whole activations or releases, such as
+a flush and a clear at logout. It does not show a difference that needs two
+callbacks to interleave at their `await` points. That mode is
+TBD(Q-RT-LC-001). Observations see only what the observe callback reads; state
+outside it stays unchecked.
+
 ## Formal Verification Boundary
 
 The [formal verification specification](../../verification/formal/spec.md) owns
@@ -2243,6 +2315,24 @@ conforms.
 - **Fixtures:** `kiri_check` generators over six named `DiKey<int>` keys and one set key: a `Dependency<int>` built from a chosen required and optional set by folding two-record `zip` steps, components with and without a key and effects, modules of up to six members with optional labels, sets of absent and ancestor keys, chains of one to eight steps with random dispose flags and a failing index, and affine functions for `map`. Value laws run each `Dependency` in a scope with value components that publish its keys.
 - **Pass:** each law holds for 200 generated cases of each pure law and 50 of each value law, and the file completes within the default timeout. The name of each test states its law. A failing case is shrunk and printed by `kiri_check`.
 - **Evidence:** present
+
+### <a id="v-t-rt-lc-039"></a>V-T-RT-LC-039 — `[test]` An exploration finds an order dependence
+
+- **Layer:** Unit, with assertions enabled
+- **Target:** `exploreOrders` and the pumps of [Order exploration](#order-exploration)
+- **Files:** `packages/fp_di/test/explore_orders_test.dart`
+- **Fixtures:** a shared log; a flushing member and a clearing member without a read path; the same module with a token key that the clearing member publishes and the flushing member reads; a scenario that throws
+- **Pass:** the first module gives a complete enumeration of four runs and a difference between opposite release orders; the token-key module gives one run and no difference; a repeated seed gives the same orders; the throwing scenario ends with its failure and order
+- **Evidence:** missing — not implemented; see G-RT-LC-014
+
+### <a id="v-t-rt-lc-040"></a>V-T-RT-LC-040 — `[test]` The explored orders
+
+- **Layer:** Unit, with assertions enabled; one run without assertions
+- **Target:** the choices and the hook of [Order exploration](#order-exploration)
+- **Files:** `packages/fp_di/test/explore_orders_test.dart`, the core suite, and `packages/fp_di/test/lifecycle_fuzz_test.dart`
+- **Fixtures:** three independent members, a diamond of four, a chain of three; a recording of starts and ends; a bound above and below each count
+- **Pass:** 36, 4, and 1 runs with complete enumeration; every order is a linear extension of the read order and its reverse; no start precedes the end of the previous item; a lower bound gives an incomplete enumeration of exactly the bound; a nested call and a call without assertions fail with `StateError`; the suites without an exploration pass
+- **Evidence:** missing — not implemented; see G-RT-LC-014
 
 ### <a id="v-t-rt-lc-027"></a>V-T-RT-LC-027 — `[test]` Key names
 
