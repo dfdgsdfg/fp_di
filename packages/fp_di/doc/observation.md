@@ -66,6 +66,39 @@ final repo = await ready;            // the repository, now active
 `whenActive` completes at once for an active node and fails with
 `InactiveNodeException` when the node is disposed first. A failed
 automatic activation does not complete it; `Scope.errors` reports the failure.
+
+## Waiting for a value
+
+`whenActive` needs a node, and a node exists only after its scope runs
+`initialize`. To wait for a key instead, call `Scope.getWhenAvailable`. It looks
+the key up as `get` does, from the scope to the root, and waits until it has a
+value:
+
+```dart
+final app = Scope(module: Module(components: [database]));
+final feature = app.child(module: Module(components: [repository]));
+await feature.initialize();
+
+// The app is not initialized yet, so no node publishes Database.
+final repo = feature.getWhenAvailable<UserRepository>();
+await app.initialize();
+print(await repo); // the repository, now active
+```
+
+The rules follow from what the runtime knows about the chain of scopes:
+
+| Situation | Result |
+|---|---|
+| `get` returns a value now | Completes at once with it |
+| A scope of the chain declares the key and is not initialized, runs `initialize`, or has a node of the key that waits, runs, or is inactive | Waits |
+| An activation failure is behind the key | Fails with the `UnavailableKeyException` of `get`, which holds the failed nodes |
+| No scope of the chain can publish the key any more: none declares it, its node was disposed, or its node is in `disposeFailed` | Fails with the `UnavailableKeyException` of `get` |
+| The disposal of the scope or of an ancestor is requested first | Fails with `DisposedScopeError` |
+
+A failed `initialize` does not fail the wait, because the scope can try
+again. A failed automatic activation does: the caller gets the cause instead
+of a wait that never ends, and can call again after a change. As for
+`whenActive`, do not await it inside an activation.
 `describe` lists the declared components of a scope that is not initialized, and
 each node of an initialized scope and its descendants with one state:
 

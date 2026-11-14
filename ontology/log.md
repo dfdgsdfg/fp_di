@@ -304,3 +304,10 @@ Current definitions live in YAML. Authoring guidance lives in [AGENTS.md](AGENTS
 - Decision: The dispose function concept no longer lists `inverse` and `inverses` in `avoid`. Prose still names the function of a `dispose` argument a dispose function.
 - Consequences: The READMEs and the specs can state the algebra of pairs with the word inverse. The scan no longer reports a use of inverse as a synonym of dispose function, so a review catches that use.
 - References: [lifecycle.yml](lifecycle.yml), [documentation_ontology.rules.md](../agents/rules/documentation_ontology.rules.md).
+
+## [2026-11-14] decision | Add the word available to the key concept
+
+- Context: `Scope.getWhenAvailable` completes with the value of a key once it has one. The key concept listed `unavailable` for `UnavailableKeyException`, and not `available`. An earlier entry of 2026-11-13 kept `available` out of the public identifiers, when it was the name of an argument of the module edits.
+- Decision: The key concept lists `available`. A key is available when `get` returns a value for it, and `getWhenAvailable` waits for that.
+- Consequences: `available` and `unavailable` name one condition and its negation. The edits of a module still take `ancestorKeys`, not `available`.
+- References: [lifecycle.yml](lifecycle.yml), [lifecycle log](../specs/runtime/lifecycle/log.md).

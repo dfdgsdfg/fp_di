@@ -57,7 +57,7 @@ nodes:
   dependency_key:
     kind: concept
     term: Dependency key
-    identifiers: [key, keys, name, needs, type, unavailable, undeclared, unreachable, duplicate, duplicates, missing]
+    identifiers: [key, keys, name, needs, type, available, unavailable, undeclared, unreachable, duplicate, duplicates, missing]
     definition: >-
       The address of a binding: a Dart type with an optional qualifier. Shapes are sets of keys. A component
       label is not a key.

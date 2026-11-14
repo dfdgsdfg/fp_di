@@ -419,6 +419,79 @@ final class Scope {
     throw ArgumentError.value(key, 'key', 'no member publishes it');
   }
 
+  /// Completes with the value of [key] once it has one.
+  ///
+  /// It completes at once when [get] returns a value, and otherwise when a
+  /// node of this scope or of an ancestor commits [key]. Without [key], the
+  /// key is `DiKey<T>()`, as for [get].
+  ///
+  /// It waits while a scope of the chain can still publish [key]: a scope
+  /// that declares it and is not initialized yet, such as a parent that a
+  /// child initializes before, or a scope whose node of [key] waits, runs,
+  /// or is inactive.
+  ///
+  /// It fails with the [UnavailableKeyException] that [get] would throw when
+  /// an activation failure is behind [key]; the exception then holds the
+  /// failed nodes. It fails the same way when no scope of the chain can
+  /// publish [key] any more: no scope declares it, its node was disposed,
+  /// or its node is in [NodePhase.disposeFailed]. It fails with a
+  /// [DisposedScopeError] when the disposal of this scope or of an ancestor
+  /// is requested before [key] has a value.
+  ///
+  /// The call starts no mutation and changes no state. Do not await it
+  /// inside an activation: the value arrives in a mutation, so the wait can
+  /// last forever.
+  Future<T> getWhenAvailable<T>({DiKey<T>? key}) {
+    final actual = key ?? DiKey<T>();
+    final completer = Completer<T>();
+    bool settle() {
+      final publisher = _scope.disposing || _scope.disposed
+          ? null
+          : _scope.resolve(actual);
+      if (publisher != null) {
+        completer.complete(publisher.value as T);
+        return true;
+      }
+      if (_scope.disposalRequested) {
+        completer.completeError(DisposedScopeError(), StackTrace.current);
+        return true;
+      }
+      final unavailable = _runtime.unavailable(_scope, actual);
+      if (unavailable.failedNodeStates.isNotEmpty || !_canPublish(actual)) {
+        completer.completeError(unavailable, StackTrace.current);
+        return true;
+      }
+      return false;
+    }
+
+    if (settle()) return completer.future;
+    late final void Function() listener;
+    listener = () {
+      if (completer.isCompleted || settle()) {
+        _runtime.changes.remove(_scope, listener);
+      }
+    };
+    _runtime.changes.add(_scope, listener);
+    return completer.future;
+  }
+
+  /// Whether a scope from this scope to the root can still publish [key].
+  ///
+  /// A scope can when it declares [key], its disposal is not requested, and
+  /// it has no nodes yet, runs [initialize], or has a node of [key] that is
+  /// not disposed and not in [NodePhase.disposeFailed].
+  bool _canPublish(DiKeyBase key) {
+    for (_RuntimeScope? s = _scope; s != null; s = s.parent) {
+      if (s.disposalRequested || !s.declared.publishes.contains(key)) continue;
+      if (s.initializing || s.nodes.isEmpty) return true;
+      final node = _runtime.nodeOf(s, key);
+      if (node != null && _runtime.phaseOf(node) != NodePhase.disposeFailed) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// The node that publishes [key] for this scope, or null when this scope
   /// and its ancestors have no such node.
   ///

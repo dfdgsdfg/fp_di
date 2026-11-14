@@ -243,11 +243,12 @@ for the check that `initialize` runs first. A lookup with `scope.get` is left
 only at the edges of the app: the entry point that starts it, a widget that
 reads with `context.di<T>()`, and a test that checks a value.
 
-The table maps every get_it lookup, for the places that still need one. Most
-apps need only the first two rows. The others answer questions that the
-runtime already answers: `initialize` rejects a key that nothing publishes,
-so you do not ask whether a type is registered, and a component waits for its
-keys, so you do not ask whether a service is ready.
+The table maps every get_it lookup, for the places that still need one. The
+rows marked rarely needed answer questions that the runtime already answers:
+`initialize` rejects a key that nothing publishes, so you do not ask whether a
+type is registered, and a component waits for its keys, so you do not ask
+whether a service is ready. At an edge that must wait for a value, such as
+bootstrap code, `getWhenAvailable` does it in one call.
 
 | get_it | `fp_di` |
 |---|---|
@@ -255,7 +256,7 @@ keys, so you do not ask whether a service is ready.
 | `getIt<T>(instanceName: 'n')` | `scope.get<T>(key: const DiKey<T>(name: 'n'))` |
 | `getIt.isRegistered<T>()` | Rarely needed. `module.publishes.contains(const DiKey<T>())`, or `scope.findNode<T>() != null` after `initialize` |
 | `getIt.isReadySync<T>()` | Rarely needed. `scope.findNode<T>()?.state.phase == NodePhase.active` |
-| `await getIt.isReady<T>()` | Rarely needed. `await scope.node(key: const DiKey<T>()).whenActive`, after `initialize` |
+| `await getIt.isReady<T>()`, `await getIt.getAsync<T>()` | `await scope.getWhenAvailable<T>()`: completes once the key has a value, from any scope of the chain, and fails with the cause when an activation fails behind it |
 | A lookup inside a factory | Not a lookup: a read in the `Dependency`, such as `Dependency1<A, T>` or `Dependency.require<A>()` |
 
 Read inside the `Dependency`, never with `scope.get` inside `create`. A read in

@@ -210,6 +210,15 @@ await node?.whenActive;   // completes when the node activates
 print(app.describe());   // one line for each node, with its state
 ```
 
+To wait for a value without knowing which scope publishes it or when that
+scope initializes, use `getWhenAvailable`:
+
+```dart
+// Completes once the key has a value, also from a parent that is not
+// initialized yet. Fails with the cause when an activation fails behind it.
+final repo = await session.getWhenAvailable<UserRepository>();
+```
+
 `get` throws an `UnavailableKeyException` that names the failed activations
 behind the key, so an error view needs no listener.
 
