@@ -347,3 +347,11 @@ structure is described in the spec; documenting it does not invent a historical 
 - Supersedes: [Release the three packages as 0.1.0 without a changelog](#2026-11-14-decision--release-the-three-packages-as-010-without-a-changelog)
 - Alternatives: Publishing without a repository leaves the links of the READMEs without a target.
 - References: [LICENSE](../../LICENSE), [fp_di pubspec](../../packages/fp_di/pubspec.yaml), [fp_di_flutter pubspec](../../packages/fp_di_flutter/pubspec.yaml).
+
+## [2026-11-14] decision | Set the lower bounds to Dart 3.10 and Flutter 3.38.1
+
+- Context: The packages stated `sdk: ^3.9.0` and `flutter: '>=3.32.0'`, and the tests ran only on Dart 3.13 and Flutter 3.47. Flutter 3.32 ships Dart 3.8, so the Flutter bound could not hold. On Dart 3.9, the runtime tests passed, but the dev dependency `kiri_check` 1.4.0 needs `timezone` 0.11, which needs Dart 3.10, so the defect controls of the random histories could not run at that bound.
+- Decision: The SDK lower bound is `^3.10.0` for each package and the workspace, and `fp_di_flutter` needs Flutter 3.38.1 or later. Flutter 3.38.0 ships a beta of Dart 3.10, which `^3.10.0` does not accept.
+- Consequences: The whole test suite runs at the lower bound: on Flutter 3.38.1 with Dart 3.10.0, the 466 core tests, the defect controls among them, and the 42 Flutter tests pass. A host on Flutter 3.35 cannot use the packages. The workspace root keeps `analyzer ^12.1.0` for its scripts, which does not resolve on Flutter 3.38, so a lower-bound check copies the two packages out of the workspace.
+- Alternatives: Dart 3.9 and Flutter 3.35 reach more hosts, and the runtime passed its tests there, but the bound would rest on a suite without its defect controls.
+- References: [fp_di pubspec](../../packages/fp_di/pubspec.yaml), [fp_di_flutter pubspec](../../packages/fp_di_flutter/pubspec.yaml).
