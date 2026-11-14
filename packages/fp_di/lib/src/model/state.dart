@@ -7,7 +7,7 @@ import 'key.dart';
 /// `DisposedScopeError` in [disposing] and [disposed]. `Scope.isDisposed` is
 /// true in the last three phases.
 ///
-/// {@category Observation}
+/// {@category Lifecycle}
 enum ScopePhase {
   /// The scope has a module and no node. An `initialize` call can run.
   declared,
@@ -34,7 +34,7 @@ enum ScopePhase {
 /// The place of a node in its machine. `Scope.describe` names the same
 /// phases.
 ///
-/// {@category Observation}
+/// {@category Lifecycle}
 enum NodePhase {
   /// A required key does not resolve. [NodeState.missing] lists the keys.
   waiting,

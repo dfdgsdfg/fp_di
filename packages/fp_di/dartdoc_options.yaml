@@ -7,22 +7,20 @@ dartdoc:
     - Dependency
     - Declaration
     - Keys
-    - Instance
+    - Lifecycle
     - Observation
     - Errors
-    - Exceptions
   categories:
     Dependency:
-      markdown: doc/topics/dependency.md
+      markdown: doc/dependency.md
     Declaration:
-      markdown: doc/topics/declaration.md
+      markdown: doc/declaration.md
     Keys:
-      markdown: doc/topics/keys.md
-    Instance:
+      markdown: doc/keys.md
+    Lifecycle:
       markdown: doc/lifecycle.md
     Observation:
-      markdown: doc/topics/observation.md
+      markdown: doc/observation.md
     Errors:
-      markdown: doc/topics/errors.md
-    Exceptions:
-      markdown: doc/topics/exceptions.md
+      displayName: Errors and exceptions
+      markdown: doc/errors.md

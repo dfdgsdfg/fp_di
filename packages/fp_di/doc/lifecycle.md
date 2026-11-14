@@ -1,8 +1,212 @@
-# Lifecycle semantics
-
 A node is the runtime form of one declared component. It has one owner scope, a
 derived shape, a result value, staged publishers, a LIFO stack of dispose
 functions, and publisher-identity dependency edges.
+
+This page starts with two pictures: the states that a node moves through, and
+the states of the scope that owns it. The sections after them explain each
+rule in detail. GitHub draws the diagrams; the API reference shows their
+source.
+
+## The life of a node
+
+A component is a description. When `initialize` runs, the scope turns each
+component into a node, and the node then lives through the states below. You
+can read the current state at any time as `node.state.phase`, a `NodePhase`,
+or follow it in Flutter with `context.watchMaybeDiNode`.
+
+```mermaid
+stateDiagram-v2
+  [*] --> waiting: created, a required key is missing
+  [*] --> activating: created, every required key resolves
+  waiting --> activating: every required key resolves
+  inactive --> activating: the runtime starts it again
+  activating --> active: the activation commits
+  activating --> activationFailed: an automatic activation throws
+  activating --> waiting: a withdrawal cancels the activation
+  activating --> disposed: initialize fails and rolls the scope back
+  activationFailed --> activating: a later change tries again
+  active --> deactivating: a key that it read changes or goes away
+  active --> deactivating: its node or its scope is disposed
+  deactivating --> waiting: the release ends and a required key is missing
+  deactivating --> inactive: the release ends and its keys still resolve
+  deactivating --> disposeFailed: one of its dispose functions throws
+  deactivating --> disposed: the release of a disposal ends
+  waiting --> disposed: disposed
+  inactive --> disposed: disposed
+  activationFailed --> disposed: disposed
+  disposeFailed --> disposed: disposed
+  disposed --> [*]
+```
+
+Read the diagram as the answer to three questions.
+
+**Why is my value not there yet?** A node in `waiting` lacks a required key.
+`node.missing` lists those keys. Nothing has run: the `create` of its
+`Dependency` runs only once every required key resolves, so a waiting node
+holds no half-built value. When a publisher of the last missing key appears,
+the node moves to `activating` without any call from you.
+
+**What happens while it builds?** In `activating`, the steps of the
+`Dependency` run one after another. The value becomes visible only when the
+whole activation commits and the node is `active`. If a step throws, the
+steps that already finished are released in reverse order, and nothing is
+published. During `initialize`, that failure rolls the whole scope back. After
+`initialize`, the node lands in `activationFailed`, `Scope.errors` reports the
+error, and `node.activationException` keeps it. A later change, such as a new
+publisher of one of its keys, tries again.
+
+**What happens when something it read goes away?** An `active` node moves to
+`deactivating` when a key that it read changes or disappears, and when it is
+disposed. Its readers release first, so each release runs while the values
+that it read are still alive. After its own release, the node waits again for
+its keys, or starts again at once with the new publisher. If one of its own
+dispose functions throws, the node stops in `disposeFailed`, and the runtime
+does not activate it again. Dispose its scope and declare the component in a
+new scope.
+
+`disposed` is the end. A disposed node answers no read: `value` throws, and
+`whenActive` fails with `InactiveNodeException`.
+
+| `NodePhase` | What it means | What you can read |
+|---|---|---|
+| `waiting` | A required key does not resolve | `missing` lists the keys |
+| `inactive` | Not active, and not waiting for a key; for example, after a withdrawal canceled its activation, or between a release and the next activation | `whenActive` completes at the next commit |
+| `activating` | The steps of its `Dependency` run | `whenActive` completes when it commits |
+| `active` | The activation committed | `value` returns the value |
+| `deactivating` | Its release runs | No value; its readers release first |
+| `activationFailed` | The last automatic activation threw | `activationException` holds the error |
+| `disposeFailed` | One of its dispose functions threw | The runtime does not start it again |
+| `disposed` | The node is gone | `value` throws `InactiveNodeException` |
+
+## The life of a scope
+
+A scope has states of its own. It takes its module when it is created and
+creates nothing until `initialize`. A disposal starts the moment that you call
+`dispose`: from then on the scope accepts no new `initialize`, even before the
+disposal itself runs.
+
+```mermaid
+stateDiagram-v2
+  [*] --> declared: Scope() or child()
+  declared --> initializing: initialize starts and creates the nodes
+  initializing --> initialized: every member settled
+  initializing --> declared: a member failed, and the rollback ended
+  declared --> disposeRequested: dispose is called
+  initializing --> disposeRequested: dispose is called
+  initialized --> disposeRequested: dispose is called
+  disposeRequested --> disposing: the disposal starts
+  disposing --> disposed: every node of the scope is disposed
+  disposed --> [*]
+```
+
+| `ScopePhase` | What it means | Lookups |
+|---|---|---|
+| `declared` | The scope holds its module and no node. `initialize` may run, also again after a failed one. | Answer, from the ancestors |
+| `initializing` | `initialize` runs and the nodes exist | Answer |
+| `initialized` | `initialize` completed | Answer |
+| `disposeRequested` | `dispose` was called for this scope or an ancestor. Activations in flight are canceled. | Answer; `isDisposed` is true |
+| `disposing` | The nodes release, readers before publishers | Throw `DisposedScopeError` |
+| `disposed` | The disposal ended | Throw `DisposedScopeError` |
+
+A failed `initialize` returns the scope to `declared`, so a retry is a plain
+second call. When `dispose` is called while `initialize` runs, the scope goes
+to `disposeRequested` and stays there: the running `initialize` ends, and the
+disposal follows. `Scope.state` returns the phase of the scope together with
+the state of each node, and `Scope.addListener` calls a function at each
+transition, so a debugger or a UI can compare two values.
+
+## The order of a scope
+
+Both diagrams follow from one relation between members. Write `a ⇢ b` when
+`b` reads a key that `a` provides: the key that `a` publishes, the set key
+that `a` contributes to, or the map key of an entry that `a` publishes.
+
+```text
+a ⇢ b   ⇔   provides(a) ∩ reads(b) ≠ ∅
+
+initialize:  b starts after each a with a ⇢ b has settled
+dispose:     a releases after each b that read a value of a
+             members without a path of ⇢ between them run at the same time
+rollback:    when the steps e₁ … e_k of an activation completed,
+             the release runs e_k⁻¹ … e₁⁻¹
+```
+
+The runtime computes `⇢` from the shapes before it creates anything. That is
+why the list order of a module never matters, why independent members start
+together, and why a release always runs while the values that it read are
+alive. `e⁻¹` is the dispose function of a step that has one.
+
+## Initialize and dispose
+
+Each member stays its own node. A member that waits for a key does not block
+its siblings, and each member reactivates on its own. Members can depend on
+keys that a later member publishes.
+
+`initialize()` activates members by dependency. A member starts when every
+member that publishes a key it reads has settled, and a member
+with no such dependency starts at once. Independent members therefore activate
+at the same time, so a scope of slow members takes as long as its slowest
+chain and not the sum. A member publishes its bindings as soon as its own
+activation succeeds, and a dependent never starts before its publishers have.
+The commit order of independent members follows completion order and is not
+deterministic.
+
+`dispose()` releases along the same reads in reverse: a member releases after
+every member that read its value has finished, and members that do not read
+each other release at the same time. The dispose functions of one member run
+last first, and a `DisposeException` lists dispose failures in reverse declaration
+order. Two members that share an external resource without a key between
+them, such as one file that one flushes and the other closes, need a token key
+so that their releases keep an order.
+
+```dart
+// Both probes run at the same time; `sync` starts when both are ready.
+final app = Scope(module: Module(components: [connectivity, database, sync]));
+await app.initialize();
+```
+
+A child can initialize before its parent. Its nodes wait, and they activate
+when the parent initializes and publishes their keys. A scope that initializes
+later between a node and its publisher shadows that publisher, so the node
+rebinds. These are the only ways that a key appears for an existing node.
+
+Dormancy is not failure. If the activation of any member throws, `initialize()`
+is atomic, whatever the declaration order. No further member starts, and the
+runtime waits for the members still in flight; a failure does not cancel
+another member, because each member is its own failure region. Then
+every node that the call created is deactivated and disposed in reverse
+declaration order, and the error of the first failed member in declaration order
+is rethrown. The scope stays uninitialized, and a later `initialize()` may
+retry. Rollback dispose failures are attached to an `ActivationException`. A
+node of a descendant scope that wakes because of the new bindings keeps the
+usual rule: its failure is reported through `Scope.errors` and `initialize()`
+succeeds. Of two members that publish the same key, the later one fails with
+`DuplicateKeyError`. A second `initialize()` throws a `StateError`.
+
+The atomicity covers failure, not visibility. Each member's bindings become
+visible when that member commits, so other code can see some members before
+`initialize()` returns. Publish a record under one key when several values
+must become visible together.
+
+`node(key: ...)` returns the node of the member that publishes the key,
+typed as the key, so the code does not depend on the declaration order:
+`value`, `isActive`, `whenActive`, `missing`, and `dispose()`. `nodes` lists
+every node in declaration order, for an effect, which publishes no key.
+Disposing one member withdraws its bindings, deactivates its dependents
+first, and leaves the other members in the runtime. `dispose()` of the scope then
+skips the members that are already disposed.
+
+```dart
+final database = app.node(key: DiKey<Database>());
+await database.dispose();   // its dependents go dormant
+```
+
+The runtime runs one reconciliation at the end of `initialize`, which repeats
+its passes until the targets settle. A member that first activates during that
+closing reconciliation fails the call in the same way as a member that fails
+earlier. The
+[lifecycle spec](https://github.com/dfdgsdfg/fp_di/blob/main/specs/runtime/lifecycle/spec.md#scope-declaration-and-initialization)
+owns the contract.
 
 ## Shape and eligibility
 
@@ -75,48 +279,6 @@ A component runs its steps one after another. Independent work overlaps only
 across the members of a scope. Separate `initialize` calls are activated one
 at a time. Per-node inertia, which would let unrelated nodes transition
 concurrently, is not implemented.
-
-## Scopes and modules
-
-A scope declares a `Module` when it is created, with `Scope(module: module)`
-or `child(module: module)`, and `initialize()` creates the members as
-independent nodes in one mutation. The contents are fixed: nothing is added to
-an initialized scope. The runtime creates every member in declaration order,
-then activates the members by dependency: a member starts when each member that
-publishes a key it reads has settled. Independent members activate
-at the same time, and a member is visible when its own activation succeeds, so
-commit order between independent members is not deterministic. The call is
-atomic for failure, not for visibility. The keys are the only order: a member
-that needs the effect of another requires a token key that the other
-publishes. The runtime runs one reconciliation at the end, which repeats its
-passes until the targets settle. Dormancy is not
-failure.
-
-If any member's activation throws, the runtime starts no further member and
-waits for the members in flight to settle. It then deactivates and disposes
-every node that the call created, in reverse declaration order, and rethrows
-the first failure in declaration order; the scope stays uninitialized and can
-retry. A member that first activates during the closing reconciliation fails
-the call in the same way. Dispose failures from that rollback are attached to an
-`ActivationException`. `Scope.nodes` lists one node for each member, and
-`Scope.node(key:)` finds one by key. A member node disposes its member
-alone. `Scope.dispose` skips members that
-are already disposed and deactivates the others and the descendant scopes
-inside one mutation. A node releases after every node that read one of its
-values has finished; nodes that do not read each other release at the same
-time. It then runs one reconciliation and aggregates dispose failures in a
-`DisposeException`, in reverse creation order. A child can initialize before
-its parent; its nodes then wait for the keys the parent publishes. The
-[lifecycle spec](../../../specs/runtime/lifecycle/spec.md#scope-declaration-and-initialization)
-owns the contract.
-
-## Generator boundary
-
-The shape a generator needs — `requires`, `optional`, `key`, a stable name — is
-now carried by every component and derived wherever possible. A generator can
-therefore validate complete graphs and emit typed accessors without changing
-activation, ownership, or teardown behaviour. The runtime remains usable when
-no generated metadata is present.
 
 ## Reactive lifecycle
 

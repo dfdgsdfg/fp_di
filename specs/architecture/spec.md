@@ -201,15 +201,15 @@ layer reads the other layers and changes none of them. `ShapeGraph` reads
 declarations, and the other members read the runtime. The lifecycle spec
 states their contract under [Observation](../runtime/lifecycle/spec.md#observation).
 
-The API reference of `fp_di` groups the public types by these layers. Each
-public type names its category in its doc comment, and
+The API reference of `fp_di` groups the public types in six categories:
+Dependency, Declaration, Keys, Lifecycle, Observation, and Errors and
+exceptions. Each public type names its category in its doc comment, and
 [`dartdoc_options.yaml`](../../packages/fp_di/dartdoc_options.yaml) orders the
-categories: Dependency, Declaration, Keys, Instance, Observation, Errors, and
-Exceptions. Each category has a page under `packages/fp_di/doc/topics/`, and
-the category Instance shows `packages/fp_di/doc/lifecycle.md`. The keys, the
-errors, and the exceptions cross the layers, so each has a category of its
-own. The lint `public_member_api_docs` requires a doc comment on each public
-member of each package.
+categories and gives each one a guide page under `packages/fp_di/doc/`. The
+category Lifecycle holds the instance layer and the phases `NodePhase` and
+`ScopePhase`, and it explains the states of a node and of a scope. The keys and the two kinds of failure cross the layers, so
+each has a category of its own. The lint `public_member_api_docs` requires a
+doc comment on each public member of each package.
 
 A public method MUST chain only for an algebraic step. Every constructor and
 configuration value, including the published key, MUST be a named argument.

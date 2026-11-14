@@ -15,123 +15,60 @@ Each step can own its value through `dispose`. A failed activation runs the
 `CancellationToken` of its activation with `Dependency.cancellation()` to stop
 early, and a `Lazy` creates its value at the first `force`.
 
-## Two steps
+## Pairs and shapes
 
-A component description follows two steps:
+A `Dependency` is a pair of functions. `create` makes a value from the keys
+that it reads, and `dispose` releases that value. A step without `dispose` has
+a `dispose` that does nothing. Write a step as `(c, d)`.
 
-1. **Create the value.** A `Dependency` states the keys that the value needs
-   and how it is created from them, with an optional `dispose`. The number of
-   inputs picks the form:
+Steps combine like functions and their inverses: the `create` functions run
+forward, and the `dispose` functions run backward. `map` puts a step after a
+`Dependency`, and `zip` runs two of them side by side:
 
-   | Inputs | Form |
-   |---|---|
-   | none | `Dependency<R>(create: () => ..., dispose: ...)` |
-   | one to eight keys | `Dependency1<A, R>` to `Dependency8<A, ..., H, R>(create: (a, ...) => ..., dispose: ...)` |
-   | several steps, optional reads, lazy | a chain: `Dependency.require<A>().map(...)`, `.lazy()` |
+```text
+sequence:  (c₂, d₂) · (c₁, d₁)  =  (c₂ ∘ c₁ ,  d₁ ∘ d₂)         dep.map(c₂, dispose: d₂)
+product:   (c₁, d₁) ⊗ (c₂, d₂)  =  (c₁ then c₂ ,  d₂ then d₁)    (dep1, dep2).zip
+unit:      (id, no-op)                                          dep.map((x) => x)
 
-2. **Make a component.** `Component<T>(dependency: ...)` states the type that
-   it provides, like `Provider<T>`, and publishes `DiKey<T>()`. Pass `key` for
-   a named key. Diagnostics label it by its key; pass `debugLabel` only to tell
-   apart components that the key does not, or an effect.
-
-```dart
-Component<Database>(                                      // 2. what it publishes
-  dependency: Dependency1<Config, Database>(                  // 1. create the value
-    create: (config) => PgDatabase(config.url),
-    dispose: (db) => db.close(),
-  ),
-);
+failure:   c₁ … c_{j-1} completed and c_j throws
+           ⇒  d_{j-1} ∘ … ∘ d₁ runs, and nothing is published
 ```
 
-The type argument states what the component publishes, so an implementation
-such as `PgDatabase` is published under the port `Database`. A `key`
-replaces the default `DiKey<T>()`, and Dart checks it against the type
-argument; a key of an unrelated type, which widens the inferred type to
-`Object`, throws an `ArgumentError` where the component is built.
+So a chain of steps behaves as one pair, however you group it. A component
+built from a long chain releases in exactly the reverse order of its
+creation, and a failure halfway releases exactly what was created.
 
-**Always write the type argument.** Without it, Dart infers the type of the
-implementation: `Component(dependency: Dependency(create: PgDatabase.new))`
-publishes `DiKey<PgDatabase>()`. A required read of `Database` then fails at
-`initialize` only when no scope declares `Database`; when an ancestor
-publishes `Database`, the child silently reads the ancestor value. A reader of
-`Component<T>(...)` also sees what a component publishes before how it is
-built, as with `Provider<T>`. The examples also write the type arguments of
-every `Dependency` and `DependencyN`. Dart infers some of them, but one rule
-keeps the reads and the type argument visible.
+Every `Dependency` also has a **shape**: `requires(d)`, the keys that must
+resolve before it runs, and `optional(d)`, the keys that it reads and that may
+be absent. You never write the shape; each combinator computes it from its
+parts:
 
-A member whose value no other member reads is an effect:
-`Component.effect(dependency: ...)` publishes nothing, and still waits for its
-keys, reacts to them, and disposes what it owns. `Component<void>` throws an
-`ArgumentError` that points to `Component.effect`; so do `dynamic` and
-`Null`. A member that must wait for an effect reads a token type that a
-component publishes, as a token key (Scopes and modules in the Declaration topic) orders two members.
+```text
+requires(Dependency(create, dispose))   = ∅
+requires(Dependency.require<A>())       = {A}
+optional(Dependency.maybe<A>())         = {A}
+requires(DependencyN<A1, …, An, R>(…))  = {A1, …, An}
 
-`create` runs on each activation, never when the component is built. A
-`Dependency` that reads no key makes a component that never waits. One that
-reads keys makes a component that waits until they resolve and activates again
-when their publishers change. An effect publishes nothing. A
-`Module` is the list of components that a scope declares, and a node is a
-component that the scope created in `initialize()`.
-
-The `Dependency` type describes all the reads of one component. It is not one
-key: a `DiKeyBase` is one key that a component reads.
-
-## Primitives
-
-```dart
-// No input: create runs on each activation; dispose is optional.
-Dependency<A>       Dependency<A>({required FutureOr<A> Function() create,
-    FutureOr<void> Function(A value)? dispose});
-
-// The common case: read N keys and create the value, like ProxyProvider2.
-Dependency2<A, B, R> Dependency2({DiKey<A>? key1, DiKey<B>? key2,
-    required FutureOr<R> Function(A, B) create, FutureOr<void> Function(R)? dispose});
-// ... Dependency1<A, R> to Dependency8<A, ..., H, R>; each is a Dependency<R>.
-
-// A Dependency chain: reads keys, never publishes.
-Dependency<T>       Dependency.require<T>({DiKey<T>? key});     // adds to requires
-Dependency<T?>      Dependency.maybe<T>({DiKey<T>? key});       // adds to optional
-Dependency<(A, B)>  Dependency.require2<A, B>({DiKey<A>? key1, DiKey<B>? key2});
-Dependency<Set<T>>  Dependency.requireSet<T>({required DiSetKey<T> key});  // every contribution; maybeSet: the active ones
-Dependency<Map<String, T>> Dependency.requireMap<T>({required DiMapKey<T> key}); // every id; maybeMap
-// ... up to Dependency.require8; there is no require1 (use Dependency.require)
-Dependency<B>       map<B>(FutureOr<B> Function(A) create,
-    {FutureOr<void> Function(B)? dispose});                 // a next step, owned if dispose
-Dependency<Lazy<A>> lazy();                                 // create on first force()
-// On Dependency<(A, B)> .. Dependency<(A, ..., H)>:
-Dependency<R>       mapN<R>(FutureOr<R> Function(A, B) create, {FutureOr<void> Function(R)? dispose});
-// On a record of 2 .. 8 Dependency values:
-Dependency<(A, B)>  get zip;                                // (d1, d2).zip
-
-// A component: a Dependency plus its published key, DiKey<A>() by default.
-Component<A>        Component<A>({required Dependency<A> dependency, DiKey<A>? key, String? debugLabel});
-Component<A>        Component<A>.value({required A value, DiKey<A>? key, String? debugLabel}); // existing value
-Component<A>        Component<A>.effect({required Dependency<A> dependency, String? debugLabel}); // publishes nothing
-Component<A>        Component<A>.into({required DiSetKey<A> key, required Dependency<A> dependency}); // a set contribution
-// The key type must equal A. A must not be void, dynamic, or Null: use Component.effect.
-// A DiKey of bool, int, String, ... (core value types) needs a name, in the key
-// and in every read: DiKey<PoolSize>(name: 'PoolSize') (see the Keys topic).
-// ComponentBase: the element type of a list of components of any type.
-
-// Scopes (see the Declaration topic):
-final class Module { Module({required Iterable<ComponentBase> components, String? debugLabel});
-    Module.all({required Iterable<Module> modules, String? debugLabel});
-    Module operator +(Module other);
-    List<String?> get origins;                  // the label of the module that listed each member
-    Module replacing({required DiKeyBase key, required ComponentBase component});   // a new module
-    Module without({required DiKeyBase key});  Module where(bool Function(ComponentBase) test);
-    Module overriddenBy(Module overrides);                  // each fake replaces the member of its key
-    Module requiring({required Iterable<DiKeyBase> keys, Iterable<DiKeyBase> ancestorKeys});   // the members that require an absent key
-    Module withoutRequiring({required Iterable<DiKeyBase> keys, Iterable<DiKeyBase> ancestorKeys});  // the module without them
-    Set<DiKeyBase> publishes, requires, reads;                     // derived shape
-    Map<DiSetKey<Object?>, int> contributes; }                         // set contributions per key
-Scope             Scope({Module? module});              // a root, declared
-Scope             child({Module? module});                // a child, declared
-Future<Scope>     initialize();                           // creates them; completes with the scope
-ComponentNode<T> node<T>({required DiKey<T> key});       // the node of the member that publishes key
-List<ComponentNode<Object?>> get nodes;                   // every node, declaration order
-Future<void>        dispose();                              // disposes the scope and its children
+shape(d.map(f, dispose)) = shape(d.lazy()) = shape(d)
+requires((d1, …, dn).zip) = requires(d1) ∪ … ∪ requires(dn)
+optional((d1, …, dn).zip) = optional(d1) ∪ … ∪ optional(dn)
 ```
+
+A step adds no key, and a combination reads what its parts read. That is why
+a scope knows, before anything runs, which keys a component waits for.
+
+Two laws about values hold for the published value of an activation that no
+cancellation interrupts:
+
+```text
+d.map((x) => x)        ≡  d
+d.map(f).map(g)        ≡  d.map((x) => g(f(x)))
+((a, b).zip, c).zip    ≡  (a, (b, c).zip).zip        as ((x, y), z) and (x, (y, z))
+```
+
+The condition matters: each `map` step is a cancellation checkpoint, so
+`d.map((x) => x)` can stop where `d` would have finished. The property tests
+in [`laws_test.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/test/laws_test.dart) check these laws with generated values.
 
 ## Values without inputs
 

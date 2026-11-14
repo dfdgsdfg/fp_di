@@ -286,7 +286,7 @@ ComponentNode<A> createComponentNode<A>({
 /// component declared in two scopes has two nodes. Get a node from
 /// `Scope.node`, `Scope.nodes`, or `Scope.findNode`.
 ///
-/// {@category Instance}
+/// {@category Lifecycle}
 final class ComponentNode<A> {
   ComponentNode._({
     required Future<void> Function() dispose,

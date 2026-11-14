@@ -5,12 +5,37 @@ mutation and changes no state.
   `ScopePhase`, one `NodeState` for each node, and the states of the child
   scopes. `Scope.addListener` calls a function at each transition.
 - A `NodeState` holds the `NodePhase` of a node, its missing keys, and the
-  failure of its last activation.
+  failure of its last activation. The Lifecycle topic draws the phases of a
+  node and of a scope.
 - A `SlowMutationListener` receives a `SlowMutation` when a mutation runs
   longer than the `slowMutationThreshold` of the root scope.
 - `ShapeGraph`, from `package:fp_di/tooling.dart`, reads the shape of a
   module without a runtime: the waits between members, the cycles, and the
   keys that `initialize` would reject.
+
+## The graph of a module
+
+`ShapeGraph` turns the shapes of a module into a graph without running
+anything. Its edges are one relation: write `a ⇢ b` when member `b` reads a key
+that member `a` provides, that is, the key that `a` publishes, the set key
+that `a` contributes to, or the map key of an entry that `a` publishes.
+
+```text
+a ⇢ b   ⇔   provides(a) ∩ reads(b) ≠ ∅
+
+depth(b) = 1                                  when no a ⇢ b
+depth(b) = 1 + max { depth(a) : a ⇢ b }       otherwise
+
+undeclared = requires(m) \ ⋃ publishes(ancestor modules)
+duplicates = { k : two members publish k }
+```
+
+Each edge carries the kind of the read: `require`, `optional`, `collection`,
+or `optionalCollection`. Members of one depth can activate at the same time.
+`longestChain` is one longest chain of members, and its length is the number
+of activations that `initialize` runs one after another. Members of one cycle share a depth, and `cycles` lists them.
+`undeclared` and `duplicates` are what `initialize` would reject, all at
+once, before a scope exists.
 
 ## Observing a scope
 

@@ -404,10 +404,12 @@ what is adopted, what is adapted, and what is left out.
 
 ## Learn more
 
-- The API reference groups the types in seven topics: Dependency, Declaration,
-  Keys, Instance, Observation, Errors, and Exceptions. Each topic page explains
-  its part in detail; the pages are in [`doc/topics`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/doc/topics) and
-  [`doc/lifecycle.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/lifecycle.md).
+- The API reference groups the types in six topics: Dependency, Declaration,
+  Keys, Lifecycle, Observation, and Errors and exceptions. Each topic page explains
+  its part in detail; the pages are in
+  [`doc/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/doc), and
+  [`doc/lifecycle.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/lifecycle.md)
+  draws the states of a node and of a scope.
 - Each file in [`example/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/example) runs with `dart run`:
 
   | Example | Shows |

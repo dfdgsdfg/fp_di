@@ -6,7 +6,7 @@ import 'state.dart';
 /// Following Dart, a `DiException` is an [Exception]. `Scope.errors`
 /// reports the exceptions that no caller receives.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 sealed class DiException implements Exception {
   const DiException(this.message);
 
@@ -24,7 +24,7 @@ sealed class DiException implements Exception {
 /// holds the activation failures behind the key. A read inside an
 /// activation throws it with the key only.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class UnavailableKeyException extends DiException {
   /// Creates the exception for [key]. [message] replaces the default message,
   /// and [failedNodeStates] lists the failed nodes behind [key].
@@ -53,7 +53,7 @@ final class UnavailableKeyException extends DiException {
 
 /// A single dispose function that failed.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class DisposeFailure {
   /// Creates the record of a failed dispose function.
   const DisposeFailure(this.owner, this.error, this.stackTrace);
@@ -75,7 +75,7 @@ final class DisposeFailure {
 /// The activation of a node failed. The runtime rolled back the steps that
 /// completed, and [rollbackFailures] lists the dispose functions that failed.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class ActivationException extends DiException {
   /// Creates the exception of an activation that threw [cause].
   ActivationException(
@@ -104,7 +104,7 @@ final class ActivationException extends DiException {
 /// that failed during the rollback; report them even when the cancellation
 /// itself is expected.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class ActivationCanceledException extends DiException {
   /// Creates the exception of a canceled activation.
   ActivationCanceledException({
@@ -135,7 +135,7 @@ final class ActivationCanceledException extends DiException {
 /// The runtime always attempts the remaining callbacks before reporting this
 /// aggregate.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class DisposeException extends DiException {
   /// Creates the exception that aggregates [disposeFailures].
   DisposeException(Iterable<DisposeFailure> disposeFailures)
@@ -154,7 +154,7 @@ final class DisposeException extends DiException {
 /// the node is inactive for another reason, such as a failed
 /// reactivation or a disposed node.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class InactiveNodeException extends DiException {
   /// Creates the exception for a node without a value. [missing] lists the
   /// required keys that do not resolve.
@@ -174,7 +174,7 @@ final class InactiveNodeException extends DiException {
 
 /// A `Lazy` was read after the component owning it was disposed.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class DisposedLazyException extends DiException {
   /// Creates the exception of a `Lazy` that its owner disposed.
   const DisposedLazyException()
@@ -183,7 +183,7 @@ final class DisposedLazyException extends DiException {
 
 /// A listener threw and was detached from the runtime.
 ///
-/// {@category Exceptions}
+/// {@category Errors}
 final class DiListenerException extends DiException {
   /// Creates the exception of a listener that threw [cause].
   DiListenerException(this.cause, this.stackTrace)

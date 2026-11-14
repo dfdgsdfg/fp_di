@@ -11,7 +11,68 @@ A declaration states what a scope holds. It creates nothing.
 The declarations follow Flutter conventions: the type argument first, named
 arguments, and a value that is built first and mounted later.
 
-## Scopes and modules
+## Components
+
+A component description follows two steps:
+
+1. **Create the value.** A `Dependency` states the keys that the value needs
+   and how it is created from them, with an optional `dispose`. The number of
+   inputs picks the form:
+
+   | Inputs | Form |
+   |---|---|
+   | none | `Dependency<R>(create: () => ..., dispose: ...)` |
+   | one to eight keys | `Dependency1<A, R>` to `Dependency8<A, ..., H, R>(create: (a, ...) => ..., dispose: ...)` |
+   | several steps, optional reads, lazy | a chain: `Dependency.require<A>().map(...)`, `.lazy()` |
+
+2. **Make a component.** `Component<T>(dependency: ...)` states the type that
+   it provides, like `Provider<T>`, and publishes `DiKey<T>()`. Pass `key` for
+   a named key. Diagnostics label it by its key; pass `debugLabel` only to tell
+   apart components that the key does not, or an effect.
+
+```dart
+Component<Database>(                                      // 2. what it publishes
+  dependency: Dependency1<Config, Database>(                  // 1. create the value
+    create: (config) => PgDatabase(config.url),
+    dispose: (db) => db.close(),
+  ),
+);
+```
+
+The type argument states what the component publishes, so an implementation
+such as `PgDatabase` is published under the port `Database`. A `key`
+replaces the default `DiKey<T>()`, and Dart checks it against the type
+argument; a key of an unrelated type, which widens the inferred type to
+`Object`, throws an `ArgumentError` where the component is built.
+
+**Always write the type argument.** Without it, Dart infers the type of the
+implementation: `Component(dependency: Dependency(create: PgDatabase.new))`
+publishes `DiKey<PgDatabase>()`. A required read of `Database` then fails at
+`initialize` only when no scope declares `Database`; when an ancestor
+publishes `Database`, the child silently reads the ancestor value. A reader of
+`Component<T>(...)` also sees what a component publishes before how it is
+built, as with `Provider<T>`. The examples also write the type arguments of
+every `Dependency` and `DependencyN`. Dart infers some of them, but one rule
+keeps the reads and the type argument visible.
+
+A member whose value no other member reads is an effect:
+`Component.effect(dependency: ...)` publishes nothing, and still waits for its
+keys, reacts to them, and disposes what it owns. `Component<void>` throws an
+`ArgumentError` that points to `Component.effect`; so do `dynamic` and
+`Null`. A member that must wait for an effect reads a token type that a
+component publishes, as a token key (see [Modules](#modules)) orders two members.
+
+`create` runs on each activation, never when the component is built. A
+`Dependency` that reads no key makes a component that never waits. One that
+reads keys makes a component that waits until they resolve and activates again
+when their publishers change. An effect publishes nothing. A
+`Module` is the list of components that a scope declares, and a node is a
+component that the scope created in `initialize()`.
+
+The `Dependency` type describes all the reads of one component. It is not one
+key: a `DiKeyBase` is one key that a component reads.
+
+## Modules
 
 A package exports a `Module`: a list of independent components. The
 application composes modules and gives them to a scope, which creates them in
@@ -71,33 +132,6 @@ reads a collection, stays in the module. `ancestorKeys` holds the keys that an
 ancestor scope also publishes. A removed member that publishes such a key does
 not remove the members that require it.
 
-Each member stays its own node. A member that waits for a key does not block
-its siblings, and each member reactivates on its own. Members can depend on
-keys that a later member publishes.
-
-`initialize()` activates members by dependency. A member starts when every
-member that publishes a key it reads has settled, and a member
-with no such dependency starts at once. Independent members therefore activate
-at the same time, so a scope of slow members takes as long as its slowest
-chain and not the sum. A member publishes its bindings as soon as its own
-activation succeeds, and a dependent never starts before its publishers have.
-The commit order of independent members follows completion order and is not
-deterministic.
-
-`dispose()` releases along the same reads in reverse: a member releases after
-every member that read its value has finished, and members that do not read
-each other release at the same time. The dispose functions of one member run
-last first, and a `DisposeException` lists dispose failures in reverse declaration
-order. Two members that share an external resource without a key between
-them, such as one file that one flushes and the other closes, need a token key
-so that their releases keep an order.
-
-```dart
-// Both probes run at the same time; `sync` starts when both are ready.
-final app = Scope(module: Module(components: [connectivity, database, sync]));
-await app.initialize();
-```
-
 The keys are the only order. When one member needs the effect of another, such
 as a crash reporter that hooks into a global logger, the other member publishes
 a token key and the first member requires it. The need is then part of the
@@ -118,13 +152,8 @@ final crashReporter = Component<CrashReporter>(
 ```
 
 `example/token_key.dart` shows the failure without a
-token and the order with one. Effects that overlap in the Instance topic
+token and the order with one. Effects that overlap in the Lifecycle topic
 lists the patterns that keep members without a key between them safe.
-
-A child can initialize before its parent. Its nodes wait, and they activate
-when the parent initializes and publishes their keys. A scope that initializes
-later between a node and its publisher shadows that publisher, so the node
-rebinds. These are the only ways that a key appears for an existing node.
 
 A member that requires a key that nothing declares could never activate, so
 `initialize()` rejects it before creating anything:
@@ -146,36 +175,82 @@ reads the ancestor value. Optional reads through `Dependency.maybe` are not
 checked. An effect, such as a listener,
 publishes no key, so nothing can require it.
 
-Dormancy is not failure. If the activation of any member throws, `initialize()`
-is atomic, whatever the declaration order. No further member starts, and the
-runtime waits for the members still in flight; a failure does not cancel
-another member, because each member is its own failure region. Then
-every node that the call created is deactivated and disposed in reverse
-declaration order, and the error of the first failed member in declaration order
-is rethrown. The scope stays uninitialized, and a later `initialize()` may
-retry. Rollback dispose failures are attached to an `ActivationException`. A
-node of a descendant scope that wakes because of the new bindings keeps the
-usual rule: its failure is reported through `Scope.errors` and `initialize()`
-succeeds. Of two members that publish the same key, the later one fails with
-`DuplicateKeyError`. A second `initialize()` throws a `StateError`.
+## The algebra of modules
 
-The atomicity covers failure, not visibility. Each member's bindings become
-visible when that member commits, so other code can see some members before
-`initialize()` returns. Publish a record under one key when several values
-must become visible together.
+A `Component` keeps the reads of its `Dependency` and adds the key that it
+publishes:
 
-`node(key: ...)` returns the node of the member that publishes the key,
-typed as the key, so the code does not depend on the declaration order:
-`value`, `isActive`, `whenActive`, `missing`, and `dispose()`. `nodes` lists
-every node in declaration order, for an effect, which publishes no key.
-Disposing one member withdraws its bindings, deactivates its dependents
-first, and leaves the other members in the runtime. `dispose()` of the scope then
-skips the members that are already disposed.
+```text
+requires(Component<A>(d)) = requires(d)       optional(Component<A>(d)) = optional(d)
+publishes(Component<A>(d))          = {A}
+publishes(Component<A>(d, key: k))  = {k}
+publishes(Component.effect(d))      = ∅
+```
+
+A `Module` `m = Module([c1, …, cn])` publishes what its members publish, and it
+requires what a member requires and no other member publishes:
+
+```text
+publishes(m) = publishes(c1) ∪ … ∪ publishes(cn)
+requires(m)  = ⋃i ( requires(ci) \ ⋃j≠i publishes(cj) )
+```
+
+`requires(m)` is exactly what an ancestor scope must publish. The `j ≠ i` is
+deliberate: a member that requires the key that it publishes itself still
+needs another publisher, usually an ancestor.
+
+Modules compose by concatenation. A module has no `==`, so the laws compare
+the members and their origins:
+
+```text
+(m1 + m2) + m3   =  m1 + (m2 + m3)  =  Module.all([m1, m2, m3])
+m + Module([])   =  Module([]) + m  =  m
+
+publishes(m1 + m2) = publishes(m1) ∪ publishes(m2)
+requires(m1 + m2)  ⊆ requires(m1) ∪ requires(m2)
+```
+
+The last line is the useful one: composing two modules never adds a
+requirement. A member of one module can only satisfy a requirement of the
+other.
+
+The edits are functions from a module to a module. `replacing`, `without`, and
+`where` keep the position of every member that stays. `requiring` and
+`withoutRequiring` follow the required keys: for a set of absent keys `K`, and
+the keys `A` that an ancestor also publishes, they compute the smallest set of
+members that require an absent key, where a removed member makes its own key
+absent too:
+
+```text
+absent := K
+repeat until no member joins:
+  a member that requires a key of absent joins the result
+  the key that it publishes joins absent, unless A holds it
+```
+
+The two results divide the module, and the removal never adds a requirement
+that you did not name:
+
+```text
+components(requiring(m, K, A)) ⊎ components(withoutRequiring(m, K, A)) = components(m)
+requires(c) ∩ K = ∅                       for each c in withoutRequiring(m, K, A)
+requires(withoutRequiring(m, K, A))  ⊆  requires(m) ∪ A
+```
+
+For a child scope, pass the keys that the removed members of the parent
+published, and pass the keys that the remaining members of the parent publish
+as `A`:
 
 ```dart
-final database = app.node(key: DiKey<Database>());
-await database.dispose();   // its dependents go dormant
+final removed = all.requiring(keys: absent);
+final sessionModule = session.withoutRequiring(
+  keys: {...absent, ...removed.publishes},
+  ancestorKeys: all.withoutRequiring(keys: absent).publishes,
+);
 ```
+
+The property tests in [`laws_test.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/test/laws_test.dart) check each of these laws with
+generated modules.
 
 ## Variants: platform, flavor, and test
 

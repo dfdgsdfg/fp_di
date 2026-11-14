@@ -117,6 +117,7 @@ purpose, not by the directory currently being edited.
 | **`specs/{topic}/log.md`** | Significant accepted decision changes only | Routine edits or activity log |
 | **Jira `# Issue Spec`** | Issue-scoped projection of local `R-*` / `V-*`, design links, delivery impact, dependencies, and status | Independent requirement meaning, accepted architecture, decision history, or known gaps |
 | **`plan.md` / `agents/scratchpads/`** | Temporary status, next steps, open implementation work | Long-lived design truth |
+| **`packages/*/doc/*.md`** | User guides that `dart doc` shows as the topic pages of the API reference: explanations, examples, and diagrams in an explanatory style | Normative contracts, requirement IDs, or decision history; link the spec instead |
 | **Code / generated API docs** | Derivable file roles, symbols, and signatures | Product rationale |
 
 ### Folder AGENTS.md shape

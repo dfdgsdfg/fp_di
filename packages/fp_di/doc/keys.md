@@ -12,6 +12,34 @@ components contribute.
 - `DiKeyBase` is the supertype of every key, so a set of keys of different
   types has this element type.
 
+## Collection keys in the shape
+
+A collection read is not a requirement: an empty set is a valid set, and an
+ancestor scope can add contributions that a module does not see. So a
+collection read joins `reads`, never `requires`, and a module never subtracts
+it:
+
+```text
+collectionKeys(Dependency.requireSet(K))       = {K}
+optionalCollectionKeys(Dependency.maybeSet(K)) = {K}
+reads(c) = requires(c) ∪ optional(c) ∪ collectionKeys(c) ∪ optionalCollectionKeys(c)
+
+reads(m) = ⋃i ( (requires(ci) ∪ optional(ci)) \ ⋃j≠i publishes(cj) )
+           ∪ ⋃i ( collectionKeys(ci) ∪ optionalCollectionKeys(ci) )
+```
+
+The map forms, `requireMap` and `maybeMap`, follow the same rules. A
+contribution to a set publishes no key: `Component.into(K, d)` has
+`contributesTo = {K}` and `publishes = ∅`. A module counts its contributors in
+`contributes`:
+
+```text
+contributes(m) = { K ↦ |{ i : K ∈ contributesTo(ci) }| }
+```
+
+An entry of a map is different: it has a key of its own, `DiMapKey.entryKey(id)`,
+so it is a publication, and a member can require one entry.
+
 ## Environments and keys
 
 `Scope()` creates a root scope with its own runtime. An application needs one
