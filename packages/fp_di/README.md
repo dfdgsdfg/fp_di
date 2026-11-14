@@ -248,7 +248,8 @@ the unit `(id, no-op)`, so a chain of steps is one pair whatever its grouping.
 In the runtime, the unit and the regrouping hold for the published value of an
 activation that no cancellation interrupts, as [Laws](#laws) states. The
 paper in [Inspiration](#inspiration) calls this composition of a function
-with its inverse the twisted composition (Definition 1).
+with its inverse the twisted composition (Definition 1). The pairs are the
+effect algebra of the paper: the temporal half.
 
 A component is the pair of its whole chain. A scope composes the pairs of its
 members in the same way along the keys: the `create` of a member runs after the
@@ -262,7 +263,9 @@ Each value of the API has a shape, and each combinator computes the shape of
 its result from the shapes of its parts. The rules below restate the
 [lifecycle spec](https://github.com/dfdgsdfg/fp_di/blob/main/specs/runtime/lifecycle/spec.md#shape-algebra), whose
 rules the tests of the package check. The two rules for `+` follow from the
-rules for a module. Read `A` as `DiKey<A>()`.
+rules for a module. Read `A` as `DiKey<A>()`. The shapes are the coeffect
+algebra of the paper: the spatial half. When a `Dependency` composes, its
+pairs compose in sequence and its reads join.
 
 **A `Dependency`** has `requires(d)`, the keys that must resolve before it
 runs, and `optional(d)`, the keys that it reads and that may be absent.
@@ -406,8 +409,15 @@ The design adapts a subset of *A Programming Paradigm for Spatiotemporal
 Composability* by Yifan Shi, Wei Zhang, and Tianyi Cui
 ([arXiv:2608.25512](https://arxiv.org/abs/2608.25512v1)): revertible effects,
 whose release is tracked with their creation, and reactive coeffects, whose
-declared reads drive activation. `fp_di` keeps a small Dart API and does not
-import the theorems of the paper as guarantees. The
+declared reads drive activation. [Pairs](#pairs) are its effects, and
+[Shapes](#shapes) are its coeffects.
+
+Two parts of the paper are not adopted. An effect of the paper carries a
+witness that its inverse restores the state, and a `dispose` function does
+not. A key of the paper carries operations with inverses and a commutativity
+contract, which connect effects to coeffects, and a `DiKey` carries only a
+value. The independence and confluence theorems of the paper rest on those
+parts, so `fp_di` does not import them as guarantees. The
 [paper adoption](https://github.com/dfdgsdfg/fp_di/blob/main/specs/architecture/spec.md#paper-adoption) table states
 what is adopted, what is adapted, and what is left out.
 

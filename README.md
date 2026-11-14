@@ -38,6 +38,73 @@ The workspace has three packages:
 
 Start with the [`fp_di` README](packages/fp_di/README.md).
 
+## Motivation
+
+A dependency container answers two questions: where a value comes from, and
+when it exists. Most containers answer the first question. The application
+then owns the second: the order of startup, the cleanup after a failed start,
+and the order of release.
+
+Some libraries answer a part of the second question. In ZIO, a
+[`ZLayer`](https://zio.dev/reference/contextual/zlayer) describes the
+acquisition and the release of a service as one value. Layers compose, their
+construction runs in parallel, a failure releases the acquired resources, and
+`ZIO#provide` reports a missing dependency at compile time. A layer builds its
+environment one time, for the program that it provides. A service that goes
+away while the program runs, such as a user session at logout, is outside
+that model.
+
+fp_di keeps four guarantees together in one model:
+
+- **Dependency order.** A component is created after the components whose
+  keys it reads. Components that do not read each other start concurrently.
+- **Transactional start.** A failed start releases what it created, in
+  reverse, and publishes nothing.
+- **Reverse release.** A component is released before the components that it
+  reads. Components that do not read each other release concurrently.
+- **Reactive rebinding.** When a publisher goes away, the components that read
+  it are deactivated first, while the values that they read are still alive.
+  When a publisher comes back, they activate again and read the new value.
+
+The design adapts a subset of *A Programming Paradigm for Spatiotemporal
+Composability* ([arXiv:2608.25512](https://arxiv.org/abs/2608.25512v1)). The
+paper composes programs on two axes. On the spatial axis, components compose
+through the keys that they require and provide: these are coeffects. On the
+temporal axis, effects compose with their inverses: creation runs forward, and
+release runs backward. In fp_di, a `Dependency` is both. Its pairs of
+`create` and `dispose` are the effect algebra, and its shape of required and
+optional keys is the coeffect algebra.
+
+The lifecycle part of the paper (§4) keeps the two axes consistent while the
+set of available keys changes over time. When a provider unloads, its key
+stops being available first. The components that read the key deactivate
+while their reads are still alive, and the provider releases after them.
+Reactive rebinding comes from that part, and a layer that is built one time
+does not need it.
+
+Two parts of the paper are not adopted. A paper effect carries a witness that
+its inverse restores the state; a `dispose` function does not. A paper key
+carries operations with a commutativity contract, which make effects at
+different keys provably independent; a `DiKey` carries only a value. The
+independence and confluence theorems rest on those parts, so fp_di does not
+claim them. The
+[paper adoption](specs/architecture/spec.md#paper-adoption) table states what
+is adopted and what is left out.
+
+The combination is checked, not only stated:
+
+- [Property tests](packages/fp_di/test/laws_test.dart) check the laws of
+  shapes, components, modules, and values with generated inputs.
+- [TLA+ models](verification/tla) of lazy resources, activation, rollback,
+  reconciliation, cancellation, disposal, teardown, reentrancy, and failure
+  reporting, and one model of their interaction, are checked with TLC.
+
+Both are evidence within finite bounds and stated assumptions, not a proof.
+The [formal verification](specs/verification/formal/spec.md) spec states the
+bounds. The [specifications](specs/spec.md) state the requirements, the
+design, the known gaps, and the decisions. [Agent setup](agents/README.md)
+documents the shared guidance for coding agents.
+
 ## Examples
 
 Each file in [`packages/fp_di/example`](packages/fp_di/example) runs with
@@ -53,16 +120,6 @@ is one Flutter application. A widget test runs all of them:
 ```sh
 flutter test packages/fp_di_flutter/test/example_test.dart
 ```
-
-## Design
-
-The [specifications](specs/spec.md) state the requirements, the design, the
-known gaps, and the decisions. The design adapts a subset of *A Programming
-Paradigm for Spatiotemporal Composability*
-([arXiv:2608.25512](https://arxiv.org/abs/2608.25512v1)); the
-[paper adoption](specs/architecture/spec.md#paper-adoption) table states what
-is adopted and what is left out. [Agent setup](agents/README.md) documents the
-shared guidance for coding agents.
 
 ## Development
 
