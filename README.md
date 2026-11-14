@@ -44,6 +44,10 @@ A dependency container answers two questions: where a value comes from, and
 when it exists. Most containers answer the first question. The application
 then owns the second: the order of startup, the cleanup after a failed start,
 and the order of release.
+In get_it, for example, the release order is the reverse of the registration
+order: a convention that the application keeps in step with the reads. In
+fp_di, the order follows from the composition of the pairs, and the tests
+check the laws of that composition.
 
 Some libraries answer a part of the second question. In ZIO, a
 [`ZLayer`](https://zio.dev/reference/contextual/zlayer) describes the

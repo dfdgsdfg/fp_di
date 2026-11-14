@@ -227,6 +227,14 @@ behind the key, so an error view needs no listener.
 
 ## The algebra
 
+Here, algebraic means that the declarations are values closed under a few
+operations, and that the operations keep laws. The reverse release is the
+familiar rule of a stack. `fp_di` makes it an operation on values, with an
+associative composition and a unit, and extends it from a chain to a graph.
+A refactoring, a rollback, and the checks of `initialize` rely on the laws
+below. This is not the algebraic effects and handlers of languages such as
+Koka or OCaml 5.
+
 ### Pairs
 
 A step is a pair `(c, d)` of a `create` function `c` and a `dispose` function
