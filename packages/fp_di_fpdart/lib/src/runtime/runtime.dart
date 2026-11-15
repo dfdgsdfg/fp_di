@@ -10,6 +10,7 @@
 // mutable cells are the `IORef` values of [Runtime], and each one has a
 // stated purpose.
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:fpdart/fpdart.dart';
 
@@ -19,6 +20,7 @@ import '../component.dart';
 import '../core/core.dart';
 import '../dependency.dart';
 import '../failure.dart';
+import '../faults.dart';
 import '../finalizers.dart';
 import '../hold.dart';
 import '../key.dart';
@@ -72,6 +74,46 @@ final class Activation {
 
   /// The contribution keys of each collection that the activation read.
   final IORef<Map<DiCollectionKey<Object?>, List<DiKey<Object?>>>> membership;
+}
+
+/// A queue of results that tasks in flight finish, in the order of the finish.
+///
+/// A loop that starts tasks and waits for the next one to finish uses the queue
+/// instead of `Future.any` over the tasks in flight, which costs a time that is
+/// linear in the number of tasks for each wait.
+final class Completions<T> {
+  final Queue<(T?, Object?, StackTrace?)> _ready =
+      Queue<(T?, Object?, StackTrace?)>();
+  Completer<void>? _wake;
+
+  /// Adds a result. The loop that waits wakes up.
+  void add(T result) => _push((result, null, null));
+
+  /// Adds an error. The call of [next] that takes it throws the error.
+  void addError(Object error, StackTrace stackTrace) =>
+      _push((null, error, stackTrace));
+
+  void _push((T?, Object?, StackTrace?) entry) {
+    _ready.add(entry);
+    final wake = _wake;
+    if (wake != null) {
+      _wake = null;
+      wake.complete();
+    }
+  }
+
+  /// The oldest result that no call took. The future waits when none exists,
+  /// and it fails when the oldest entry is an error.
+  Future<T> next() async {
+    while (_ready.isEmpty) {
+      final wake = Completer<void>();
+      _wake = wake;
+      await wake.future;
+    }
+    final (result, error, stackTrace) = _ready.removeFirst();
+    if (error != null) Error.throwWithStackTrace(error, stackTrace!);
+    return result as T;
+  }
 }
 
 /// The result of a disposal, which every caller of the disposal shares.
@@ -167,17 +209,19 @@ final class Runtime {
       _reports = IORef.create<List<Cause<DiFailure>>>(const []).run(),
       _delivering = IORef.create<bool>(false).run(),
       _closed = IORef.create<bool>(false).run(),
-      _activations = IORef.create<Map<int, Activation>>(const {}).run(),
-      _committed = IORef.create<Map<NodeId, Activation>>(const {}).run(),
+      _activations = IORef.create<PMap<int, Activation>>(PMap.empty()).run(),
+      _committed = IORef.create<PMap<NodeId, Activation>>(PMap.empty()).run(),
       _waiters = IORef.create<Map<NodeId, Map<Zone, Completer<Wake>>>>(
         const {},
       ).run(),
       _scopeDisposals = IORef.create<Map<ScopeId, Disposal>>(const {}).run(),
-      _nodeDisposals = IORef.create<Map<NodeId, Disposal>>(const {}).run(),
+      _nodeDisposals = IORef.create<PMap<NodeId, Disposal>>(PMap.empty()).run(),
       _holds = IORef.create<Map<ScopeId, List<HoldEntry>>>(const {}).run(),
       _parked = IORef.create<Map<ScopeId, Parked>>(const {}).run(),
-      _releasing = IORef.create<List<String>>(const []).run(),
+      _releasing = IORef.create<PMap<int, String>>(PMap.empty()).run(),
+      _releaseSeq = IORef.create<int>(0).run(),
       _queued = IORef.create<int>(0).run(),
+      _running = IORef.create<int>(0).run(),
       _labels = IORef.create<Map<ScopeId, String>>(const {}).run(),
       _errors = StreamController<Cause<DiFailure>>.broadcast(sync: true);
 
@@ -238,7 +282,7 @@ final class Runtime {
 
   /// The running activations by ticket: the cancellation token of each one,
   /// and what it read.
-  final IORef<Map<int, Activation>> _activations;
+  final IORef<PMap<int, Activation>> _activations;
 
   /// The callers of `whenActive` that wait for the next commit of a node. Each
   /// zone has one completer, so a zone that is dead cannot starve another.
@@ -246,13 +290,13 @@ final class Runtime {
 
   /// The activation of each committed node, until its release ends. Its token
   /// is canceled when the release starts.
-  final IORef<Map<NodeId, Activation>> _committed;
+  final IORef<PMap<NodeId, Activation>> _committed;
 
   /// The disposal that a scope accepted. Every caller shares it.
   final IORef<Map<ScopeId, Disposal>> _scopeDisposals;
 
   /// The disposal that a node accepted. Every caller shares it.
-  final IORef<Map<NodeId, Disposal>> _nodeDisposals;
+  final IORef<PMap<NodeId, Disposal>> _nodeDisposals;
 
   /// The open holds of each scope, in the order of the calls.
   final IORef<Map<ScopeId, List<HoldEntry>>> _holds;
@@ -260,11 +304,18 @@ final class Runtime {
   /// The disposals that wait for holds, by the scope that accepted them.
   final IORef<Map<ScopeId, Parked>> _parked;
 
-  /// The owners whose dispose functions run now, in the order they started.
-  final IORef<List<String>> _releasing;
+  /// The owners whose dispose functions run now, by the number of their start.
+  final IORef<PMap<int, String>> _releasing;
+
+  /// The number of the next release that starts.
+  final IORef<int> _releaseSeq;
 
   /// The number of operations that wait for an earlier operation to end.
   final IORef<int> _queued;
+
+  /// The number of operations that run now. The self-check of the serial
+  /// queue reads it.
+  final IORef<int> _running;
 
   /// The labels that the callers gave to scopes. A tool shows them.
   final IORef<Map<ScopeId, String>> _labels;

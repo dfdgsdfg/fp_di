@@ -265,13 +265,22 @@ bool setupRefused(RuntimeState s, NodeId n) {
 ///
 /// A release of [publisher] releases these nodes first.
 List<NodeId> dependentsOf(RuntimeState s, NodeId publisher) => [
-  for (final node in s.nodes.values)
-    if (!node.removed &&
-        node.id != publisher &&
-        (node.active || node.deactivating) &&
-        node.dependencies.contains(publisher))
-      node.id,
+  for (final id in s.readersOf(publisher))
+    if (_isDependent(s, id, publisher)) id,
 ]..sort((a, b) => b.value.compareTo(a.value));
+
+/// Whether [dependentsOf] gives at least one node. The answer costs less than
+/// the list when a node has many readers.
+bool hasDependents(RuntimeState s, NodeId publisher) =>
+    s.readersOf(publisher).any((id) => _isDependent(s, id, publisher));
+
+bool _isDependent(RuntimeState s, NodeId id, NodeId publisher) {
+  final node = nodeRecord(s, id);
+  return !node.removed &&
+      node.id != publisher &&
+      (node.active || node.deactivating) &&
+      node.dependencies.contains(publisher);
+}
 
 /// The active nodes that are not removed and whose target changed, in
 /// descending id.
@@ -377,13 +386,17 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
       if (labels.length > 1)
         Fail<DiFailure>(DuplicateKeyFailure(key, labels), StackTrace.current),
   ];
+  // The positions of the components that publish each key.
+  final publishers = <DiKey<Object?>, List<int>>{};
+  for (var i = 0; i < members.length; i++) {
+    if (members[i].hasKey) {
+      (publishers[members[i].key] ??= []).add(i);
+    }
+  }
   for (var i = 0; i < members.length; i++) {
     for (final key in members[i].requires) {
       if (declared.contains(key)) continue;
-      var published = false;
-      for (var j = 0; j < members.length && !published; j++) {
-        published = j != i && members[j].hasKey && members[j].key == key;
-      }
+      final published = publishers[key]?.any((j) => j != i) ?? false;
       if (!published) {
         problems.add(
           Fail<DiFailure>(
@@ -436,7 +449,8 @@ Set<NodeId> withdrawalReach(RuntimeState s, NodeId root) {
   final pending = <NodeId>[root];
   while (pending.isNotEmpty) {
     final next = pending.removeLast();
-    for (final node in s.nodes.values) {
+    for (final id in s.readersOf(next)) {
+      final node = nodeRecord(s, id);
       if (!node.removed &&
           node.active &&
           node.dependencies.contains(next) &&

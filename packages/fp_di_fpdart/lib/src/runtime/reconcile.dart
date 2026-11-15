@@ -138,21 +138,29 @@ extension RuntimeReconcile on Runtime {
         for (var i = 0; i < count; i++)
           if (waitingFor[i] == 0) i,
       ];
-      final inFlight = <int, Future<(int, Attempt)>>{};
+      final finished = Completions<(int, Attempt)>();
+      var inFlight = 0;
       final failures = <NodeId, Cause<DiFailure>>{};
 
       void start(int i) {
         started.add(i);
-        inFlight[i] = activate(ids[i]).run().then((outcome) => (i, outcome));
+        inFlight++;
+        unawaited(
+          activate(ids[i]).run().then(
+            (outcome) => finished.add((i, outcome)),
+            onError: finished.addError,
+          ),
+        );
       }
 
       while (true) {
         if (failures.isEmpty) {
-          while (ready.isNotEmpty) {
-            ready.sort();
-            start(ready.removeAt(0));
-          }
-          if (inFlight.isEmpty && started.length < count) {
+          // A start adds no node to `ready`, so one sort gives the order.
+          ready.sort();
+          final batch = [...ready];
+          ready.clear();
+          batch.forEach(start);
+          if (inFlight == 0 && started.length < count) {
             start(
               [
                 for (var i = 0; i < count; i++) i,
@@ -160,12 +168,11 @@ extension RuntimeReconcile on Runtime {
             );
           }
         }
-        if (inFlight.isEmpty &&
-            (failures.isNotEmpty || started.length == count)) {
+        if (inFlight == 0 && (failures.isNotEmpty || started.length == count)) {
           return failures;
         }
-        final (i, outcome) = await Future.any(inFlight.values);
-        unawaited(inFlight.remove(i));
+        final (i, outcome) = await finished.next();
+        inFlight--;
         outcome.match((cause) {
           failures[ids[i]] = cause;
         }, (_) {});

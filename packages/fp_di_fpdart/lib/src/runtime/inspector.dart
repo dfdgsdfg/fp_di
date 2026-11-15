@@ -376,13 +376,18 @@ final class Inspector {
         ) {
           chain.add(at);
         }
-        ShapeModule moduleOf(ScopeId at) => ShapeModule(
-          scopeRecord(s, at).components,
-          label: runtime.scopeLabel(at),
-        );
-        final graph = ShapeGraph.ofModule(
-          moduleOf(scope),
-          ancestors: [for (final at in chain.reversed) moduleOf(at)],
+        final components = scopeRecord(s, scope).components;
+        final graph = ShapeGraph.of(
+          components,
+          label: runtime.scopeLabel(scope),
+          ancestors: [
+            for (final at in chain.reversed)
+              (
+                label: runtime.scopeLabel(at),
+                components: scopeRecord(s, at).components,
+                origins: null,
+              ),
+          ],
         );
         return _answer({'shape': graph.toJsonObject()});
       }

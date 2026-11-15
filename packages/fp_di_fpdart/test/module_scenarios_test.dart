@@ -992,17 +992,10 @@ void main() {
   });
 
   group('run cost', () {
-    // fp_di runs 2000 and 4000 components within 1 s. Each transition of this
-    // package copies the maps of the runtime, so the cost is quadratic: 2000
-    // components take about 2 s, and 4000 take 6 s to 10 s. The tests at the
-    // full size are skipped with that reason, and the same scenarios run at a
-    // size that the cost allows. `agents/scratchpads/fp_di_fpdart/coverage.md`
-    // records the gap.
-    const quadratic =
-        'The cost is quadratic: each transition copies the maps of the '
-        'runtime (2000 components: about 2 s).';
-
-    Future<void> randomOrder(int count, {required Duration limit}) async {
+    // The state is a persistent value and the runtime keeps an index of the
+    // readers, so a transition costs a time that is logarithmic in the number
+    // of nodes. The bounds are the bounds of fp_di.
+    Future<void> randomOrder(int count) async {
       final random = Random(7);
       final deps = <int, List<int>>{
         for (var i = 0; i < count; i++)
@@ -1022,31 +1015,29 @@ void main() {
       for (var i = 0; i < count; i++) {
         expect(_maybe(di, 'm$i'), isNotNull, reason: 'm$i');
       }
-      expect(watch.elapsed, lessThan(limit));
+      expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
 
       final dispose = Stopwatch()..start();
       rightOf(await di.dispose());
       dispose.stop();
-      expect(dispose.elapsed, lessThan(limit));
+      expect(dispose.elapsed, lessThan(const Duration(seconds: 1)));
     }
 
     test('creates 2000 components with random-order dependencies', () async {
       // from: module_test.dart: creates 2000 components with random-order
       // dependencies
-      await randomOrder(2000, limit: const Duration(seconds: 1));
-    }, skip: quadratic);
-
-    test('creates 300 components with random-order dependencies', () async {
-      await randomOrder(300, limit: const Duration(seconds: 2));
+      await randomOrder(2000);
     });
 
+    // from: module_test.dart: initializes 4000 members, $name, within 1 s
     final shapes = <(String, List<int> Function(int))>[
       ('chain', (i) => i == 0 ? const [] : [i - 1]),
       ('two predecessors', (i) => [if (i >= 1) i - 1, if (i >= 2) i - 2]),
       ('star', (i) => i == 0 ? const [] : const [0]),
     ];
     for (final (name, deps) in shapes) {
-      Future<void> shape(int count, Duration limit) async {
+      test('runs 4000 components, $name, within 1 s', () async {
+        const count = 4000;
         final components = [
           for (var i = 0; i < count; i++)
             _node('m$i', [for (final d in deps(i)) 'm$d']),
@@ -1056,17 +1047,10 @@ void main() {
         rightOf(await di.run());
         watch.stop();
         expect(_maybe(di, 'm${count - 1}'), isNotNull);
-        expect(watch.elapsed, lessThan(limit));
+        expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
+        final dispose = Stopwatch()..start();
         rightOf(await di.dispose());
-      }
-
-      test('runs 4000 components, $name, within 1 s', () async {
-        // from: module_test.dart: initializes 4000 members, $name, within 1 s
-        await shape(4000, const Duration(seconds: 1));
-      }, skip: quadratic);
-
-      test('runs 300 components, $name', () async {
-        await shape(300, const Duration(seconds: 2));
+        expect(dispose.elapsed, lessThan(const Duration(seconds: 1)));
       });
     }
   });

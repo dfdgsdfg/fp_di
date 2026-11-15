@@ -36,7 +36,11 @@ void main() {
     );
     final setup = root.run();
     final behind = root.kid().run(); // queued behind the setup
-    await Future<void>.delayed(_threshold * 3.5);
+    // A loaded machine delays the timers, so the test waits for the second
+    // report instead of a fixed time.
+    for (var i = 0; i < 200 && reports.length < 2; i++) {
+      await Future<void>.delayed(_threshold ~/ 2);
+    }
     expect(reports.length, greaterThanOrEqualTo(2), reason: 'each threshold');
     final report = reports.first;
     expect(report.operation, 'run');

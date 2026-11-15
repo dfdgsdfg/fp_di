@@ -5,6 +5,7 @@ import 'package:fpdart/fpdart.dart';
 
 import 'cause.dart';
 import 'failure.dart';
+import 'faults.dart';
 
 /// An immutable stack of the dispose functions of the values that an owner
 /// holds.
@@ -57,7 +58,18 @@ final class Finalizers {
   Task<Cause<DiFailure>> release() => Task(() async {
     // The newest entry starts at once, without a wait before it.
     var cause = const Empty<DiFailure>() as Cause<DiFailure>;
-    for (final entry in _entries.reversed) {
+    // The defect `AcqOrder` releases the oldest entry first.
+    final ordered = RuntimeFaults.injects(Defect.acqOrder)
+        ? _entries
+        : _entries.reversed.toList();
+    // The defect `ParallelSteps` starts every entry before it awaits one.
+    if (RuntimeFaults.injects(Defect.parallelSteps)) {
+      final all = await Future.wait<Cause<DiFailure>>([
+        for (final entry in ordered) entry.release().run(),
+      ]);
+      return all.fold<Cause<DiFailure>>(cause, (sum, next) => sum + next);
+    }
+    for (final entry in ordered) {
       cause += await entry.release().run();
     }
     return cause;

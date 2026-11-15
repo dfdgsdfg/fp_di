@@ -42,33 +42,18 @@ final class ShapeEdge {
   final ShapeEdgeKind kind;
 }
 
-/// The components of one scope, with the names that a tool shows.
-///
-/// A list of components has neither a label nor an origin. A tool that wants a
-/// chart with subgraphs gives them. The label names the scope. The origin of a
-/// component names the group that listed it, such as a feature. A component
-/// without a given origin has the label of the scope as its origin. Neither
-/// value has an effect on a scope: only the tools read them.
-final class ShapeModule {
-  /// Creates a group of [components] with the [label] of its scope.
-  ///
-  /// The group keeps a copy of the list. Every origin is [label].
-  ShapeModule(Iterable<Component<Object?>> components, {this.label})
-    : components = List.unmodifiable(components),
-      origins = List.unmodifiable(
-        List<String?>.filled(components.length, label),
-      );
-
-  /// Creates a group with the given [origins], one for each component.
-  ///
-  /// The group keeps a copy of both lists. The lists must have the same
-  /// length.
-  ShapeModule.withOrigins(
+/// The components of one scope with the names that a tool shows: the label of
+/// the scope, and an origin for each component.
+final class _Group {
+  _Group(
     Iterable<Component<Object?>> components,
-    Iterable<String?> origins, {
-    this.label,
-  }) : components = List.unmodifiable(components),
-       origins = List.unmodifiable(origins) {
+    String? label,
+    Iterable<String?>? origins,
+  ) : label = label,
+      components = List.unmodifiable(components),
+      origins = List.unmodifiable(
+        origins ?? List<String?>.filled(components.length, label),
+      ) {
     if (this.components.length != this.origins.length) {
       throw ArgumentError.value(
         origins,
@@ -78,23 +63,8 @@ final class ShapeModule {
     }
   }
 
-  /// The concatenation of [modules], in order, with the origin of each
-  /// component kept. The [label] names the result.
-  ShapeModule.all(Iterable<ShapeModule> modules, {this.label})
-    : components = List.unmodifiable([
-        for (final module in modules) ...module.components,
-      ]),
-      origins = List.unmodifiable([
-        for (final module in modules) ...module.origins,
-      ]);
-
-  /// The name of the scope, or `null`.
   final String? label;
-
-  /// The components, in declaration order. The list is unmodifiable.
   final List<Component<Object?>> components;
-
-  /// The origin of each component, by index. The list is unmodifiable.
   final List<String?> origins;
 }
 
@@ -119,8 +89,8 @@ final class ShapeModule {
 /// their reads. The graph builds an index of the publishers first.
 final class ShapeGraph {
   ShapeGraph._({
-    required this.module,
-    required this.ancestors,
+    required _Group module,
+    required List<_Group> ancestors,
     required this.edges,
     required this.depths,
     required this.cycles,
@@ -131,13 +101,19 @@ final class ShapeGraph {
     required this.requires,
     required this.reads,
     required this.contributes,
-  });
+  }) : _module = module,
+       _ancestors = ancestors;
 
   /// The shape of [components] in a scope whose ancestors declare
   /// [ancestors], root first.
   ///
   /// [label] names the scope, and [origins] holds the origin of each
-  /// component. Without [origins], the origin of each component is [label].
+  /// component, which names the group that listed it, such as a feature.
+  /// Without [origins], the origin of each component is [label]. Each ancestor
+  /// has the same three fields. A list of components has no label and no
+  /// origin, so the tools take them as arguments. A `Scope` ignores them. The
+  /// names of the fields of the JSON, such as `label` and `ancestors`, are the
+  /// names of the schema of `fp_di`, where a module has them.
   ///
   /// The ancestors only decide which required keys are [undeclared]. The
   /// export lists no edge to an ancestor component, because `run` of the scope
@@ -146,20 +122,21 @@ final class ShapeGraph {
     List<Component<Object?>> components, {
     String? label,
     List<String?>? origins,
-    List<ShapeModule> ancestors = const [],
-  }) => ShapeGraph.ofModule(
-    origins == null
-        ? ShapeModule(components, label: label)
-        : ShapeModule.withOrigins(components, origins, label: label),
-    ancestors: ancestors,
-  );
-
-  /// The shape of [module] in a scope whose ancestors declare [ancestors],
-  /// root first.
-  factory ShapeGraph.ofModule(
-    ShapeModule module, {
-    List<ShapeModule> ancestors = const [],
+    List<
+          ({
+            String? label,
+            List<Component<Object?>> components,
+            List<String?>? origins,
+          })
+        >
+        ancestors =
+        const [],
   }) {
+    final module = _Group(components, label, origins);
+    final above = [
+      for (final ancestor in ancestors)
+        _Group(ancestor.components, ancestor.label, ancestor.origins),
+    ];
     final members = module.components;
     final count = members.length;
 
@@ -201,20 +178,20 @@ final class ShapeGraph {
     for (final edge in edges) {
       waitsFor[edge.from].add(edge.to);
     }
-    final components = _stronglyConnected(waitsFor);
+    final groups = _stronglyConnected(waitsFor);
     final componentOf = List<int>.filled(count, 0);
-    for (var c = 0; c < components.length; c++) {
-      for (final member in components[c]) {
+    for (var c = 0; c < groups.length; c++) {
+      for (final member in groups[c]) {
         componentOf[member] = c;
       }
     }
 
     // Tarjan yields the components in reverse topological order: every
     // component that one waits for comes earlier.
-    final componentDepth = List<int>.filled(components.length, 1);
-    final next = List<int?>.filled(components.length, null);
-    for (var c = 0; c < components.length; c++) {
-      for (final member in components[c]) {
+    final componentDepth = List<int>.filled(groups.length, 1);
+    final next = List<int?>.filled(groups.length, null);
+    for (var c = 0; c < groups.length; c++) {
+      for (final member in groups[c]) {
         for (final target in waitsFor[member]) {
           final d = componentOf[target];
           if (d == c) continue;
@@ -226,12 +203,12 @@ final class ShapeGraph {
       }
     }
     var deepest = 0;
-    for (var c = 1; c < components.length; c++) {
+    for (var c = 1; c < groups.length; c++) {
       if (componentDepth[c] > componentDepth[deepest]) deepest = c;
     }
     final chain = <int>[];
-    for (int? c = components.isEmpty ? null : deepest; c != null; c = next[c]) {
-      chain.add(components[c].reduce((a, b) => a < b ? a : b));
+    for (int? c = groups.isEmpty ? null : deepest; c != null; c = next[c]) {
+      chain.add(groups[c].reduce((a, b) => a < b ? a : b));
     }
 
     // The derived sets use the index of the publishers, so each one costs a
@@ -260,17 +237,17 @@ final class ShapeGraph {
     };
 
     final declared = <DiKeyBase>{
-      for (final ancestor in ancestors) ..._publishesOf(ancestor.components),
+      for (final ancestor in above) ..._publishesOf(ancestor.components),
     };
     return ShapeGraph._(
       module: module,
-      ancestors: List<ShapeModule>.unmodifiable(ancestors),
+      ancestors: List<_Group>.unmodifiable(above),
       edges: List<ShapeEdge>.unmodifiable(edges),
       depths: List<int>.unmodifiable([
         for (var i = 0; i < count; i++) componentDepth[componentOf[i]],
       ]),
       cycles: List<List<int>>.unmodifiable([
-        for (final component in components)
+        for (final component in groups)
           if (component.length > 1)
             List<int>.unmodifiable(component.toList()..sort()),
       ]),
@@ -290,11 +267,14 @@ final class ShapeGraph {
     );
   }
 
-  /// The scope whose shape this is.
-  final ShapeModule module;
+  final _Group _module;
+  final List<_Group> _ancestors;
 
-  /// The groups of the ancestor scopes, root first.
-  final List<ShapeModule> ancestors;
+  /// The label of the scope, or `null`.
+  String? get label => _module.label;
+
+  /// The components of the scope, in declaration order.
+  List<Component<Object?>> get components => _module.components;
 
   /// Each wait of a component for another component, in declaration order of
   /// the waiting component.
@@ -351,17 +331,17 @@ final class ShapeGraph {
     List<String> keys(Iterable<DiKeyBase> keys) => [
       for (final key in keys) '$key',
     ];
-    final members = module.components;
+    final members = _module.components;
     return <String, Object?>{
       'format': format,
       'version': version,
-      'label': module.label,
+      'label': _module.label,
       'members': [
         for (var i = 0; i < members.length; i++)
           <String, Object?>{
             'index': i,
             'label': members[i].label,
-            'origin': module.origins[i],
+            'origin': _module.origins[i],
             'publishes': members[i].hasKey ? '${members[i].key}' : null,
             'contributesTo': members[i].contributesTo?.toString(),
             'requires': keys(members[i].requires),
@@ -387,9 +367,9 @@ final class ShapeGraph {
         for (final MapEntry(:key, :value) in contributes.entries) '$key': value,
       },
       'ancestors': <String, Object?>{
-        'labels': [for (final ancestor in ancestors) ancestor.label],
+        'labels': [for (final ancestor in _ancestors) ancestor.label],
         'publishes': keys({
-          for (final ancestor in ancestors)
+          for (final ancestor in _ancestors)
             ..._publishesOf(ancestor.components),
         }),
       },
@@ -418,7 +398,7 @@ final class ShapeGraph {
   /// | `collection` | `==>`, with the collection key |
   /// | `optionalCollection` | `-.->`, with the collection key |
   ///
-  /// With [ancestors], each scope is one `subgraph` with its label. The
+  /// With ancestors, each scope is one `subgraph` with its label. The
   /// subgraph of an ancestor holds only the components that answer a read of
   /// this scope: node `s0m2` is component 2 of the root. An arrow into such a
   /// subgraph is a read that crosses the scope boundary. `run` of the scope
@@ -443,14 +423,14 @@ final class ShapeGraph {
   /// [longestChain], and a later release can draw it differently. A tool
   /// reads [toJson].
   String toMermaid({bool collapsed = false}) {
-    final members = module.components;
+    final members = _module.components;
     final own = [for (var i = 0; i < members.length; i++) i];
 
     // The reads that an ancestor answers, and the components that answer them.
-    final answering = [for (final _ in ancestors) <int>{}];
+    final answering = [for (final _ in _ancestors) <int>{}];
     final crossing =
         <({int from, int scope, int to, DiKeyBase key, ShapeEdgeKind kind})>[];
-    final indexes = [for (final ancestor in ancestors) _Index(ancestor)];
+    final indexes = [for (final ancestor in _ancestors) _Index(ancestor)];
     for (var i = 0; i < members.length; i++) {
       void connect(DiKeyBase key, ShapeEdgeKind kind) {
         for (final (scope, to) in _ancestorTargets(indexes, key)) {
@@ -475,21 +455,21 @@ final class ShapeGraph {
     }
     final drawn = [for (final members in answering) members.toList()..sort()];
     String title(int scope) =>
-        (scope < ancestors.length ? ancestors[scope] : module).label ??
+        (scope < _ancestors.length ? _ancestors[scope] : _module).label ??
         'scope $scope';
 
     final List<String> Function(int scope, String indent) nodes;
     final List<String> lines;
     if (collapsed) {
       final parts = [
-        for (var scope = 0; scope < ancestors.length; scope++)
+        for (var scope = 0; scope < _ancestors.length; scope++)
           _MermaidParts(
-            ancestors[scope],
+            _ancestors[scope],
             drawn[scope],
             prefix: 's$scope',
             rest: title(scope),
           ),
-        _MermaidParts(module, own, prefix: '', rest: title(ancestors.length)),
+        _MermaidParts(_module, own, prefix: '', rest: title(_ancestors.length)),
       ];
       nodes = (scope, indent) => parts[scope].lines(indent);
       // The reads between two nodes, in the order of the first read.
@@ -519,14 +499,14 @@ final class ShapeGraph {
               '|"$number"| $to',
       ];
     } else {
-      nodes = (scope, indent) => scope < ancestors.length
+      nodes = (scope, indent) => scope < _ancestors.length
           ? _mermaidNodes(
-              ancestors[scope],
+              _ancestors[scope],
               drawn[scope],
               prefix: 's$scope',
               indent: indent,
             )
-          : _mermaidNodes(module, own, prefix: '', indent: indent);
+          : _mermaidNodes(_module, own, prefix: '', indent: indent);
       String line(String from, ShapeEdgeKind kind, DiKeyBase key, String to) =>
           switch (kind) {
             ShapeEdgeKind.require => '  $from --> $to',
@@ -549,13 +529,13 @@ final class ShapeGraph {
       ];
     }
 
-    if (ancestors.isEmpty) {
+    if (_ancestors.isEmpty) {
       return ['flowchart BT', ...nodes(0, '  '), ...lines].join('\n');
     }
     return [
       'flowchart BT',
-      for (var scope = 0; scope <= ancestors.length; scope++)
-        if (scope == ancestors.length || drawn[scope].isNotEmpty) ...[
+      for (var scope = 0; scope <= _ancestors.length; scope++)
+        if (scope == _ancestors.length || drawn[scope].isNotEmpty) ...[
           '  subgraph s$scope["${_mermaidText(title(scope))}"]',
           ...nodes(scope, '    '),
           '  end',
@@ -565,7 +545,7 @@ final class ShapeGraph {
   }
 
   /// The ancestor components that answer a read of [key] from the scope, each
-  /// as the index of its scope in [ancestors] and its component index.
+  /// as the index of its scope in the ancestors and its component index.
   ///
   /// A plain key and each entry of a map key go to the nearest scope that
   /// declares a publisher, so the scope itself comes first. A set key goes to
@@ -624,7 +604,7 @@ final class _Index {
     }
   }
 
-  final ShapeModule module;
+  final _Group module;
   final publishers = <DiKeyBase, List<int>>{};
   final contributors = <DiSetKey<Object?>, List<int>>{};
   final entries = <DiMapKey<Object?>, List<int>>{};
@@ -635,7 +615,7 @@ final class _Index {
 ///
 /// The label of the module itself is the origin of a member that the module
 /// lists directly, so it makes no subgraph: the subgraph of the scope has it.
-String? _mermaidPart(ShapeModule module, int index) {
+String? _mermaidPart(_Group module, int index) {
   final origin = module.origins[index];
   return origin == module.label ? null : origin;
 }
@@ -645,7 +625,7 @@ String? _mermaidPart(ShapeModule module, int index) {
 /// The members of one origin follow the others, as one `subgraph` for each
 /// origin, in the order in which the origins first appear.
 List<String> _mermaidNodes(
-  ShapeModule module,
+  _Group module,
   Iterable<int> indexes, {
   required String prefix,
   required String indent,
@@ -695,7 +675,7 @@ final class _MermaidParts {
     }
   }
 
-  final ShapeModule module;
+  final _Group module;
   final String prefix;
   final String rest;
   final _ids = <String, String>{};

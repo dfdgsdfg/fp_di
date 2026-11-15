@@ -462,7 +462,9 @@ void main() {
       final expected = ShapeGraph.of(
         fixture.session.components,
         label: 'session',
-        ancestors: [ShapeModule(fixture.root.components, label: 'app')],
+        ancestors: [
+          (label: 'app', components: fixture.root.components, origins: null),
+        ],
       ).toJsonObject();
       expect(answer['shape'], jsonDecode(jsonEncode(expected)));
       expect(((answer['shape']! as Map)['ancestors']! as Map)['labels'], [

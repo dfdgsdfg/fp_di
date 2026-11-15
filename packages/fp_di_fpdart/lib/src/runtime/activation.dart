@@ -50,7 +50,7 @@ extension RuntimeActivation on Runtime {
     final owned = IORef.create<Finalizers>(Finalizers.empty).run();
     final label = labelOf(before, n);
     final changed = write((s) => beginActivation(s, n).$1);
-    _activations.update((all) => {...all, ticket: activation});
+    _activations.update((all) => all.put(ticket, activation));
     if (changed) transition();
 
     final context = StepContext(
@@ -60,7 +60,10 @@ extension RuntimeActivation on Runtime {
       readOption: (key) => _readOption(n, ticket, activation, key),
       readCollection: (key, {required strict}) =>
           _readCollection(n, ticket, activation, key, strict: strict),
-      checkpoint: () => activation.token.isCanceled
+      checkpoint: () =>
+          // The defect `SkipCheckpoint` does not stop a canceled activation.
+          activation.token.isCanceled &&
+              !RuntimeFaults.injects(Defect.skipCheckpoint)
           ? Left<Cause<DiFailure>, Unit>(
               Interrupt<DiFailure>(StackTrace.current),
             )
@@ -87,7 +90,9 @@ extension RuntimeActivation on Runtime {
     Activation activation,
     Object? value,
   ) {
-    if (activation.token.isCanceled) {
+    // The fault `NoCommitAfterCancel` lets a canceled activation commit.
+    if (activation.token.isCanceled &&
+        !RuntimeFaults.breaks(SelfCheckFault.noCommitAfterCancel)) {
       return Left(Interrupt<DiFailure>(StackTrace.current));
     }
     final s = state;
@@ -110,6 +115,11 @@ extension RuntimeActivation on Runtime {
     IORef<Finalizers> owned,
     Object? value,
   ) {
+    assert(
+      !RuntimeFaults.checking || !activation.token.isCanceled,
+      'SelfCheck NoCommitAfterCancel: the node ${labelOf(state, n)} commits '
+      'after its activation was canceled',
+    );
     final changed = write(
       (s) => commit(
         s,
@@ -122,8 +132,8 @@ extension RuntimeActivation on Runtime {
       ),
     );
     // The token of the committed activation stays until the release ends.
-    _committed.update((all) => {...all, n: activation});
-    _activations.update((all) => {...all}..remove(ticket));
+    _committed.update((all) => all.put(n, activation));
+    _activations.update((all) => all.without(ticket));
     if (changed) transition();
     _wake(n, Right<DiFailure, Object?>(value));
   }
@@ -140,10 +150,14 @@ extension RuntimeActivation on Runtime {
     // first dispose function runs.
     final reason = activation.token.reason;
     activation.token.cancel(CancelReason.failure);
-    final rollback = await releaseFor(
-      '${labelOf(state, n)} activation rollback',
-      owned.now,
-    ).run();
+    // The defect `DropLease` skips the release of the stack of a failed
+    // activation.
+    final rollback = RuntimeFaults.injects(Defect.dropLease)
+        ? const Empty<DiFailure>()
+        : await releaseFor(
+            '${labelOf(state, n)} activation rollback',
+            owned.now,
+          ).run();
     void end({
       required Option<Cause<DiFailure>> failure,
       required Set<NodeId> awaiting,
@@ -158,7 +172,7 @@ extension RuntimeActivation on Runtime {
           failed: failed,
         ),
       );
-      _activations.update((all) => {...all}..remove(ticket));
+      _activations.update((all) => all.without(ticket));
       if (changed) transition();
     }
 
@@ -239,6 +253,7 @@ extension RuntimeActivation on Runtime {
   ) {
     final s = state;
     final node = nodeRecord(s, n);
+    _checkReadWithinShape(s, node, key);
     return resolve(s, node.scope, key, exclude: Some(n)).match(
       () =>
           Left(Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current)),
@@ -255,6 +270,7 @@ extension RuntimeActivation on Runtime {
   ) {
     final s = state;
     final node = nodeRecord(s, n);
+    _checkReadWithinShape(s, node, key);
     return resolve(s, node.scope, key, exclude: Some(n)).match(
       () {
         // A key that is read while it is unbound stays tracked, so the node
@@ -284,9 +300,9 @@ extension RuntimeActivation on Runtime {
     DiKey<Object?> key,
     PublisherRef publisher,
   ) {
-    final hasReaders = s.nodes.values.any(
-      (other) => !other.removed && other.dependencies.contains(n),
-    );
+    final hasReaders = s
+        .readersOf(n)
+        .any((other) => !nodeRecord(s, other).removed);
     if (hasReaders) {
       final path = readsPath(s, publisher.node, n);
       if (path != null) {
@@ -370,11 +386,26 @@ extension RuntimeActivation on Runtime {
         // transition that starts the release, so a listener of that transition
         // sees it canceled. The keys leave in the same transition.
         _committed.now[n]?.token.cancel(CancelReason.deactivation);
-        apply((s) => beginRelease(s, n));
-        var failures = const Empty<DiFailure>() as Cause<DiFailure>;
-        for (final dependent in dependentsOf(state, n)) {
-          failures += await deactivate(dependent, permanent: false).run();
+        // The defect `SilentReleaseStart` replaces the state without a call of
+        // the listeners.
+        if (RuntimeFaults.injects(Defect.silentReleaseStart)) {
+          write((s) => beginRelease(s, n));
+        } else {
+          apply((s) => beginRelease(s, n));
         }
+        var failures = const Empty<DiFailure>() as Cause<DiFailure>;
+        // The fault `DependentFirst` starts the release without the release of
+        // the dependents.
+        if (!RuntimeFaults.breaks(SelfCheckFault.dependentFirst)) {
+          for (final dependent in dependentsOf(state, n)) {
+            failures += await deactivate(dependent, permanent: false).run();
+          }
+        }
+        assert(
+          !RuntimeFaults.checking || _dependentsReleasing(n),
+          'SelfCheck DependentFirst: the node ${labelOf(state, n)} releases '
+          'while a dependent is active',
+        );
         final own = await releaseFor(
           labelOf(state, n),
           nodeRecord(state, n).finalizers,
@@ -383,10 +414,45 @@ extension RuntimeActivation on Runtime {
           (s) =>
               endRelease(s, n, ownFailed: !own.isEmpty, permanent: permanent),
         );
-        _committed.update((all) => {...all}..remove(n));
+        _committed.update((all) => all.without(n));
         if (permanent) {
           _wake(n, Left<DiFailure, Object?>(const InactiveNodeFailure()));
         }
         return failures + own;
       });
+}
+
+/// The helpers of the self-checks of the activation and of the release.
+extension RuntimeActivationChecks on Runtime {
+  /// Whether each dependent of [n] is releasing, so that [n] releases after
+  /// them. A dependent that waits for the release of [n] in a read cycle
+  /// counts as releasing.
+  bool _dependentsReleasing(NodeId n) => dependentsOf(
+    state,
+    n,
+  ).every((dependent) => nodeRecord(state, dependent).deactivating);
+
+  /// Checks inside an `assert` that the node reads a key of its shape. The
+  /// fault `ReadsWithinShape` compares with an empty shape.
+  void _checkReadWithinShape(
+    RuntimeState s,
+    NodeRecord node,
+    DiKey<Object?> key,
+  ) {
+    assert(() {
+      if (!RuntimeFaults.checking) return true;
+      final component = componentOf(s, node);
+      final within =
+          !RuntimeFaults.breaks(SelfCheckFault.readsWithinShape) &&
+          (component.requires.contains(key) ||
+              component.optional.contains(key));
+      if (!within) {
+        throw AssertionError(
+          'SelfCheck ReadsWithinShape: ${component.label} reads $key, which '
+          'its dependency does not state',
+        );
+      }
+      return true;
+    }());
+  }
 }

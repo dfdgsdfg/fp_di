@@ -11,11 +11,40 @@ DiKey<int> _k(String name) => DiKey<int>(name: name);
 const _plugins = DiSetKey<int>(name: 'plugins');
 const _routes = DiMapKey<int>(name: 'routes');
 
+/// The components of one scope with a label and an origin for each component,
+/// as the test builds them.
+final class _Level {
+  _Level(this.components, {this.label})
+    : origins = List<String?>.filled(components.length, label);
+
+  _Level.all(Iterable<_Level> levels, {this.label})
+    : components = [for (final level in levels) ...level.components],
+      origins = [for (final level in levels) ...level.origins];
+
+  final String? label;
+  final List<Component<Object?>> components;
+  final List<String?> origins;
+
+  ShapeGraph graph({List<_Level> ancestors = const []}) => ShapeGraph.of(
+    components,
+    label: label,
+    origins: origins,
+    ancestors: [
+      for (final ancestor in ancestors)
+        (
+          label: ancestor.label,
+          components: ancestor.components,
+          origins: ancestor.origins,
+        ),
+    ],
+  );
+}
+
 void main() {
   group('shape export (V-T-RT-LC-022)', () {
     late List<String> created;
-    late ShapeModule boot;
-    late ShapeModule module;
+    late _Level boot;
+    late _Level module;
 
     Component<int> member(String name, Dependency<int> dependency) =>
         Component<int>(
@@ -29,10 +58,10 @@ void main() {
 
     setUp(() {
       created = <String>[];
-      boot = ShapeModule([
+      boot = _Level([
         Component<int>.value(value: 0, key: _k('config')),
       ], label: 'boot');
-      module = ShapeModule([
+      module = _Level([
         // 0, 1, 2: a chain
         member('a', Dependency<int>(create: () => 1)),
         member('b', Dependency.require<int>(key: _k('a'))),
@@ -96,7 +125,7 @@ void main() {
         'creates nothing', () {
       // from: shape_graph_test.dart: lists the members in declaration order
       // with their reads and creates nothing
-      final graph = ShapeGraph.ofModule(module, ancestors: [boot]);
+      final graph = (module).graph(ancestors: [boot]);
       final json = graph.toJsonObject();
       expect(created, isEmpty);
       expect(json['format'], 'fp_di.shape');
@@ -126,7 +155,7 @@ void main() {
         'key, and the kind', () {
       // from: shape_graph_test.dart: each edge names the waiting member, the
       // member it waits for, the key, and the kind
-      final graph = ShapeGraph.ofModule(module, ancestors: [boot]);
+      final graph = (module).graph(ancestors: [boot]);
       final edges = {
         for (final edge in graph.edges)
           (edge.from, edge.to, '${edge.key}', edge.kind),
@@ -152,7 +181,7 @@ void main() {
         'members', () {
       // from: shape_graph_test.dart: depths follow the waits and the longest
       // chain is the three members
-      final graph = ShapeGraph.ofModule(module, ancestors: [boot]);
+      final graph = (module).graph(ancestors: [boot]);
       expect(graph.depths.sublist(0, 10), [1, 2, 3, 1, 2, 1, 1, 2, 1, 2]);
       expect(graph.longestChain, [0, 1, 2]);
     });
@@ -162,11 +191,11 @@ void main() {
       // from: shape_graph_test.dart: an ancestor key is undeclared only
       // without the ancestor; a duplicate and an undeclared key are reported
       // without an error
-      final withBoot = ShapeGraph.ofModule(module, ancestors: [boot]);
+      final withBoot = (module).graph(ancestors: [boot]);
       expect(withBoot.undeclared.map((key) => '$key'), ['DiKey<int>(nowhere)']);
       expect(withBoot.duplicates.map((key) => '$key'), ['DiKey<int>(dup)']);
 
-      final alone = ShapeGraph.ofModule(module);
+      final alone = (module).graph();
       expect(alone.undeclared.map((key) => '$key'), [
         'DiKey<int>(config)',
         'DiKey<int>(nowhere)',
@@ -183,7 +212,7 @@ void main() {
     test('two members that read each other form one cycle of one depth', () {
       // from: shape_graph_test.dart: two members that read each other form
       // one cycle of one depth
-      final graph = ShapeGraph.ofModule(module, ancestors: [boot]);
+      final graph = (module).graph(ancestors: [boot]);
       expect(graph.cycles, [
         [14, 15],
       ]);
@@ -196,7 +225,7 @@ void main() {
     test('an empty module has no member, edge, or chain', () {
       // from: shape_graph_test.dart: an empty module has no member, edge, or
       // chain
-      final graph = ShapeGraph.ofModule(ShapeModule(const []));
+      final graph = (_Level(const [])).graph();
       expect(graph.depths, isEmpty);
       expect(graph.edges, isEmpty);
       expect(graph.longestChain, isEmpty);
@@ -207,7 +236,7 @@ void main() {
         'each edge, and creates nothing', () {
       // from: shape_graph_test.dart: the Mermaid text has one node for each
       // member and one line for each edge, and creates nothing
-      final graph = ShapeGraph.ofModule(module);
+      final graph = (module).graph();
       expect(graph.toMermaid().split('\n'), [
         'flowchart BT',
         '  m0["a"]',
@@ -245,10 +274,7 @@ void main() {
       // from: shape_graph_test.dart: the Mermaid text with an ancestor has
       // one subgraph for each scope and an arrow for the read that the
       // ancestor answers
-      final lines = ShapeGraph.ofModule(
-        module,
-        ancestors: [boot],
-      ).toMermaid().split('\n');
+      final lines = (module).graph(ancestors: [boot]).toMermaid().split('\n');
       expect(lines.sublist(0, 5), [
         'flowchart BT',
         '  subgraph s0["boot"]',
@@ -284,7 +310,7 @@ void main() {
         debugLabel: label,
         dependency: Dependency<int>(create: () => 1),
       );
-      final root = ShapeModule([
+      final root = _Level([
         value('far'),
         value('shadowed'),
         value('own'),
@@ -294,13 +320,13 @@ void main() {
         value('unread'),
       ], label: 'root "app"');
       // No member of the module reads this scope, so it has no subgraph.
-      final silent = ShapeModule([value('other')]);
-      final parent = ShapeModule([
+      final silent = _Level([value('other')]);
+      final parent = _Level([
         value('shadowed'),
         plugin('parentPlugin'),
         route('home', 'parentHome'),
       ]);
-      final child = ShapeModule([
+      final child = _Level([
         value('own'),
         member(
           'reader',
@@ -319,10 +345,7 @@ void main() {
           ).zip.map((_) => 0),
         ),
       ]);
-      final graph = ShapeGraph.ofModule(
-        child,
-        ancestors: [root, silent, parent],
-      );
+      final graph = (child).graph(ancestors: [root, silent, parent]);
       expect(graph.toMermaid().split('\n'), [
         'flowchart BT',
         '  subgraph s0["root #quot;app#quot;"]',
@@ -362,25 +385,25 @@ void main() {
       // origin
       Component<int> value(String name) =>
           Component<int>.value(value: 0, key: _k(name), debugLabel: name);
-      final root = ShapeModule.all([
-        ShapeModule([value('config')], label: 'core <boot>'),
-        ShapeModule([value('clock'), value('unread')]),
-        ShapeModule([value('http')], label: 'net'),
+      final root = _Level.all([
+        _Level([value('config')], label: 'core <boot>'),
+        _Level([value('clock'), value('unread')]),
+        _Level([value('http')], label: 'net'),
       ]);
-      final child = ShapeModule.all([
-        ShapeModule([
+      final child = _Level.all([
+        _Level([
           member('login', Dependency.require(key: _k('http'))),
         ], label: 'auth'),
-        ShapeModule([member('free', Dependency.require(key: _k('clock')))]),
-        ShapeModule([
+        _Level([member('free', Dependency.require(key: _k('clock')))]),
+        _Level([
           member('feed', Dependency.require(key: _k('login'))),
         ], label: 'feed'),
-        ShapeModule([
+        _Level([
           member('token', Dependency.require(key: _k('config'))),
         ], label: 'auth'),
       ]);
 
-      final alone = ShapeGraph.ofModule(child);
+      final alone = (child).graph();
       expect(
         [
           for (final m in alone.toJsonObject()['members']! as List)
@@ -402,35 +425,32 @@ void main() {
         '  m2 --> m0',
       ]);
 
-      expect(
-        ShapeGraph.ofModule(child, ancestors: [root]).toMermaid().split('\n'),
-        [
-          'flowchart BT',
-          '  subgraph s0["scope 0"]',
-          '    s0m1["clock"]',
-          '    subgraph s0g0["core #lt;boot#gt;"]',
-          '      s0m0["config"]',
-          '    end',
-          '    subgraph s0g1["net"]',
-          '      s0m3["http"]',
-          '    end',
-          '  end',
-          '  subgraph s1["scope 1"]',
-          '    m1["free"]',
-          '    subgraph g0["auth"]',
-          '      m0["login"]',
-          '      m3["token"]',
-          '    end',
-          '    subgraph g1["feed"]',
-          '      m2["feed"]',
-          '    end',
-          '  end',
-          '  m2 --> m0',
-          '  m0 --> s0m3',
-          '  m1 --> s0m1',
-          '  m3 --> s0m0',
-        ],
-      );
+      expect((child).graph(ancestors: [root]).toMermaid().split('\n'), [
+        'flowchart BT',
+        '  subgraph s0["scope 0"]',
+        '    s0m1["clock"]',
+        '    subgraph s0g0["core #lt;boot#gt;"]',
+        '      s0m0["config"]',
+        '    end',
+        '    subgraph s0g1["net"]',
+        '      s0m3["http"]',
+        '    end',
+        '  end',
+        '  subgraph s1["scope 1"]',
+        '    m1["free"]',
+        '    subgraph g0["auth"]',
+        '      m0["login"]',
+        '      m3["token"]',
+        '    end',
+        '    subgraph g1["feed"]',
+        '      m2["feed"]',
+        '    end',
+        '  end',
+        '  m2 --> m0',
+        '  m0 --> s0m3',
+        '  m1 --> s0m1',
+        '  m3 --> s0m0',
+      ]);
 
       // Collapsed, each origin is one node with the id of its subgraph, and
       // the members without an origin are the node of the scope.
@@ -444,10 +464,7 @@ void main() {
       // A node of an ancestor states every member of its origin: `unread`
       // counts in `s0r`, and no arrow reaches it.
       expect(
-        ShapeGraph.ofModule(
-          child,
-          ancestors: [root],
-        ).toMermaid(collapsed: true).split('\n'),
+        (child).graph(ancestors: [root]).toMermaid(collapsed: true).split('\n'),
         [
           'flowchart BT',
           '  subgraph s0["scope 0"]',
@@ -468,8 +485,8 @@ void main() {
       );
 
       // A member with the label of its own module is in no subgraph.
-      final labeled = ShapeModule([value('one')], label: 'app');
-      expect(ShapeGraph.ofModule(labeled).toMermaid().split('\n'), [
+      final labeled = _Level([value('one')], label: 'app');
+      expect((labeled).graph().toMermaid().split('\n'), [
         'flowchart BT',
         '  m0["one"]',
       ]);
@@ -491,25 +508,25 @@ void main() {
             key: _k(name),
           ).map((value) => value.getOrElse(() => 0)),
       ].reduce((left, right) => (left, right).zip.map((_) => 0));
-      final app = ShapeModule.all([
-        ShapeModule([
+      final app = _Level.all([
+        _Level([
           member('a', Dependency<int>(create: () => 1)),
           // A read inside one origin has no arrow.
           member('b', reads(require: ['a'])),
         ], label: 'core'),
-        ShapeModule([
+        _Level([
           member('c', reads(maybe: ['a'])),
           member('d', reads(maybe: ['b'])),
         ], label: 'ui'),
         // A part with the label of the composed module has no subgraph.
-        ShapeModule([
+        _Level([
           member('e', reads(require: ['a'], maybe: ['b', 'c'])),
         ], label: 'app'),
-        ShapeModule([
+        _Level([
           member('f', reads(require: ['c'], maybe: ['a'])),
         ], label: 'data'),
       ], label: 'app');
-      final graph = ShapeGraph.ofModule(app);
+      final graph = (app).graph();
       expect(graph.toJsonObject()['label'], 'app');
       expect(graph.edges, hasLength(8));
       expect(graph.toMermaid(collapsed: true).split('\n'), [
@@ -542,12 +559,12 @@ void main() {
       );
       // A module without origins collapses to one node, and an empty module
       // to none.
+      expect((module).graph().toMermaid(collapsed: true).split('\n'), [
+        'flowchart BT',
+        '  r["app<br/>16 members"]',
+      ]);
       expect(
-        ShapeGraph.ofModule(module).toMermaid(collapsed: true).split('\n'),
-        ['flowchart BT', '  r["app<br/>16 members"]'],
-      );
-      expect(
-        ShapeGraph.ofModule(ShapeModule(const [])).toMermaid(collapsed: true),
+        (_Level(const [])).graph().toMermaid(collapsed: true),
         'flowchart BT',
       );
       expect(created, isEmpty);
@@ -557,15 +574,13 @@ void main() {
         'quoted label', () {
       // from: shape_graph_test.dart: the Mermaid text keeps a label with
       // markup characters in one quoted label
-      final graph = ShapeGraph.ofModule(
-        ShapeModule([
-          Component<int>(
-            key: _k('a'),
-            debugLabel: 'say "hi" <b> #1 & `x`\r\nnext [y] | (z)',
-            dependency: Dependency<int>(create: () => 1),
-          ),
-        ]),
-      );
+      final graph = (_Level([
+        Component<int>(
+          key: _k('a'),
+          debugLabel: 'say "hi" <b> #1 & `x`\r\nnext [y] | (z)',
+          dependency: Dependency<int>(create: () => 1),
+        ),
+      ])).graph();
       expect(graph.toMermaid().split('\n'), [
         'flowchart BT',
         '  m0["say #quot;hi#quot; #lt;b#gt; #35;1 #amp; #96;x#96;<br/>'
@@ -648,17 +663,17 @@ void main() {
       ]);
     });
 
-    test('a ShapeModule checks its origins and keeps copies', () {
+    test('the origins have one entry for each component', () {
       final source = [Component<int>.value(value: 1, key: _k('a'))];
-      final module = ShapeModule(source, label: 'core');
-      source.add(Component<int>.value(value: 2, key: _k('b')));
-      expect(module.components, hasLength(1));
-      expect(module.origins, ['core']);
-      expect(() => module.components.add(source.first), throwsUnsupportedError);
       expect(
-        () => ShapeModule.withOrigins(source, ['one']),
+        () => ShapeGraph.of(source, origins: ['one', 'two']),
         throwsArgumentError,
       );
+      final graph = ShapeGraph.of(source, label: 'core');
+      source.add(Component<int>.value(value: 2, key: _k('b')));
+      expect(graph.components, hasLength(1), reason: 'the graph keeps a copy');
+      expect(graph.label, 'core');
+      expect(() => graph.components.add(source.first), throwsUnsupportedError);
     });
 
     test('the export of 8000 components in a chain stays linear', () {

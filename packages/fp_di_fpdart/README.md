@@ -618,15 +618,14 @@ created and no `create` runs. `toJson` and `toMermaid` have the schema and the
 text of `ShapeGraph` of `fp_di`: `format` is `fp_di.shape` and `version` is 1.
 `toMermaid(collapsed: true)` draws one node for each origin.
 
-A list of components has no label and no origin. A `ShapeModule` gives a list
-the `label` of its scope and an origin for each component. `ShapeModule.all`
-joins modules and keeps the origin of each component.
-`ShapeGraph.of(components, label:, origins:, ancestors:)` and
-`ShapeGraph.ofModule(module, ancestors:)` take the modules of the ancestor
-scopes, root first. They decide which required keys are `undeclared`, and the
-chart draws the reads that cross a scope. Both `label` values and the
-origins are only for the tools: a `Scope` ignores them. A `Scope` takes the
-same label as `debugLabel`.
+A list of components has no label and no origin, so `ShapeGraph.of` takes them
+as named arguments: `label` for the scope, `origins` with one origin for each
+component, and `ancestors`, a list of records `(label:, components:, origins:)`
+for the ancestor scopes, root first. The ancestors decide which required keys
+are `undeclared`, and the chart draws the reads that cross a scope. The
+arguments are only for the tools: a `Scope` ignores them. A `Scope` takes the
+same label as `debugLabel`. The names of the JSON fields, such as `label` and
+`ancestors`, are the names of the schema of `fp_di`, where a module has them.
 
 The time of the build and of each export is linear in the number of components
 and reads. The sets `publishes`, `requires`, `reads`, and `contributes` of the
@@ -734,6 +733,17 @@ surface. Inside, the pieces are pure values.
   cancellation token before each step, and holds the finalizers.
 - A `Component` has no layer. The runtime has no stratum: the order of
   activation comes from the reads of the nodes of one scope.
+- The maps of `RuntimeState` are persistent hash tries (`PMap`), so a
+  transition copies a path and shares the rest. The state keeps an index of the
+  readers of each node and each key, so a query touches only the affected nodes.
+  The snapshots of the observers update only the changed nodes. A scope of 4000
+  components runs and disposes in less than one second.
+- The runtime has debug self-checks and deliberate defects for the tests
+  (`src/faults.dart`). The runtime reads the switches only inside `assert`, so a
+  release build carries no cost and no switch. `test/lifecycle_fuzz_test.dart`
+  runs random histories against these checks, and
+  `test/lifecycle_fuzz_defect_test.dart` turns on each defect and checks that
+  the matching check reports it.
 
 ## Child scopes
 
@@ -780,10 +790,6 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 
 The package does not reproduce these behaviors of `fp_di`.
 
-- The cost of `run` is quadratic in the number of components. Each transition
-  copies the maps of the runtime. A scope of 2000 components runs in about two
-  seconds, and a scope of 4000 components runs in six to ten seconds. `fp_di`
-  runs the same scopes in less than one second.
 - A slow report names the operation `run`, where `fp_di` names it
   `initialize`.
 - The rollback of the creation of a `Lazy` value does not appear in
@@ -793,8 +799,8 @@ The package does not reproduce these behaviors of `fp_di`.
 - The inspector gives the failure of a node by the error that a step threw,
   and the type of a reported cause by the first failure (see the table in
   [DevTools inspector](#devtools-inspector)).
-- `ShapeGraph` takes a list of components and an optional `ShapeModule`
-  for the label and the origins, where `fp_di` takes a `Module`. A component
+- `ShapeGraph` takes a list of components with the named arguments `label`,
+  `origins`, and `ancestors`, where `fp_di` takes a `Module`. A component
   without a debug label and without a key has the label `effect<T>#id` in a
   scope and `effect<T>` in a shape, where `fp_di` says `Component<T>`.
 - A `Scope` has an optional `debugLabel`, which `fp_di` has as the label of

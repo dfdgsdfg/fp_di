@@ -152,7 +152,11 @@ extension RuntimeKernel on Runtime {
     // released is a future of the zone that created it, and a listener on a
     // completed future runs in that zone. That zone can be dead by now, and
     // then the waiting mutation never starts.
-    final previous = _open.now > 0 ? _queueTail.now : null;
+    // The fault `SerialMutations` removes the wait.
+    final previous =
+        _open.now > 0 && !RuntimeFaults.breaks(SelfCheckFault.serialMutations)
+        ? _queueTail.now
+        : null;
     final gate = Completer<void>();
     _queueTail.set(gate.future);
     _open.update((open) => open + 1);
@@ -174,12 +178,21 @@ extension RuntimeKernel on Runtime {
       // The timer runs in the zone of the caller, outside the mutation, so a
       // listener of a slow report can request a mutation, which queues.
       final slow = _watchSlow(operation, callerZone);
+      var counted = false;
       try {
+        assert(
+          !RuntimeFaults.checking || _running.now == 0,
+          'SelfCheck SerialMutations: $operation starts while another '
+          'operation of the runtime still runs',
+        );
+        _running.update((running) => running + 1);
+        counted = true;
         return await Zone.current
             .fork(zoneValues: {_zoneKey: marker})
             .run<Future<Exit<DiFailure, A>>>(action);
       } finally {
         slow?.cancel();
+        if (counted) _running.update((running) => running - 1);
         marker.running.set(false);
         _open.update((open) => open - 1);
         gate.complete();
@@ -190,8 +203,21 @@ extension RuntimeKernel on Runtime {
   /// The state of the scope [id], which shares its objects with the states
   /// that earlier reads returned.
   ScopeState scopeStateOf(ScopeId id) {
-    final (value, next) = scopeStateShared(state, id, _snapshots.now);
+    // The fault `SnapshotsCurrent` finds no changed node.
+    final (value, next) = scopeStateShared(
+      state,
+      id,
+      _snapshots.now,
+      findChanges: !RuntimeFaults.breaks(SelfCheckFault.snapshotsCurrent),
+    );
     _snapshots.set(next);
+    assert(
+      !RuntimeFaults.verifySnapshots ||
+          !RuntimeFaults.checking ||
+          value == scopeState(state, id),
+      'SelfCheck SnapshotsCurrent: the state of the scope differs from the '
+      'state that the runtime builds from its records',
+    );
     return value;
   }
 
@@ -200,6 +226,13 @@ extension RuntimeKernel on Runtime {
   NodeState nodeStateOf(NodeId n) {
     final (value, next) = nodeStateShared(state, n, _snapshots.now);
     _snapshots.set(next);
+    assert(
+      !RuntimeFaults.verifySnapshots ||
+          !RuntimeFaults.checking ||
+          value == nodeState(state, n),
+      'SelfCheck SnapshotsCurrent: the state of the node differs from the '
+      'state that the runtime builds from its records',
+    );
     return value;
   }
 

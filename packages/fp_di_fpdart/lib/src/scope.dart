@@ -6,6 +6,7 @@ import 'cause.dart';
 import 'component.dart';
 import 'core/core.dart';
 import 'failure.dart';
+import 'faults.dart';
 import 'hold.dart';
 import 'key.dart';
 import 'node.dart';
@@ -444,11 +445,39 @@ final class Scope {
     final read = key ?? DiKey<T>();
     if (_gone) return Left(const DisposedScopeFailure('get'));
     final s = _runtime.state;
-    return resolve(s, _id, read).match(
-      () => Left(unavailableKey(s, _id, read)),
+    // The defect `FarthestBinding` selects the binding of the farthest scope.
+    final found = RuntimeFaults.injects(Defect.farthestBinding)
+        ? _farthest(s, read)
+        : resolve(s, _id, read);
+    return found.match(
+      () {
+        final failure = unavailableKey(s, _id, read);
+        // The defect `DropFailedNodes` leaves the failed nodes out.
+        return Left(
+          RuntimeFaults.injects(Defect.dropFailedNodes)
+              ? UnavailableKeyFailure(read, message: failure.message)
+              : failure,
+        );
+      },
       (publisher) =>
           Right(nodeRecord(s, publisher.node).value.toNullable() as T),
     );
+  }
+
+  Option<PublisherRef> _farthest(RuntimeState s, DiKey<Object?> key) {
+    final chain = <ScopeId>[];
+    for (
+      ScopeId? at = _id;
+      at != null;
+      at = scopeRecord(s, at).parent.toNullable()
+    ) {
+      chain.add(at);
+    }
+    for (final at in chain.reversed) {
+      final found = resolve(s, at, key);
+      if (found.isSome()) return found;
+    }
+    return const None();
   }
 
   /// Like [get], with an `Option`: `None` for every failure.

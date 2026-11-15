@@ -144,14 +144,22 @@ extension RuntimeHolds on Runtime {
     );
     zone.run(() {
       final exit = _queueDisposal(id, ignored);
-      void settle(Disposal d, Completer<Exit<DiFailure, Unit>> c) =>
-          exit.then((result) {
-            c.complete(result);
-            d.finished.set(true);
-          });
+      void settle(Disposal d, Completer<Exit<DiFailure, Unit>> c) => exit.then(
+        (result) {
+          c.complete(result);
+          d.finished.set(true);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          c.completeError(error, stackTrace);
+          d.finished.set(true);
+        },
+      );
       settle(disposal, completer);
-      for (final parked in waiting) {
-        settle(parked.disposal, parked.completer);
+      // The defect `LoseHeldCaller` leaves the waiting calls incomplete.
+      if (!RuntimeFaults.injects(Defect.loseHeldCaller)) {
+        for (final parked in waiting) {
+          settle(parked.disposal, parked.completer);
+        }
       }
     });
   }
@@ -211,7 +219,10 @@ extension RuntimeHolds on Runtime {
               false)
             labelOf(s, node.id),
       ],
-      disposing: _releasing.now,
+      disposing: [
+        for (final key in _releasing.now.keys.toList()..sort())
+          _releasing.now[key]!,
+      ],
       queued: _queued.now,
     );
   }
@@ -235,13 +246,39 @@ extension RuntimeHolds on Runtime {
   /// the dispose failures. A slow report names the owner while it releases.
   Task<Cause<DiFailure>> releaseFor(String owner, Finalizers finalizers) =>
       Task(() async {
-        _releasing.update((all) => [...all, owner]);
+        final number = _releaseSeq.now;
+        _releaseSeq.set(number + 1);
+        _releasing.update((all) => all.put(number, owner));
+        // The fault `ReleaseAtMostOnce` runs the stack a second time.
+        final passes = RuntimeFaults.breaks(SelfCheckFault.releaseAtMostOnce)
+            ? 2
+            : 1;
         try {
-          return await finalizers.release().run();
+          var cause = const Empty<DiFailure>() as Cause<DiFailure>;
+          for (var pass = 0; pass < passes; pass++) {
+            assert(
+              !RuntimeFaults.checking || _startRelease(finalizers, owner),
+              'SelfCheck ReleaseAtMostOnce: $owner starts the release of its '
+              'dispose functions a second time',
+            );
+            cause += await finalizers.release().run();
+          }
+          return cause;
         } finally {
-          _releasing.update(
-            (all) => [...all]..removeAt(all.lastIndexOf(owner)),
-          );
+          _releasing.update((all) => all.without(number));
         }
       });
+}
+
+/// The stacks of dispose functions that a release started. The key is the
+/// stack, so the check keeps none alive.
+final Expando<bool> _released = Expando<bool>('released stacks');
+
+/// Records the start of the release of [finalizers], and tells whether it is
+/// the first. A stack without an entry has nothing to release twice.
+bool _startRelease(Finalizers finalizers, String owner) {
+  if (finalizers.isEmpty) return true;
+  if (_released[finalizers] == true) return false;
+  _released[finalizers] = true;
+  return true;
 }

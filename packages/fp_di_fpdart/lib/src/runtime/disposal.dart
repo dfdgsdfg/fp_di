@@ -21,7 +21,9 @@ extension RuntimeDisposal on Runtime {
   }) => Task(() async {
     final tree = subtree(state, id);
     apply((s) => markDisposing(s, tree));
-    if (ignored.isNotEmpty) {
+    // The defect `DropIgnoredReport` skips the report.
+    if (ignored.isNotEmpty &&
+        !RuntimeFaults.injects(Defect.dropIgnoredReport)) {
       report(Fail<DiFailure>(IgnoredHoldsFailure(ignored), StackTrace.current));
     }
     final included = tree.toSet();
@@ -69,12 +71,21 @@ extension RuntimeDisposal on Runtime {
   }) {
     final owner = disposalOwner(id);
     if (owner.match(() => false, (disposal) => disposal.finished.now)) {
+      // The defect `ReplayAfterEnd` gives the result of the finished disposal.
+      if (RuntimeFaults.injects(Defect.replayAfterEnd)) {
+        return owner.toNullable()!.result;
+      }
       return Future.value(const Right<Cause<DiFailure>, Unit>(unit));
     }
     if (owner.isNone() && scopeRecord(state, id).disposed) {
       return Future.value(const Right<Cause<DiFailure>, Unit>(unit));
     }
     if (inMutation) {
+      // The defect `LateReentrancyCheck` records the request before the
+      // rejection.
+      if (owner.isNone() && RuntimeFaults.injects(Defect.lateReentrancyCheck)) {
+        if (write((s) => requestScopeDisposal(s, id))) transition();
+      }
       return Future.value(
         Left<Cause<DiFailure>, Unit>(
           Fail<DiFailure>(
@@ -90,6 +101,13 @@ extension RuntimeDisposal on Runtime {
       // joins.
       final at = disposalOwnerId(id).toNullable();
       if (ignoreHolds && at != null) unpark(at, holdStatesOf(at));
+      // The defect `SecondCallerOk` hides the result from a joining call.
+      if (RuntimeFaults.injects(Defect.secondCallerOk)) {
+        return joined.result.then(
+          (_) => const Right<Cause<DiFailure>, Unit>(unit),
+          onError: (Object _) => const Right<Cause<DiFailure>, Unit>(unit),
+        );
+      }
       return joined.result;
     }
 
@@ -108,7 +126,10 @@ extension RuntimeDisposal on Runtime {
     _scopeDisposals.update((all) => {...all, id: disposal});
     // The one decision point: queue the disposal now, or park it while a hold
     // of the subtree is open. A call with `ignoreHolds` never parks.
-    if (ignoreHolds || subtreeHolds(id) == 0) {
+    // The defect `QueueWithHolds` queues the disposal while a hold is open.
+    if (ignoreHolds ||
+        RuntimeFaults.injects(Defect.queueWithHolds) ||
+        subtreeHolds(id) == 0) {
       _queueNow(
         id,
         disposal,
@@ -193,7 +214,7 @@ extension RuntimeDisposal on Runtime {
 
     final completer = Completer<Exit<DiFailure, Unit>>();
     final disposal = Disposal(completer.future);
-    _nodeDisposals.update((all) => {...all, n: disposal});
+    _nodeDisposals.update((all) => all.put(n, disposal));
     mutate<Unit>('ComponentNode.dispose', () async {
       if (nodeRecord(state, n).removed) {
         write((s) => finishWithdrawal(s, n));
@@ -206,10 +227,18 @@ extension RuntimeDisposal on Runtime {
       return failures.isEmpty
           ? const Right<Cause<DiFailure>, Unit>(unit)
           : Left<Cause<DiFailure>, Unit>(failures);
-    }).then((exit) {
-      completer.complete(exit);
-      disposal.finished.set(true);
-    });
+    }).then(
+      (exit) {
+        completer.complete(exit);
+        disposal.finished.set(true);
+      },
+      // Only a failed self-check or a bug of the runtime throws here. The
+      // callers of the disposal get the error.
+      onError: (Object error, StackTrace stackTrace) {
+        completer.completeError(error, stackTrace);
+        disposal.finished.set(true);
+      },
+    );
     return disposal.result;
   }
 }

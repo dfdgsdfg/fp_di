@@ -7,6 +7,7 @@ import '../failure.dart';
 import '../finalizers.dart';
 import '../key.dart';
 import 'ids.dart';
+import 'persistent_map.dart';
 import 'phases.dart';
 import 'queries.dart';
 import 'records.dart';
@@ -18,11 +19,22 @@ import 'runtime_state.dart';
 
 RuntimeState _bumped(RuntimeState s) => s.copyWith(revision: s.revision + 1);
 
-RuntimeState _withNode(RuntimeState s, NodeRecord node) =>
-    s.copyWith(nodes: {...s.nodes, node.id: node});
+RuntimeState _withNode(RuntimeState s, NodeRecord node) => s.withNode(node);
+
+PMap<DiKey<Object?>, PublisherRef> _bind(
+  PMap<DiKey<Object?>, PublisherRef> bindings,
+  Iterable<DiKey<Object?>> keys,
+  PublisherRef publisher,
+) {
+  var next = bindings;
+  for (final key in keys) {
+    next = next.put(key, publisher);
+  }
+  return next;
+}
 
 RuntimeState _withScope(RuntimeState s, ScopeRecord scope) =>
-    s.copyWith(scopes: {...s.scopes, scope.id: scope});
+    s.withScope(scope);
 
 /// Whether the phase of one of [ids] differs between [before] and [after].
 bool _phaseChanged(RuntimeState before, RuntimeState after, List<ScopeId> ids) {
@@ -69,14 +81,17 @@ bool _sameView(_NodeView a, _NodeView b) {
   List<Component<Object?>> cs,
 ) {
   final id = ScopeId(s.nextScopeId);
-  final scopes = {
-    ...s.scopes,
-    id: ScopeRecord(id: id, parent: parent, components: cs),
-  };
+  var scopes = s.scopes.put(
+    id,
+    ScopeRecord(id: id, parent: parent, components: cs),
+  );
   final parentId = parent.toNullable();
   if (parentId != null) {
     final record = scopeRecord(s, parentId);
-    scopes[parentId] = record.copyWith(children: [...record.children, id]);
+    scopes = scopes.put(
+      parentId,
+      record.copyWith(children: [...record.children, id]),
+    );
   }
   return (
     s.copyWith(
@@ -97,15 +112,12 @@ bool _sameView(_NodeView a, _NodeView b) {
   final ids = [
     for (var i = 0; i < scope.components.length; i++) NodeId(s.nextNodeId + i),
   ];
-  final created = {
-    for (var i = 0; i < ids.length; i++)
-      ids[i]: NodeRecord(id: ids[i], scope: id, index: i),
-  };
+  var created = s;
+  for (var i = 0; i < ids.length; i++) {
+    created = created.withNode(NodeRecord(id: ids[i], scope: id, index: i));
+  }
   final next = _withScope(
-    s.copyWith(
-      nodes: {...s.nodes, ...created},
-      nextNodeId: s.nextNodeId + ids.length,
-    ),
+    created.copyWith(nextNodeId: s.nextNodeId + ids.length),
     scope.copyWith(nodes: ids, initializing: true),
   );
   return (_bumped(next), ids);
@@ -178,10 +190,7 @@ RuntimeState commit(
       ),
     ),
     scope.copyWith(
-      bindings: {
-        ...scope.bindings,
-        for (final key in declaredPublishes(s, node)) key: publisher,
-      },
+      bindings: _bind(scope.bindings, declaredPublishes(s, node), publisher),
     ),
   );
   return _bumped(next);
@@ -273,15 +282,12 @@ RuntimeState endRelease(
 
 RuntimeState _withoutBindings(RuntimeState s, NodeRecord node) {
   final scope = scopeRecord(s, node.scope);
-  return _withScope(
-    s,
-    scope.copyWith(
-      bindings: {
-        for (final MapEntry(:key, value: publisher) in scope.bindings.entries)
-          if (publisher.node != node.id) key: publisher,
-      },
-    ),
-  );
+  var bindings = scope.bindings;
+  // The node binds the keys that it publishes, and no other key.
+  for (final key in declaredPublishes(s, node)) {
+    if (bindings[key]?.node == node.id) bindings = bindings.without(key);
+  }
+  return _withScope(s, scope.copyWith(bindings: bindings));
 }
 
 /// Removes the node [n] for good.
@@ -362,32 +368,32 @@ RuntimeState addWithdrawal(RuntimeState s, NodeId root, Set<NodeId> canceled) {
     ...s.withdrawals,
     Withdrawal(root, withdrawalReach(s, root)),
   ];
-  return s.copyWith(
-    withdrawals: withdrawals,
-    nodes: {
-      for (final MapEntry(:key, value: node) in s.nodes.entries)
-        key: canceled.contains(key)
-            ? node.copyWith(awaiting: {...node.awaiting, root})
-            : node,
-    },
-  );
+  var next = s.copyWith(withdrawals: withdrawals);
+  for (final n in canceled) {
+    final node = nodeRecord(next, n);
+    next = next.withNode(node.copyWith(awaiting: {...node.awaiting, root}));
+  }
+  return next;
 }
 
 /// Ends the withdrawal of [root].
 ///
 /// No node waits for [root] any more. The revision stays.
-RuntimeState finishWithdrawal(RuntimeState s, NodeId root) => s.copyWith(
-  withdrawals: [
-    for (final withdrawal in s.withdrawals)
-      if (withdrawal.root != root) withdrawal,
-  ],
-  nodes: {
-    for (final MapEntry(:key, value: node) in s.nodes.entries)
-      key: node.awaiting.contains(root)
-          ? node.copyWith(awaiting: {...node.awaiting}..remove(root))
-          : node,
-  },
-);
+RuntimeState finishWithdrawal(RuntimeState s, NodeId root) {
+  var next = s.copyWith(
+    withdrawals: [
+      for (final withdrawal in s.withdrawals)
+        if (withdrawal.root != root) withdrawal,
+    ],
+  );
+  for (final node in s.nodes.values) {
+    if (!node.awaiting.contains(root)) continue;
+    next = next.withNode(
+      node.copyWith(awaiting: {...node.awaiting}..remove(root)),
+    );
+  }
+  return next;
+}
 
 /// Starts the disposal of the scopes of [subtree].
 ///

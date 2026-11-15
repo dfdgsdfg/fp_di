@@ -7,6 +7,7 @@ import '../failure.dart';
 import '../finalizers.dart';
 import '../key.dart';
 import 'ids.dart';
+import 'persistent_map.dart';
 
 /// The immutable record of one scope.
 ///
@@ -44,7 +45,7 @@ final class ScopeRecord {
       disposing: disposing,
       disposed: disposed,
       nodes: List.unmodifiable(nodes),
-      bindings: Map.unmodifiable(bindings),
+      bindings: PMap.from(bindings),
       contributionKeys: List.unmodifiable(keys),
       keyIndex: Map.unmodifiable(keyIndex ?? _indexOfKeys(components, keys)),
     );
@@ -98,7 +99,7 @@ final class ScopeRecord {
   final List<NodeId> nodes;
 
   /// The committed publications of the nodes of this scope, by key.
-  final Map<DiKey<Object?>, PublisherRef> bindings;
+  final PMap<DiKey<Object?>, PublisherRef> bindings;
 
   /// The key of each declaration that contributes to a set, by position, and
   /// `null` for another component. Each declaration has a key of its own, so
@@ -120,18 +121,18 @@ final class ScopeRecord {
     bool? disposed,
     List<NodeId>? nodes,
     Map<DiKey<Object?>, PublisherRef>? bindings,
-  }) => ScopeRecord(
+  }) => ScopeRecord._(
     id: id,
     parent: parent,
     components: components,
-    children: children ?? this.children,
+    children: children == null ? this.children : List.unmodifiable(children),
     initializing: initializing ?? this.initializing,
     initialized: initialized ?? this.initialized,
     disposeRequested: disposeRequested ?? this.disposeRequested,
     disposing: disposing ?? this.disposing,
     disposed: disposed ?? this.disposed,
-    nodes: nodes ?? this.nodes,
-    bindings: bindings ?? this.bindings,
+    nodes: nodes == null ? this.nodes : List.unmodifiable(nodes),
+    bindings: bindings == null ? this.bindings : PMap.from(bindings),
     contributionKeys: contributionKeys,
     keyIndex: keyIndex,
   );

@@ -5,6 +5,7 @@
 export 'describe.dart';
 export 'ids.dart';
 export 'inspect.dart';
+export 'persistent_map.dart';
 export 'phases.dart';
 export 'queries.dart';
 export 'records.dart';

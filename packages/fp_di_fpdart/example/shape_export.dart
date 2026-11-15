@@ -11,8 +11,8 @@
 // The JSON has the schema of `fp_di`, so a tool that reads the export of
 // `fp_di` reads this one.
 //
-// A list of components has no label. A `ShapeModule` gives the list the label
-// of its scope, and an optional origin for each component.
+// A list of components has no label. `ShapeGraph.of` takes the label of the
+// scope, and an optional origin for each component, as named arguments.
 //
 //   dart run packages/fp_di_fpdart/example/shape_export.dart             # summary
 //   dart run packages/fp_di_fpdart/example/shape_export.dart build/shape # the files
@@ -48,11 +48,11 @@ final class Push implements Startup {}
 const startups = DiSetKey<Startup>(name: 'startup');
 
 /// The boot scope publishes the configuration.
-final bootModule = ShapeModule([
+final bootComponents = <Component<Object?>>[
   Component<Config>.value(value: Config()),
-], label: 'boot');
+];
 
-ShapeModule appModule(Flavor flavor, Platform platform) => ShapeModule([
+List<Component<Object?>> appComponents(Flavor flavor, Platform platform) => [
   Component<Http>(
     dependency: Dependency.require<Config>().map<Http>((_) => Http()),
   ),
@@ -77,7 +77,7 @@ ShapeModule appModule(Flavor flavor, Platform platform) => ShapeModule([
   ),
   if (flavor != Flavor.prod)
     Component<Debug>(dependency: Dependency.option<Feed>().map((_) => Debug())),
-], label: '${flavor.name}.${platform.name}');
+];
 
 // --- The script ------------------------------------------------------------
 
@@ -87,20 +87,22 @@ void main(List<String> args) {
   var problems = 0;
   for (final flavor in Flavor.values) {
     for (final platform in Platform.values) {
-      final module = appModule(flavor, platform);
-      final graph = ShapeGraph.ofModule(module, ancestors: [bootModule]);
-      final name = module.label!;
+      final components = appComponents(flavor, platform);
+      final name = '${flavor.name}.${platform.name}';
+      final graph = ShapeGraph.of(
+        components,
+        label: name,
+        ancestors: [(label: 'boot', components: bootComponents, origins: null)],
+      );
       if (out != null) {
         File('${out.path}/$name.json').writeAsStringSync('${graph.toJson()}\n');
         File(
           '${out.path}/$name.mmd',
         ).writeAsStringSync('${graph.toMermaid()}\n');
       }
-      final chain = [
-        for (final i in graph.longestChain) module.components[i].label,
-      ];
+      final chain = [for (final i in graph.longestChain) components[i].label];
       print(
-        '$name: ${module.components.length} members, '
+        '$name: ${components.length} members, '
         'depth ${graph.depths.fold(0, (a, b) => a > b ? a : b)}, '
         'longest chain ${chain.join(' -> ')}',
       );

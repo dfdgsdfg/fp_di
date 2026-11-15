@@ -5,6 +5,7 @@ import '../cause.dart';
 import '../failure.dart';
 import '../key.dart';
 import 'ids.dart';
+import 'persistent_map.dart';
 import 'phases.dart';
 import 'queries.dart';
 import 'runtime_state.dart';
@@ -288,17 +289,30 @@ List<NodeId>? readsPath(RuntimeState s, NodeId from, NodeId target) {
 ///
 /// The value is immutable. [scopeStateShared] takes one and gives the next
 /// one. The shell keeps the current one in a cell. A read at the revision that
-/// the memo knows gives the same object. A read at a later revision builds the
-/// scopes again, and keeps the earlier object of each node state that is equal
-/// and of each scope state whose parts are the same objects.
+/// the memo knows gives the same object. A read at a later revision finds the
+/// nodes that may differ, builds only their states again, and keeps the earlier
+/// object of each node state that is equal and of each scope state whose parts
+/// are the same objects.
+///
+/// The memo holds the state of the runtime that it last read. The difference
+/// between that state and the new state gives the changed records without a
+/// walk over the unchanged ones, so a read costs a time that depends on the
+/// number of changes.
 final class Snapshots {
-  const Snapshots._(this._nodes, this._scopes);
+  const Snapshots._(this._nodes, this._scopes, this._basis);
 
   /// A memo without a snapshot.
-  static const Snapshots empty = Snapshots._({}, {});
+  static final Snapshots empty = Snapshots._(
+    PMap.empty<NodeId, NodeState>(),
+    PMap.empty<ScopeId, ({int revision, ScopeState state})>(),
+    null,
+  );
 
-  final Map<NodeId, NodeState> _nodes;
-  final Map<ScopeId, ({int revision, ScopeState state})> _scopes;
+  final PMap<NodeId, NodeState> _nodes;
+  final PMap<ScopeId, ({int revision, ScopeState state})> _scopes;
+
+  /// The state of the runtime at the last read, or `null` before it.
+  final RuntimeState? _basis;
 }
 
 bool _sameObjects<T>(List<T> a, List<T> b) {
@@ -307,6 +321,52 @@ bool _sameObjects<T>(List<T> a, List<T> b) {
     if (!identical(a[i], b[i])) return false;
   }
   return true;
+}
+
+/// The nodes whose state in [s] can differ from their state in [basis].
+///
+/// A node qualifies when its record changed. A node also qualifies when it
+/// needs a key whose binding changed, or whose publisher changed, and when it
+/// reads a strict collection and a scope changed in a way that can change the
+/// members of a collection. The answer can hold nodes whose state is the same.
+Set<NodeId> _dirtyNodes(RuntimeState basis, RuntimeState s) {
+  final dirty = <NodeId>{};
+  void readersOf(DiKeyBase key) {
+    final found = s.keyReaders[key];
+    if (found != null) dirty.addAll(found.keys);
+  }
+
+  void keyChanged(DiKeyBase key) {
+    readersOf(key);
+    if (key is ContributionKey) readersOf(key.set);
+    if (key is DiMapEntryKey<Object?>) readersOf(key.mapKey);
+  }
+
+  for (final id in basis.nodes.changedKeys(s.nodes)) {
+    dirty.add(id);
+    final node = s.nodes[id] ?? basis.nodes[id];
+    if (node != null && s.scopes.containsKey(node.scope)) {
+      declaredPublishes(s, node).forEach(keyChanged);
+    }
+  }
+  for (final id in basis.scopes.changedKeys(s.scopes)) {
+    final before = basis.scopes[id];
+    final after = s.scopes[id];
+    if (before == null || after == null) {
+      readersOf(collectionReaders);
+      continue;
+    }
+    if (!identical(before.bindings, after.bindings)) {
+      before.bindings.changedKeys(after.bindings).forEach(keyChanged);
+    }
+    if (!identical(before.nodes, after.nodes) ||
+        !identical(before.children, after.children) ||
+        before.initialized != after.initialized ||
+        before.disposed != after.disposed) {
+      readersOf(collectionReaders);
+    }
+  }
+  return dirty;
 }
 
 /// The state of the scope [id] in [s], and the memo for the next read.
@@ -318,27 +378,62 @@ bool _sameObjects<T>(List<T> a, List<T> b) {
 (ScopeState, Snapshots) scopeStateShared(
   RuntimeState s,
   ScopeId id,
-  Snapshots memo,
-) {
+  Snapshots memo, {
+  bool findChanges = true,
+}) {
   final known = memo._scopes[id];
   if (known != null && known.revision == s.revision) return (known.state, memo);
-  final nodes = {...memo._nodes};
-  final scopes = {...memo._scopes};
+  final basis = memo._basis;
+  // A read that finds no change keeps every node state of the memo. Only a
+  // test of the self-check sets the flag to false.
+  final dirty = basis == null
+      ? null
+      : (findChanges ? _dirtyNodes(basis, s) : <NodeId>{});
+  final dirtyByScope = <ScopeId, List<NodeId>>{};
+  for (final n in dirty ?? const <NodeId>{}) {
+    final record = s.nodes[n];
+    if (record != null) (dirtyByScope[record.scope] ??= []).add(n);
+  }
+  var nodes = memo._nodes;
+  var scopes = memo._scopes;
+
+  NodeState fresh(NodeId n) {
+    final state = nodeState(s, n);
+    final previous = nodes[n];
+    final kept = previous != null && previous == state ? previous : state;
+    nodes = nodes.put(n, kept);
+    return kept;
+  }
+
   ScopeState build(ScopeId at) {
     final cached = scopes[at];
     if (cached != null && cached.revision == s.revision) return cached.state;
     final record = scopeRecord(s, at);
     final children = [for (final child in record.children) build(child)];
-    final nodeStates = <NodeState>[];
-    for (final n in record.nodes) {
-      final fresh = nodeState(s, n);
-      final previous = nodes[n];
-      final kept = previous != null && previous == fresh ? previous : fresh;
-      nodes[n] = kept;
-      nodeStates.add(kept);
+    final previous = cached?.state;
+    // The scope was read at the revision of the memo, and its list of nodes is
+    // the same list: only the nodes that may differ need a new state.
+    final incremental =
+        previous != null &&
+        basis != null &&
+        cached!.revision == basis.revision &&
+        identical(basis.scopes[at]?.nodes, record.nodes);
+    final List<NodeState> nodeStates;
+    if (incremental) {
+      List<NodeState>? changed;
+      for (final n in dirtyByScope[at] ?? const <NodeId>[]) {
+        final index = nodeRecord(s, n).index;
+        if (index >= record.nodes.length || record.nodes[index] != n) continue;
+        final state = fresh(n);
+        if (!identical(state, previous.nodeStates[index])) {
+          (changed ??= List.of(previous.nodeStates))[index] = state;
+        }
+      }
+      nodeStates = changed ?? previous.nodeStates;
+    } else {
+      nodeStates = [for (final n in record.nodes) fresh(n)];
     }
     final phase = scopePhase(s, at);
-    final previous = cached?.state;
     final state =
         previous != null &&
             previous.phase == phase &&
@@ -350,12 +445,12 @@ bool _sameObjects<T>(List<T> a, List<T> b) {
             nodeStates: nodeStates,
             childStates: children,
           );
-    scopes[at] = (revision: s.revision, state: state);
+    scopes = scopes.put(at, (revision: s.revision, state: state));
     return state;
   }
 
   final state = build(id);
-  return (state, Snapshots._(nodes, scopes));
+  return (state, Snapshots._(nodes, scopes, s));
 }
 
 /// The state of the node [n] in [s], and the memo for the next read.
