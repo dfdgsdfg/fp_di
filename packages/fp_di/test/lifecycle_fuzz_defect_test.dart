@@ -168,6 +168,13 @@ final _controls = <_Control>[
     graphs: 2,
   ),
   _Control(
+    'RuntimeDefect.skipCheckpoint',
+    _defect(RuntimeDefect.skipCheckpoint),
+    'NoSetupAfterRequest:',
+    seed: _seed,
+    graphs: 2,
+  ),
+  _Control(
     'RuntimeDefect.loseHeldCaller',
     _defect(RuntimeDefect.loseHeldCaller),
     'HeldFuturesComplete:',
@@ -236,6 +243,45 @@ Future<void> _lateDisposeFailureHistory() async {
   }
 }
 
+/// The graph of the `NoStepAfterCancel` counterexample: the root scope has one
+/// component of two steps, and every callback is a gate.
+GraphDesc _twoStepGraph() => GraphDesc(_seed, 0, const [
+  ScopeDesc(-1, [
+    NodeDesc(
+      's0n0',
+      0,
+      PubDesc.key('a'),
+      [],
+      2,
+      creates: [
+        CallbackDesc(CallbackMode.gate),
+        CallbackDesc(CallbackMode.gate),
+      ],
+      disposes: [
+        CallbackDesc(CallbackMode.gate),
+        CallbackDesc(CallbackMode.gate),
+      ],
+    ),
+  ]),
+]);
+
+/// Runs the fixed history of the `NoStepAfterCancel` counterexample:
+/// `InitializeScope(root)`, `StartDispose(root)`, `Resolve(create, complete)`,
+/// `Terminal`. The disposal of the scope is requested while the first create
+/// of the two-step component waits on its gate. The gate completes after the
+/// request, so the checkpoint between the steps MUST stop the second create.
+Future<void> _stepAfterCancelHistory() async {
+  final harness = Harness(_twoStepGraph());
+  try {
+    await harness.initializeScope(0);
+    await harness.startDispose(0);
+    await harness.resolve('create', 'complete', 0);
+    await harness.terminal();
+  } finally {
+    await harness.close();
+  }
+}
+
 void main() {
   tearDown(RuntimeFaults.reset);
 
@@ -296,6 +342,24 @@ void main() {
             (v) => _prefixesIn(v.report),
             'reported checks',
             contains('NoLostDisposeFailure:'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('control RuntimeDefect.skipCheckpoint on its fixed history', () {
+    test('the history passes without the defect', _stepAfterCancelHistory);
+
+    test('detects NoSetupAfterRequest:', () async {
+      RuntimeFaults.defect = RuntimeDefect.skipCheckpoint;
+      await expectLater(
+        _stepAfterCancelHistory(),
+        throwsA(
+          isA<HistoryViolation>().having(
+            (v) => _prefixesIn(v.report),
+            'reported checks',
+            contains('NoSetupAfterRequest:'),
           ),
         ),
       );

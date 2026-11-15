@@ -4,7 +4,10 @@
     "packages/fp_di/lib/src/model/lease.dart",
     "packages/fp_di/lib/src/model/dependency.dart",
     "packages/fp_di/lib/src/model/cancellation.dart",
-    "packages/fp_di/lib/src/runtime/runtime.dart"
+    "packages/fp_di/lib/src/runtime/runtime.dart",
+    "packages/fp_di/lib/src/runtime/runtime_context.dart",
+    "packages/fp_di/lib/src/runtime/runtime_state.dart",
+    "packages/fp_di/lib/src/runtime/scope.dart"
   ],
   "scenarios": [
     {

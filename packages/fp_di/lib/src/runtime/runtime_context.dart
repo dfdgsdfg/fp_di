@@ -38,6 +38,7 @@ final class _RuntimeContext implements DiContext {
 
   @override
   void checkpoint() {
+    if (RuntimeFaults.injects(RuntimeDefect.skipCheckpoint)) return;
     if (token.isCanceled) throw ActivationCanceledException();
   }
 

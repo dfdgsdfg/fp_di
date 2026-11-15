@@ -2499,7 +2499,7 @@ conforms.
 - **Layer:** Unit, random histories
 - **Target:** the holds of a disposal over the commands of the [random lifecycle histories](../../verification/test/spec.md#random-lifecycle-histories)
 - **Files:** [`lifecycle_fuzz_test.dart`](../../../packages/fp_di/test/lifecycle_fuzz_test.dart), [`lifecycle_fuzz_defect_test.dart`](../../../packages/fp_di/test/lifecycle_fuzz_defect_test.dart), and [`lifecycle_fuzz_harness.dart`](../../../packages/fp_di/test/support/lifecycle_fuzz_harness.dart)
-- **Fixtures:** the commands `OpenHold`, `CloseHold`, and `DisposeIgnoringHolds`; the terminal phase that closes the open holds; the deliberate defects `queueWithHolds`, `setupWhileHeld`, `dropIgnoredReport`, and `loseHeldCaller`, which the runtime reads only inside `assert`.
+- **Fixtures:** the commands `OpenHold`, `CloseHold`, and `DisposeIgnoringHolds`; the terminal phase that closes the open holds; the deliberate defects `queueWithHolds`, `setupWhileHeld`, `skipCheckpoint`, `dropIgnoredReport`, and `loseHeldCaller`, which the runtime reads only inside `assert`.
 - **Pass:** the checks `NoDisposalWhileHeld`, `NoSetupAfterRequest`, `OpenHoldsCurrent`, `IgnoredHoldsReported`, and `HeldFuturesComplete` hold for every case, and the run reaches the coverage floors of the holds. Each defect makes its control of [V-T-VR-TEST-006](../../verification/test/requirements.md#v-t-vr-test-006) report its check.
 - **Evidence:** present
 

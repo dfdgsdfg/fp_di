@@ -112,6 +112,14 @@ enum RuntimeDefect {
   /// `LoseDescendant`: a disposal of an ancestor that releases a scope with a
   /// waiting `dispose` call leaves that call incomplete.
   loseHeldCaller,
+
+  /// `NoStepAfterCancel`: the checkpoint between the steps of a component
+  /// does not throw after the token of its activation was canceled, so a later
+  /// step starts. The model code cannot read the defect, and every
+  /// `Dependency` step calls `context.checkpoint()`, so the context
+  /// does not throw. The runtime calls the same checkpoint before a commit,
+  /// so the defect skips that guard too.
+  skipCheckpoint,
 }
 
 /// The switches that a test sets to make the runtime break an invariant.

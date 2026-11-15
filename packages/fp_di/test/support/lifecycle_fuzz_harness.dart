@@ -1892,16 +1892,14 @@ final class Harness {
     acqsByNode.putIfAbsent(node, () => []).add(a);
     a.createOpen = true;
     _record(Phase.start, 'create', a, desc.mode);
-    if (step == 0) {
-      _checkReadsCurrent(a);
-      final scope = graph.node(node).scope;
-      if (_effectivelyRequested(scope)) {
-        _violate(
-          'NoSetupAfterRequest: the create of a$id ($node.s0) started in '
-          '${graph.scopeName(scope)} after the disposal of that scope or of '
-          'an ancestor was requested',
-        );
-      }
+    if (step == 0) _checkReadsCurrent(a);
+    final scope = graph.node(node).scope;
+    if (_effectivelyRequested(scope)) {
+      _violate(
+        'NoSetupAfterRequest: the create of a$id ($node.s$step) started in '
+        '${graph.scopeName(scope)} after the disposal of that scope or of '
+        'an ancestor was requested',
+      );
     }
     final createSite = graph.sites.creates['$node/$step'];
     if (createSite != null) _createSite(a, createSite);

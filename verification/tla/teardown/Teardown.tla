@@ -281,11 +281,14 @@ ValuesAlive ==
     \A n \in Releasing :
         \A p \in Reads(n) \ Scc(n) : state[p] = "live"
 
-\* The dispose functions of one node run one at a time, so they run in the
-\* reverse of their registration order.
+\* The dispose functions of one node run one at a time. The model counts how
+\* many run and how many finished, not which ones, so it does not check their
+\* order: Initialize.tla (ReverseAcquisition) and the Dart tests check that the
+\* order is the reverse of the registration order.
 OneStepPerNode == \A n \in Nodes : running[n] <= 1
 
-\* Every dispose function runs exactly once.
+\* A released node finished as many dispose functions as it has. The model
+\* has no identity of a dispose function, so this is a count.
 EachStepOnce == \A n \in Nodes : state[n] = "released" => done[n] = Steps
 
 \* The report lists the calls in descending id, each with the nodes it
