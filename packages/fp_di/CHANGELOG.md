@@ -1,3 +1,12 @@
+## Unreleased
+
+- Documentation: a guide for readers who know Riverpod,
+  `doc/from_riverpod.md`. It maps providers, `Ref`, and `ProviderContainer`
+  to `fp_di`, and the API reference shows it as the category Coming from
+  Riverpod.
+- Documentation: the get_it guide names `ScopeBuilder` of `fp_di_flutter`
+  for the scope of a widget subtree.
+
 ## 0.1.0
 
 - Initial release.
