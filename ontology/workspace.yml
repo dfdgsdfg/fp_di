@@ -25,7 +25,8 @@ nodes:
     definition: >-
       Flutter adapter package that publishes a scope to the widget tree and reads it from a BuildContext,
       over the public runtime API. It owns no scope that a caller supplies; a ScopeBuilder owns the scope
-      that it creates while it is mounted.
+      that it creates while it is mounted, and a ScopeBoundary holds the disposal of a caller-owned scope
+      while it is mounted.
     domain: architecture
     bindings:
       - type: package

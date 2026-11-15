@@ -217,6 +217,24 @@ nodes:
       - specs/runtime/lifecycle/spec.md
       - packages/fp_di/lib/src/runtime/scope.dart
       - packages/fp_di/lib/src/model/component.dart
+  disposal_hold:
+    kind: concept
+    term: Hold
+    identifiers: [hold, holds, open, ignore, ignored]
+    definition: >-
+      A claim of a consumer outside the runtime that delays the disposal mutation of a scope until the
+      consumer closes it. It owns no value and no release order, and a disposal that ignores the holds
+      does not wait for it.
+    domain: lifecycle
+    bindings:
+      - type: spec
+        path: specs/runtime/lifecycle/spec.md
+      - type: spec
+        path: specs/architecture/spec.md
+    evidence:
+      - specs/runtime/lifecycle/spec.md
+      - specs/runtime/lifecycle/requirements.md
+      - specs/architecture/spec.md
   declaration:
     kind: concept
     term: Declaration
@@ -458,6 +476,12 @@ nodes:
       - specs/runtime/lifecycle/spec.md
       - packages/fp_di/lib/src/model/lease.dart
 relations:
+  - from: disposal_hold
+    type: belongs_to
+    to: scope
+    description: A scope keeps each open hold that it gave until the hold closes or the disposal of the scope starts.
+    evidence:
+      - specs/runtime/lifecycle/spec.md
   - from: component_node
     type: belongs_to
     to: scope
