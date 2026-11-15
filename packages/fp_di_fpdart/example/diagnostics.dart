@@ -70,6 +70,7 @@ String describe(DiFailure failure) => switch (failure) {
   ReentrantMutationFailure(:final operation) => 'reentrant: $operation',
   InactiveNodeFailure(:final missing) => 'inactive node, missing $missing',
   ListenerFailure(:final error) => 'listener threw $error',
+  DisposedLazyFailure() => 'lazy value after the disposal of its owner',
   UnsettledFailure(:final labels, :final passes) =>
     'unsettled: ${labels.join(', ')} after $passes passes',
 };

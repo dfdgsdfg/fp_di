@@ -13,7 +13,7 @@ import 'runtime_state.dart';
 /// the component. An effect without a debug label has the id in its label.
 String labelOf(RuntimeState s, NodeId n) {
   final component = componentOf(s, nodeRecord(s, n));
-  if (component.isEffect && component.debugLabel == null) {
+  if (!component.hasKey && component.debugLabel == null) {
     return '${component.label}#${n.value}';
   }
   return component.label;
@@ -27,7 +27,7 @@ final class NodeState {
     required this.label,
     required this.key,
     required this.phase,
-    required List<DiKey<Object?>> missing,
+    required List<DiKeyBase> missing,
     required this.activationFailure,
     required this.commits,
   }) : missing = List.unmodifiable(missing);
@@ -44,10 +44,12 @@ final class NodeState {
   /// The phase of the node.
   final NodePhase phase;
 
-  /// The required keys that do not resolve, in the order of the declaration.
+  /// The keys that the node waits for: the required keys that do not resolve,
+  /// in the order of the declaration, and then each strict collection key that
+  /// has a contribution that does not resolve.
   ///
   /// The list is empty for an active node and for a disposed node.
-  final List<DiKey<Object?>> missing;
+  final List<DiKeyBase> missing;
 
   /// The failure of the last activation. The value is `Some` only in the
   /// phase [NodePhase.activationFailed].
@@ -204,7 +206,7 @@ NodeState nodeState(RuntimeState s, NodeId n) {
   return NodeState(
     id: n,
     label: labelOf(s, n),
-    key: component.isEffect ? const None() : Some(component.key),
+    key: component.hasKey ? Some(component.key) : const None(),
     phase: phase,
     missing: settled ? const [] : unmet(s, n),
     activationFailure: phase == NodePhase.activationFailed
@@ -247,7 +249,7 @@ bool canPublish(RuntimeState s, ScopeId from, DiKey<Object?> key) {
   while (at != null) {
     final scope = scopeRecord(s, at);
     final declared = scope.components.any(
-      (component) => !component.isEffect && component.key == key,
+      (component) => component.hasKey && component.key == key,
     );
     if (!disposalRequested(s, at) && declared) {
       if (scope.initializing || scope.nodes.isEmpty) return true;
@@ -456,9 +458,22 @@ UnavailableKeyFailure unavailableKey(
       continue;
     }
     if (state.phase != NodePhase.waiting) continue;
-    final next = <NodeId>[
-      for (final missing in state.missing) ?behind(node, missing),
-    ];
+    final next = <NodeId>[];
+    for (final missing in state.missing) {
+      if (missing is DiCollectionKey<Object?>) {
+        // Each contribution of the collection that does not resolve.
+        for (final contribution in contributionKeysOf(s, node, missing)) {
+          final scope = nodeRecord(s, node).scope;
+          if (resolve(s, scope, contribution, exclude: Some(node)).isNone()) {
+            final found = behind(node, contribution);
+            if (found != null) next.add(found);
+          }
+        }
+      } else if (missing is DiKey<Object?>) {
+        final found = behind(node, missing);
+        if (found != null) next.add(found);
+      }
+    }
     // The last node of the stack is the next one, so the first node behind
     // this node goes on last.
     pending.addAll(next.reversed);

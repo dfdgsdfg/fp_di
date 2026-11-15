@@ -58,12 +58,15 @@ extension RuntimeActivation on Runtime {
       finalizers: owned,
       read: (key) => _read(n, ticket, activation, key),
       readOption: (key) => _readOption(n, ticket, activation, key),
-      checkpoint: () => activation.reason.now.match(
-        () => const Right<Cause<DiFailure>, Unit>(unit),
-        (_) => Left<Cause<DiFailure>, Unit>(
-          Interrupt<DiFailure>(StackTrace.current),
-        ),
-      ),
+      readCollection: (key, {required strict}) =>
+          _readCollection(n, ticket, activation, key, strict: strict),
+      checkpoint: () => activation.token.isCanceled
+          ? Left<Cause<DiFailure>, Unit>(
+              Interrupt<DiFailure>(StackTrace.current),
+            )
+          : const Right<Cause<DiFailure>, Unit>(unit),
+      cancellation: activation.token,
+      ownerClosed: () => setupRefused(state, n),
     );
     final component = componentOf(before, node);
     final ran = await runComponent(component, context).run();
@@ -84,7 +87,7 @@ extension RuntimeActivation on Runtime {
     Activation activation,
     Object? value,
   ) {
-    if (activation.reason.now.isSome()) {
+    if (activation.token.isCanceled) {
       return Left(Interrupt<DiFailure>(StackTrace.current));
     }
     final s = state;
@@ -115,8 +118,11 @@ extension RuntimeActivation on Runtime {
         activation.view.now,
         activation.reads.now,
         owned.now,
+        membership: activation.membership.now,
       ),
     );
+    // The token of the committed activation stays until the release ends.
+    _committed.update((all) => {...all, n: activation});
     _activations.update((all) => {...all}..remove(ticket));
     if (changed) transition();
     _wake(n, Right<DiFailure, Object?>(value));
@@ -132,10 +138,8 @@ extension RuntimeActivation on Runtime {
   ) async {
     // A step failure is local to this region: the token is canceled before the
     // first dispose function runs.
-    final reason = activation.reason.now;
-    if (reason.isNone()) {
-      activation.reason.set(const Some(CancelReason.failure));
-    }
+    final reason = activation.token.reason;
+    activation.token.cancel(CancelReason.failure);
     final rollback = await owned.now.release().run();
     void end({
       required Option<Cause<DiFailure>> failure,
@@ -174,6 +178,53 @@ extension RuntimeActivation on Runtime {
     final failure = cause + rollback;
     end(failure: Some(failure), awaiting: const {}, failed: true);
     return Left<Cause<DiFailure>, bool>(failure);
+  }
+
+  /// A read of the collection [key] for the activation of [n]: the values of
+  /// the contributions, in the order of the membership.
+  ///
+  /// The read keeps the membership. A strict read fails when a contribution
+  /// does not resolve, and an optional read skips it. A map has the id of an
+  /// entry as its key, and the nearest entry that resolves gives its value.
+  Either<Cause<DiFailure>, Object> _readCollection(
+    NodeId n,
+    int ticket,
+    Activation activation,
+    DiCollectionKey<Object?> key, {
+    required bool strict,
+  }) {
+    final s = state;
+    final node = nodeRecord(s, n);
+    final keys = contributionKeysOf(s, n, key);
+    activation.membership.update((all) => {...all, key: keys});
+    final values = <(DiKey<Object?>, Object?)>[];
+    for (final contribution in keys) {
+      final found = resolve(s, node.scope, contribution, exclude: Some(n));
+      if (found.isNone()) {
+        if (strict) {
+          return Left(
+            Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current),
+          );
+        }
+        continue;
+      }
+      final value = _track(
+        s,
+        n,
+        ticket,
+        activation,
+        contribution,
+        found.toNullable()!,
+      );
+      if (value.isLeft()) return value.map((_) => const <Object?>{});
+      values.add((contribution, value.getOrElse((_) => null)));
+    }
+    return Right(switch (key) {
+      DiSetKey<Object?>() => <Object?>{for (final (_, v) in values) v},
+      DiMapKey<Object?>() => <String, Object?>{
+        for (final (contribution, v) in values) contribution.name!: v,
+      },
+    });
   }
 
   /// A required read of [key] for the activation of [n].
@@ -312,6 +363,10 @@ extension RuntimeActivation on Runtime {
           return const Empty<DiFailure>();
         }
         // The keys leave in the transition that starts the release.
+        // The token of the committed activation is canceled before the
+        // transition that starts the release, so a listener of that transition
+        // sees it canceled. The keys leave in the same transition.
+        _committed.now[n]?.token.cancel(CancelReason.deactivation);
         apply((s) => beginRelease(s, n));
         var failures = const Empty<DiFailure>() as Cause<DiFailure>;
         for (final dependent in dependentsOf(state, n)) {
@@ -322,6 +377,7 @@ extension RuntimeActivation on Runtime {
           (s) =>
               endRelease(s, n, ownFailed: !own.isEmpty, permanent: permanent),
         );
+        _committed.update((all) => {...all}..remove(n));
         if (permanent) {
           _wake(n, Left<DiFailure, Object?>(const InactiveNodeFailure()));
         }

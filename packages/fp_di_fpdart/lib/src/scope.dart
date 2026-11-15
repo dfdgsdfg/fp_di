@@ -449,7 +449,7 @@ final class Scope {
     }
     for (var i = 0; i < record.components.length; i++) {
       final component = record.components[i];
-      if (!component.isEffect && component.key == read) {
+      if (component.hasKey && component.key == read) {
         return Right(componentNodeOf<T>(_runtime, record.nodes[i]));
       }
     }

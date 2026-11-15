@@ -45,7 +45,7 @@ final class ComponentNode<A> {
   }
 
   /// The required keys that do not resolve for the node.
-  List<DiKey<Object?>> get missing => state.missing;
+  List<DiKeyBase> get missing => state.missing;
 
   /// The failure of the last automatic activation of the node.
   ///

@@ -13,6 +13,7 @@ import 'dart:async';
 
 import 'package:fpdart/fpdart.dart';
 
+import '../cancellation.dart';
 import '../cause.dart';
 import '../component.dart';
 import '../core/core.dart';
@@ -28,38 +29,32 @@ part 'kernel.dart';
 part 'reconcile.dart';
 part 'teardown.dart';
 
-/// The reason why a token canceled an activation. The first reason wins.
-enum CancelReason {
-  /// The owner of the node or of the scope asked for the disposal.
-  owner,
-
-  /// A withdrawal that the activation reads from is pending.
-  withdrawal,
-
-  /// The committed activation deactivates.
-  deactivation,
-
-  /// A step of the activation failed.
-  failure,
-}
-
 /// The cells of one running activation, as the runtime keeps them.
 ///
 /// The record is immutable. Each field is an `IORef`.
 final class Activation {
-  const Activation._(this.reason, this.reads, this.awaited, this.view);
+  const Activation._(
+    this.token,
+    this.reads,
+    this.awaited,
+    this.view,
+    this.membership,
+  );
 
   /// Creates the cells of a new activation.
   factory Activation.create() => Activation._(
-    IORef.create<Option<CancelReason>>(const None()).run(),
+    CancellationSource(),
     IORef.create<Set<NodeId>>(const {}).run(),
     IORef.create<Set<NodeId>>(const {}).run(),
     IORef.create<Map<DiKey<Object?>, Option<PublisherRef>>>(const {}).run(),
+    IORef.create<Map<DiCollectionKey<Object?>, List<DiKey<Object?>>>>(
+      const {},
+    ).run(),
   );
 
-  /// The reason of the cancellation, or `None`. This is the cancellation
-  /// token of the activation.
-  final IORef<Option<CancelReason>> reason;
+  /// The cancellation token of the activation. It stays with the committed
+  /// activation until the release of the node ends.
+  final CancellationSource token;
 
   /// The nodes whose values the activation read.
   final IORef<Set<NodeId>> reads;
@@ -70,6 +65,9 @@ final class Activation {
 
   /// The publisher that each read key had when the activation read it.
   final IORef<Map<DiKey<Object?>, Option<PublisherRef>>> view;
+
+  /// The contribution keys of each collection that the activation read.
+  final IORef<Map<DiCollectionKey<Object?>, List<DiKey<Object?>>>> membership;
 }
 
 /// The result of a disposal, which every caller of the disposal shares.
@@ -122,6 +120,7 @@ final class Runtime {
       _delivering = IORef.create<bool>(false).run(),
       _closed = IORef.create<bool>(false).run(),
       _activations = IORef.create<Map<int, Activation>>(const {}).run(),
+      _committed = IORef.create<Map<NodeId, Activation>>(const {}).run(),
       _waiters = IORef.create<Map<NodeId, Map<Zone, Completer<Wake>>>>(
         const {},
       ).run(),
@@ -178,6 +177,10 @@ final class Runtime {
   /// The callers of `whenActive` that wait for the next commit of a node. Each
   /// zone has one completer, so a zone that is dead cannot starve another.
   final IORef<Map<NodeId, Map<Zone, Completer<Wake>>>> _waiters;
+
+  /// The activation of each committed node, until its release ends. Its token
+  /// is canceled when the release starts.
+  final IORef<Map<NodeId, Activation>> _committed;
 
   /// The disposal that a scope accepted. Every caller shares it.
   final IORef<Map<ScopeId, Disposal>> _scopeDisposals;

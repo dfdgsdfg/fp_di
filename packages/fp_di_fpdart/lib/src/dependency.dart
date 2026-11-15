@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:fpdart/fpdart.dart';
 
+import 'cancellation.dart';
 import 'cause.dart';
 import 'failure.dart';
 import 'finalizers.dart';
 import 'key.dart';
+import 'lazy.dart';
 import 'syntax.dart';
 
 /// The type tag of [Dependency] for the fpdart higher-kinded types.
@@ -28,7 +30,10 @@ final class StepContext {
     required this.finalizers,
     required this.read,
     required this.readOption,
+    required this.readCollection,
     required this.checkpoint,
+    required this.cancellation,
+    required this.ownerClosed,
   });
 
   /// The label of the component.
@@ -43,6 +48,21 @@ final class StepContext {
   /// An optional read of a key: the value when a publisher resolves.
   final Option<Object?> Function(DiKey<Object?> key) readOption;
 
+  /// A read of a collection: a `Set<Object?>` for a [DiSetKey], and a
+  /// `Map<String, Object?>` for a [DiMapKey]. A strict read fails when a
+  /// contribution does not resolve.
+  final Either<Cause<DiFailure>, Object> Function(
+    DiCollectionKey<Object?> key, {
+    required bool strict,
+  })
+  readCollection;
+
+  /// The token of the activation.
+  final CancellationToken cancellation;
+
+  /// Whether the disposal of the owner of the activation was requested.
+  final bool Function() ownerClosed;
+
   /// Gives a `Left` with an [Interrupt] when a caller canceled the
   /// activation.
   ///
@@ -54,7 +74,19 @@ final class StepContext {
 typedef _Program<A> = ReaderTaskEither<StepContext, Cause<DiFailure>, A>;
 
 /// The reads of a dependency.
-typedef _Reads = ({Set<DiKey<Object?>> requires, Set<DiKey<Object?>> optional});
+typedef _Reads = ({
+  Set<DiKey<Object?>> requires,
+  Set<DiKey<Object?>> optional,
+  Set<DiCollectionKey<Object?>> collections,
+  Set<DiCollectionKey<Object?>> optionalCollections,
+});
+
+const _Reads _noReads = (
+  requires: <DiKey<Object?>>{},
+  optional: <DiKey<Object?>>{},
+  collections: <DiCollectionKey<Object?>>{},
+  optionalCollections: <DiCollectionKey<Object?>>{},
+);
 
 /// The tag of the reads interpreter.
 abstract final class _ReadsTag {}
@@ -71,6 +103,11 @@ _Reads _readsIn<A>(HKT<_ReadsTag, A> result) => (result as _ReadsOf<A>).reads;
 _Reads _union(_Reads left, _Reads right) => (
   requires: Set.unmodifiable({...left.requires, ...right.requires}),
   optional: Set.unmodifiable({...left.optional, ...right.optional}),
+  collections: Set.unmodifiable({...left.collections, ...right.collections}),
+  optionalCollections: Set.unmodifiable({
+    ...left.optionalCollections,
+    ...right.optionalCollections,
+  }),
 );
 
 /// The interpreter that folds a tree into the keys that it reads.
@@ -78,16 +115,54 @@ final class _ReadsAlgebra implements DependencyAlgebra<_ReadsTag> {
   const _ReadsAlgebra();
 
   @override
-  HKT<_ReadsTag, A> pure<A>(A value) =>
-      _ReadsOf<A>((requires: const {}, optional: const {}));
+  HKT<_ReadsTag, A> pure<A>(A value) => _ReadsOf<A>(_noReads);
 
   @override
-  HKT<_ReadsTag, A> require<A>(DiKey<A> key) =>
-      _ReadsOf<A>((requires: {key}, optional: const {}));
+  HKT<_ReadsTag, A> require<A>(DiKey<A> key) => _ReadsOf<A>((
+    requires: Set.unmodifiable({key}),
+    optional: _noReads.optional,
+    collections: _noReads.collections,
+    optionalCollections: _noReads.optionalCollections,
+  ));
 
   @override
-  HKT<_ReadsTag, Option<A>> optional<A>(DiKey<A> key) =>
-      _ReadsOf<Option<A>>((requires: const {}, optional: {key}));
+  HKT<_ReadsTag, Option<A>> optional<A>(DiKey<A> key) => _ReadsOf<Option<A>>((
+    requires: _noReads.requires,
+    optional: Set.unmodifiable({key}),
+    collections: _noReads.collections,
+    optionalCollections: _noReads.optionalCollections,
+  ));
+
+  @override
+  HKT<_ReadsTag, Set<A>> collectionSet<A>(
+    DiSetKey<A> key, {
+    required bool strict,
+  }) => _ReadsOf<Set<A>>(_collection(key, strict));
+
+  @override
+  HKT<_ReadsTag, Map<String, A>> collectionMap<A>(
+    DiMapKey<A> key, {
+    required bool strict,
+  }) => _ReadsOf<Map<String, A>>(_collection(key, strict));
+
+  @override
+  HKT<_ReadsTag, CancellationToken> cancellation() =>
+      _ReadsOf<CancellationToken>(_noReads);
+
+  @override
+  HKT<_ReadsTag, Lazy<A>> lazy<A>(
+    HKT<_ReadsTag, A> source,
+    DependencyNode<A> tree,
+  ) => _ReadsOf<Lazy<A>>(_readsIn(source));
+
+  _Reads _collection(DiCollectionKey<Object?> key, bool strict) => (
+    requires: _noReads.requires,
+    optional: _noReads.optional,
+    collections: strict ? Set.unmodifiable({key}) : _noReads.collections,
+    optionalCollections: strict
+        ? _noReads.optionalCollections
+        : Set.unmodifiable({key}),
+  );
 
   @override
   HKT<_ReadsTag, B> ap<A, B>(
@@ -141,6 +216,120 @@ TaskEither<Cause<DiFailure>, B> _own<B>(
             .modify((owned) => owned.push(context.owner, () => release(value)))
             .toTask(),
       ).map((_) => value);
+
+/// The values that a lazy step reads when its owner activates.
+///
+/// A required read and an optional read of one key are two reads, so the
+/// snapshot keeps them in two maps.
+typedef _Snapshot = ({
+  Map<DiKey<Object?>, Object?> required,
+  Map<DiKey<Object?>, Option<Object?>> optional,
+  Map<DiCollectionKey<Object?>, Object> collections,
+});
+
+/// The snapshot of the reads [reads] of a lazy step.
+///
+/// A required read that fails fails the activation. An optional read gives its
+/// `Option`. The snapshot serves the deferred steps later.
+Either<Cause<DiFailure>, _Snapshot> _snapshot(
+  StepContext context,
+  _Reads reads,
+) {
+  final required = <DiKey<Object?>, Object?>{};
+  final optional = <DiKey<Object?>, Option<Object?>>{};
+  final collections = <DiCollectionKey<Object?>, Object>{};
+  for (final key in reads.requires) {
+    final read = context.read(key);
+    if (read.isLeft()) {
+      return read.map(
+        (_) =>
+            (required: required, optional: optional, collections: collections),
+      );
+    }
+    required[key] = read.getOrElse((_) => null);
+  }
+  for (final key in reads.optional) {
+    optional[key] = context.readOption(key);
+  }
+  // A key that a step reads strictly and optionally keeps the strict read.
+  for (final (keys, strict) in [
+    (reads.optionalCollections, false),
+    (reads.collections, true),
+  ]) {
+    for (final key in keys) {
+      final read = context.readCollection(key, strict: strict);
+      if (read.isLeft()) {
+        return read.map(
+          (_) => (
+            required: required,
+            optional: optional,
+            collections: collections,
+          ),
+        );
+      }
+      collections[key] = read.getOrElse((_) => const <Object?>{});
+    }
+  }
+  return Right((
+    required: required,
+    optional: optional,
+    collections: collections,
+  ));
+}
+
+/// The creation of a [Lazy]: it runs the steps of the source against the
+/// snapshot, in a region of its own.
+///
+/// The token of the region is a child of the token of the owner. A failed
+/// creation cancels the token of its region before it releases its steps, and
+/// the owner stays as it is.
+Future<Either<Cause<DiFailure>, (A, Finalizers)>> _createDeferred<A>(
+  _Program<A> program,
+  StepContext owner,
+  _Snapshot values,
+) async {
+  final region = CancellationSource.child(owner.cancellation);
+  final owned = IORef.create<Finalizers>(Finalizers.empty).run();
+  final snapshot = StepContext(
+    owner: owner.owner,
+    finalizers: owned,
+    read: (key) => values.required.containsKey(key)
+        ? Right<Cause<DiFailure>, Object?>(values.required[key])
+        : Left<Cause<DiFailure>, Object?>(
+            Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current),
+          ),
+    readOption: (key) => values.optional[key] ?? const None(),
+    readCollection: (key, {required strict}) =>
+        switch (values.collections[key]) {
+          final Set<Object?> set => Right<Cause<DiFailure>, Object>(
+            Set<Object?>.of(set),
+          ),
+          final Map<String, Object?> map => Right<Cause<DiFailure>, Object>(
+            Map<String, Object?>.of(map),
+          ),
+          _ => Left<Cause<DiFailure>, Object>(
+            Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current),
+          ),
+        },
+    checkpoint: () => region.isCanceled
+        ? Left<Cause<DiFailure>, Unit>(Interrupt<DiFailure>(StackTrace.current))
+        : const Right<Cause<DiFailure>, Unit>(unit),
+    cancellation: region,
+    ownerClosed: owner.ownerClosed,
+  );
+  final ran = await program.run(snapshot);
+  return switch (ran) {
+    Left(value: final cause) => await () async {
+      region.cancel(CancelReason.failure);
+      final rollback = await owned.read().run().release().run();
+      return Left<Cause<DiFailure>, (A, Finalizers)>(cause + rollback);
+    }(),
+    Right(value: final value) => Right<Cause<DiFailure>, (A, Finalizers)>((
+      value,
+      owned.read().run(),
+    )),
+  };
+}
 
 /// The step program of one effect.
 ///
@@ -200,6 +389,74 @@ final class _ProgramAlgebra implements DependencyAlgebra<_ProgramTag> {
           (context) => context.readOption(key).map((value) => value as A),
         ),
       );
+
+  @override
+  HKT<_ProgramTag, Set<A>> collectionSet<A>(
+    DiSetKey<A> key, {
+    required bool strict,
+  }) => _ProgramOf<Set<A>>(
+    _withContext<Set<A>>(
+      (context) => TaskEither<Cause<DiFailure>, Set<A>>.fromEither(
+        context
+            .readCollection(key, strict: strict)
+            .map((value) => Set<A>.of((value as Set<Object?>).cast<A>())),
+      ),
+    ),
+  );
+
+  @override
+  HKT<_ProgramTag, Map<String, A>> collectionMap<A>(
+    DiMapKey<A> key, {
+    required bool strict,
+  }) => _ProgramOf<Map<String, A>>(
+    _withContext<Map<String, A>>(
+      (context) => TaskEither<Cause<DiFailure>, Map<String, A>>.fromEither(
+        context
+            .readCollection(key, strict: strict)
+            .map(
+              (value) => Map<String, A>.of(
+                (value as Map<String, Object?>).cast<String, A>(),
+              ),
+            ),
+      ),
+    ),
+  );
+
+  @override
+  HKT<_ProgramTag, CancellationToken> cancellation() =>
+      _ProgramOf<CancellationToken>(
+        _withContext<CancellationToken>(
+          (context) => TaskEither<Cause<DiFailure>, CancellationToken>.right(
+            context.cancellation,
+          ),
+        ),
+      );
+
+  @override
+  HKT<_ProgramTag, Lazy<A>> lazy<A>(
+    HKT<_ProgramTag, A> source,
+    DependencyNode<A> tree,
+  ) {
+    final reads = _readsIn(tree.fold(const _ReadsAlgebra()));
+    final program = _programIn(source);
+    return _ProgramOf<Lazy<A>>(
+      _withContext<Lazy<A>>(
+        (context) => TaskEither<Cause<DiFailure>, Lazy<A>>.fromEither(
+          _snapshot(context, reads).map((values) {
+            final holder = createLazy<A>(
+              () => _createDeferred(program, context, values),
+              context.ownerClosed,
+            );
+            // The holder is an owned value at the position of this step.
+            context.finalizers
+                .modify((owned) => owned.pushCause(() => holder.release()))
+                .run();
+            return holder;
+          }),
+        ),
+      ),
+    );
+  }
 
   @override
   HKT<_ProgramTag, B> ap<A, B>(
@@ -303,6 +560,151 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   static Dependency<Option<T>> option<T>({DiKey<T>? key}) =>
       Dependency<Option<T>>._(OptionalNode<T>(key ?? DiKey<T>()));
 
+  /// A dependency that reads the set of the contributions to [key].
+  ///
+  /// The set holds the value of each `Component.into` of the key, in the order
+  /// of the declarations: the ancestors first, then the scope of the reader.
+  /// Equal values give one element. The component of the reader does not count
+  /// as a member of the set that it contributes to. A scope that has no
+  /// contribution gives an empty set.
+  ///
+  /// The read waits until every contribution resolves, so the node of the
+  /// reader waits and `missing` names [key]. The reader releases and activates
+  /// again when a contribution joins or leaves, or when its publisher changes.
+  static Dependency<Set<T>> requireSet<T>({required DiSetKey<T> key}) =>
+      Dependency<Set<T>>._(SetNode<T>(key, strict: true));
+
+  /// Like [requireSet], and the read never waits.
+  ///
+  /// The set holds the contributions that resolve now. The reader still
+  /// activates again when a contribution resolves or leaves.
+  static Dependency<Set<T>> optionSet<T>({required DiSetKey<T> key}) =>
+      Dependency<Set<T>>._(SetNode<T>(key, strict: false));
+
+  /// A dependency that reads the map of the entries of [key], by id.
+  ///
+  /// An entry is a component that publishes `key.entryKey(id)`. The map keeps
+  /// the order of the first declaration of each id. A nearer scope that
+  /// publishes an entry of the same id gives the value, and a dormant nearer
+  /// entry leaves the entry of the ancestor selected. The read waits until
+  /// every declared id resolves.
+  static Dependency<Map<String, T>> requireMap<T>({required DiMapKey<T> key}) =>
+      Dependency<Map<String, T>>._(MapNode<T>(key, strict: true));
+
+  /// Like [requireMap], and the read never waits.
+  static Dependency<Map<String, T>> optionMap<T>({required DiMapKey<T> key}) =>
+      Dependency<Map<String, T>>._(MapNode<T>(key, strict: false));
+
+  /// A dependency of the cancellation token of the activation.
+  ///
+  /// The token reads no key and owns nothing. See [CancellationToken] for the
+  /// moments at which the runtime cancels it.
+  static Dependency<CancellationToken> cancellation() =>
+      Dependency<CancellationToken>._(const CancellationNode());
+
+  /// A dependency of the keys [key1] and [key2], as a record.
+  ///
+  /// The reads are the same as the reads of `(require, require).zip`. The
+  /// key of each position is `DiKey<T>()` when its argument is `null`.
+  static Dependency<(A, B)> require2<A, B>({DiKey<A>? key1, DiKey<B>? key2}) =>
+      (Dependency.require<A>(key: key1), Dependency.require<B>(key: key2)).zip;
+
+  /// A dependency of three keys, as a record. See [require2].
+  static Dependency<(A, B, C)> require3<A, B, C>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+  ).zip;
+
+  /// A dependency of four keys, as a record. See [require2].
+  static Dependency<(A, B, C, D)> require4<A, B, C, D>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+    DiKey<D>? key4,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+    Dependency.require<D>(key: key4),
+  ).zip;
+
+  /// A dependency of five keys, as a record. See [require2].
+  static Dependency<(A, B, C, D, E)> require5<A, B, C, D, E>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+    DiKey<D>? key4,
+    DiKey<E>? key5,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+    Dependency.require<D>(key: key4),
+    Dependency.require<E>(key: key5),
+  ).zip;
+
+  /// A dependency of six keys, as a record. See [require2].
+  static Dependency<(A, B, C, D, E, F)> require6<A, B, C, D, E, F>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+    DiKey<D>? key4,
+    DiKey<E>? key5,
+    DiKey<F>? key6,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+    Dependency.require<D>(key: key4),
+    Dependency.require<E>(key: key5),
+    Dependency.require<F>(key: key6),
+  ).zip;
+
+  /// A dependency of seven keys, as a record. See [require2].
+  static Dependency<(A, B, C, D, E, F, G)> require7<A, B, C, D, E, F, G>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+    DiKey<D>? key4,
+    DiKey<E>? key5,
+    DiKey<F>? key6,
+    DiKey<G>? key7,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+    Dependency.require<D>(key: key4),
+    Dependency.require<E>(key: key5),
+    Dependency.require<F>(key: key6),
+    Dependency.require<G>(key: key7),
+  ).zip;
+
+  /// A dependency of eight keys, as a record. See [require2].
+  static Dependency<(A, B, C, D, E, F, G, H)> require8<A, B, C, D, E, F, G, H>({
+    DiKey<A>? key1,
+    DiKey<B>? key2,
+    DiKey<C>? key3,
+    DiKey<D>? key4,
+    DiKey<E>? key5,
+    DiKey<F>? key6,
+    DiKey<G>? key7,
+    DiKey<H>? key8,
+  }) => (
+    Dependency.require<A>(key: key1),
+    Dependency.require<B>(key: key2),
+    Dependency.require<C>(key: key3),
+    Dependency.require<D>(key: key4),
+    Dependency.require<E>(key: key5),
+    Dependency.require<F>(key: key6),
+    Dependency.require<G>(key: key7),
+    Dependency.require<H>(key: key8),
+  ).zip;
+
   /// A dependency of the list of the values of [list] after [f].
   ///
   /// The function [f] makes one dependency for each element. The steps run
@@ -332,6 +734,27 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
 
   /// The keys that the dependency reads when a scope publishes them.
   Set<DiKey<Object?>> get optional => _reads.optional;
+
+  /// The collection keys that the dependency reads strictly.
+  ///
+  /// A collection key is never in [requires].
+  Set<DiCollectionKey<Object?>> get collectionKeys => _reads.collections;
+
+  /// The collection keys that the dependency reads without a wait.
+  Set<DiCollectionKey<Object?>> get optionalCollectionKeys =>
+      _reads.optionalCollections;
+
+  /// A dependency of a [Lazy] that runs the steps of this dependency on its
+  /// first use.
+  ///
+  /// The reads are the same as the reads of this dependency. When the owner
+  /// activates, it reads each key and keeps the values. The steps run on the
+  /// first `Lazy.force`, against those values, in a region of their own. The
+  /// holder is an owned value: the owner releases it, and the value that it
+  /// created, at its position in the order of the steps. The owner activates
+  /// again with a new holder when a publisher of a read key changes, and the
+  /// old holder then fails with a `DisposedLazyFailure`.
+  Dependency<Lazy<A>> lazy() => Dependency<Lazy<A>>._(LazyNode<A>(_node));
 
   /// A dependency of [b].
   ///

@@ -199,9 +199,7 @@ extension RuntimeKernel on Runtime {
   /// Cancels the activation with [ticket], when it runs. The first reason
   /// stays.
   void cancel(int ticket, CancelReason reason) {
-    _activations.now[ticket]?.reason.update(
-      (current) => current.isSome() ? current : Some(reason),
-    );
+    _activations.now[ticket]?.token.cancel(reason);
   }
 
   /// Cancels the running activation of [node], when it exists.

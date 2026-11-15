@@ -1028,7 +1028,7 @@ void main() {
       final reader = child.nodes.last;
       expect(reader.state.phase, NodePhase.waiting);
       final behind = [
-        for (final key in reader.missing)
+        for (final key in reader.missing.whereType<DiKey<Object?>>())
           child.findNode<Object?>(key: key).toNullable(),
       ];
       expect(behind.single?.state.phase, NodePhase.activationFailed);

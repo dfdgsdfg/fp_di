@@ -14,24 +14,57 @@ import 'ids.dart';
 /// record with [copyWith].
 final class ScopeRecord {
   /// Creates the record of the scope [id].
-  ScopeRecord({
-    required this.id,
-    this.parent = const None(),
+  ///
+  /// A record without [contributionKeys] makes one key for each declaration
+  /// that contributes to a set.
+  factory ScopeRecord({
+    required ScopeId id,
+    Option<ScopeId> parent = const None(),
     required List<Component<Object?>> components,
     List<ScopeId> children = const [],
-    this.initializing = false,
-    this.initialized = false,
-    this.disposeRequested = false,
-    this.disposing = false,
-    this.disposed = false,
+    bool initializing = false,
+    bool initialized = false,
+    bool disposeRequested = false,
+    bool disposing = false,
+    bool disposed = false,
     List<NodeId> nodes = const [],
     Map<DiKey<Object?>, PublisherRef> bindings = const {},
+    List<ContributionKey?>? contributionKeys,
     Map<DiKey<Object?>, int>? keyIndex,
-  }) : components = List.unmodifiable(components),
-       children = List.unmodifiable(children),
-       nodes = List.unmodifiable(nodes),
-       bindings = Map.unmodifiable(bindings),
-       keyIndex = keyIndex ?? _indexOfKeys(components);
+  }) {
+    final keys = contributionKeys ?? _contributionKeysOf(components);
+    return ScopeRecord._(
+      id: id,
+      parent: parent,
+      components: List.unmodifiable(components),
+      children: List.unmodifiable(children),
+      initializing: initializing,
+      initialized: initialized,
+      disposeRequested: disposeRequested,
+      disposing: disposing,
+      disposed: disposed,
+      nodes: List.unmodifiable(nodes),
+      bindings: Map.unmodifiable(bindings),
+      contributionKeys: List.unmodifiable(keys),
+      keyIndex: Map.unmodifiable(keyIndex ?? _indexOfKeys(components, keys)),
+    );
+  }
+
+  const ScopeRecord._({
+    required this.id,
+    required this.parent,
+    required this.components,
+    required this.children,
+    required this.initializing,
+    required this.initialized,
+    required this.disposeRequested,
+    required this.disposing,
+    required this.disposed,
+    required this.nodes,
+    required this.bindings,
+    required this.contributionKeys,
+    required this.keyIndex,
+  });
 
   /// The identity of the scope.
   final ScopeId id;
@@ -67,9 +100,14 @@ final class ScopeRecord {
   /// The committed publications of the nodes of this scope, by key.
   final Map<DiKey<Object?>, PublisherRef> bindings;
 
-  /// The position of the component that publishes each key. An effect
-  /// publishes no key. The map is a function of [components], so a copy keeps
-  /// it.
+  /// The key of each declaration that contributes to a set, by position, and
+  /// `null` for another component. Each declaration has a key of its own, so
+  /// every contribution is one binding of one key.
+  final List<ContributionKey?> contributionKeys;
+
+  /// The position of the component that publishes each key, and of the
+  /// contribution that has each contribution key. An effect publishes no key.
+  /// The map is a function of [components], so a copy keeps it.
   final Map<DiKey<Object?>, int> keyIndex;
 
   /// A record with the given fields replaced.
@@ -94,16 +132,28 @@ final class ScopeRecord {
     disposed: disposed ?? this.disposed,
     nodes: nodes ?? this.nodes,
     bindings: bindings ?? this.bindings,
+    contributionKeys: contributionKeys,
     keyIndex: keyIndex,
   );
 }
 
-Map<DiKey<Object?>, int> _indexOfKeys(List<Component<Object?>> components) {
+List<ContributionKey?> _contributionKeysOf(
+  List<Component<Object?>> components,
+) => [
+  for (final component in components)
+    if (component.contributesTo case final set?) ContributionKey(set) else null,
+];
+
+Map<DiKey<Object?>, int> _indexOfKeys(
+  List<Component<Object?>> components,
+  List<ContributionKey?> contributions,
+) {
   final index = <DiKey<Object?>, int>{};
   for (var i = 0; i < components.length; i++) {
-    if (!components[i].isEffect) index.putIfAbsent(components[i].key, () => i);
+    if (components[i].hasKey) index.putIfAbsent(components[i].key, () => i);
+    if (contributions[i] case final key?) index[key] = i;
   }
-  return Map.unmodifiable(index);
+  return index;
 }
 
 /// The immutable record of one node.
@@ -129,10 +179,15 @@ final class NodeRecord {
     Set<NodeId> dependencies = const {},
     this.value = const None(),
     this.finalizers = Finalizers.empty,
+    Map<DiCollectionKey<Object?>, List<DiKey<Object?>>> membership = const {},
     Set<NodeId> awaiting = const {},
     this.activationFailure = const None(),
     this.commits = 0,
   }) : committed = Map.unmodifiable(committed),
+       membership = Map.unmodifiable({
+         for (final MapEntry(:key, :value) in membership.entries)
+           key: List<DiKey<Object?>>.unmodifiable(value),
+       }),
        dependencies = Set.unmodifiable(dependencies),
        awaiting = Set.unmodifiable(awaiting);
 
@@ -177,6 +232,10 @@ final class NodeRecord {
   /// key that did not resolve. A key that the map lacks counts as `None`.
   final Map<DiKey<Object?>, Option<PublisherRef>> committed;
 
+  /// The contribution keys of each collection that the committed activation
+  /// read, in the order of the read.
+  final Map<DiCollectionKey<Object?>, List<DiKey<Object?>>> membership;
+
   /// The publishers that the committed activation read.
   final Set<NodeId> dependencies;
 
@@ -210,6 +269,7 @@ final class NodeRecord {
     bool? available,
     Option<int>? inFlight,
     Map<DiKey<Object?>, Option<PublisherRef>>? committed,
+    Map<DiCollectionKey<Object?>, List<DiKey<Object?>>>? membership,
     Set<NodeId>? dependencies,
     Option<Object?>? value,
     Finalizers? finalizers,
@@ -229,6 +289,7 @@ final class NodeRecord {
     available: available ?? this.available,
     inFlight: inFlight ?? this.inFlight,
     committed: committed ?? this.committed,
+    membership: membership ?? this.membership,
     dependencies: dependencies ?? this.dependencies,
     value: value ?? this.value,
     finalizers: finalizers ?? this.finalizers,

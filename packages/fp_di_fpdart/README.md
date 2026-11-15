@@ -51,8 +51,7 @@ track `R` in a type. The package states the reads as a set of keys instead.
 The package has no layer composition operators, such as `>>>` or `++`. The
 scope derives the wiring from the graph of the keys.
 
-The package has no hold, no lazy value, no collection key, no public
-cancellation token, and no inspector yet.
+The package has no hold and no inspector yet.
 
 ## Structure
 
@@ -271,13 +270,17 @@ final checkout = (
 | `Dependency.of(value)`, `pure` | a value that exists already |
 | `Dependency.task`, `Dependency.taskEither` | a value from a `Task` or a `TaskEither`; a `Left` fails the activation |
 | `Dependency.require<T>()`, `Dependency.option<T>()` | a read of a key, required or optional |
+| `Dependency.require2` to `Dependency.require8` | a record of the values of two to eight keys (`key1` to `key8`); the same reads as a `zip` of `require` |
+| `Dependency.requireSet`, `optionSet`, `requireMap`, `optionMap` | a read of a collection key; see [Collections](#collections) |
+| `Dependency.cancellation()` | the cancellation token of the activation; see [Cancellation](#cancellation) |
+| `lazy()` | a `Lazy` that runs the steps on its first use; see [Lazy values](#lazy-values) |
 | `map`, `mapTask`, `mapTaskEither` | the next step; a throw or a `Left` fails the activation |
 | `ap` | applies a function dependency; runs this dependency first, then the function |
 | `map2`, `map3`, `zip`, `mapN` | the union of the reads; the steps run left to right |
 | `Dependency.traverseList`, `Dependency.sequenceList` | a list of values from a list of dependencies |
 
 A dependency is a syntax tree: a free applicative with the nodes pure, require,
-optional, ap, and step. Building a dependency runs nothing. An interpreter is
+optional, set, map, cancellation, lazy, ap, and step. Building a dependency runs nothing. An interpreter is
 an algebra: one method for each node, and a node only dispatches to the method
 (a catamorphism). The result type of a method is an fpdart `HKT<G, A>`, so the
 result can depend on the value type `A`. Two algebras exist. The reads algebra
@@ -291,6 +294,96 @@ failure, like `ZIO.attempt`. If a step fails, the scope disposes the owned
 values that the component created so far. The cause of the component is
 `Fail(ActivationFailure)` followed by one `Die` for each dispose function that
 threw.
+
+## Collections
+
+A collection key names many contributions. The key decides the membership, not
+the type: two collections of one interface stay apart, and a component that
+implements the interface is not an element unless it contributes.
+
+- `DiSetKey<T>(name:)` collects anonymous contributions. A contribution is
+  `Component<T>.into(key:, dependency:)`. It publishes no plain key and is not
+  an effect, so nothing reads it by a key, and an override cannot replace it.
+  Each declaration is one contribution. Equal values give one element.
+- `DiMapKey<T>(name:)` collects entries. An entry is a component that
+  publishes `map.entryKey(id)`. The entry key is a `DiKey`, so another
+  component can read one entry with `Dependency.require`, and an override can
+  replace it.
+
+A reader sees the contributions of its scope and of its ancestors, the
+ancestors first and each scope in the order of the declarations. Its own
+declaration does not count. A parent never sees a contribution of a child. A
+map id that two scopes declare appears once, at the position of its first
+declaration. The nearest entry that is active gives the value, and a dormant
+nearer entry leaves the entry of the ancestor selected.
+
+| Read | Result | Waits |
+|---|---|---|
+| `Dependency.requireSet` | `Set<T>` | for every contribution to resolve |
+| `Dependency.optionSet` | `Set<T>` of the contributions that resolve | never |
+| `Dependency.requireMap` | `Map<String, T>` by entry id | for every declared id to resolve |
+| `Dependency.optionMap` | the entries that resolve | never |
+
+An empty collection is an empty value, and a collection read is never an
+`UndeclaredKeyFailure`. The members of a collection come from the
+declarations, so a contribution of a scope that did not run counts: a strict
+reader waits, and `missing` names the collection key. The reader releases and
+activates again when a contributor joins or leaves, or when the publisher of a
+contribution changes. A contributor that you dispose leaves the membership. Two
+entries of one id in one scope are a `DuplicateKeyFailure` at `run`. A reader
+starts after the contributors of its own scope settle, and it releases before
+them. `ComponentsOps.contributes` counts the contributions of a group, and
+`publishes` holds the entry keys.
+
+## Lazy values
+
+`dependency.lazy()` gives a `Dependency<Lazy<A>>` with the same reads. When the
+owner activates, it reads each key and keeps the values, so the keys stay
+tracked. The steps of the source run on the first `force()`, in a region of
+their own, against those values.
+
+`Lazy.force()` is a lazy `TaskEither<Cause<DiFailure>, A>`. The left is a
+`Cause`, so the failure of a step and the dispose failures of its rollback stay
+together.
+
+- Concurrent first forces share one creation, and later forces give the same
+  value. `isCreated` tells whether the value exists.
+- A failed creation is not cached, and the owner stays active. The region
+  cancels its token before it releases its steps.
+- The owner owns the holder at the position of the `lazy` step: it releases the
+  value before the steps to its left.
+- A `force` after the disposal of the owner was requested, and after the
+  release, is a `Fail(DisposedLazyFailure)`. A creation that settles after the
+  release began gives that failure to its caller, and releases its value once.
+- A key that the lazy step reads changes: the owner releases the old holder and
+  activates again with a new holder. The old holder fails with a
+  `DisposedLazyFailure`.
+
+## Cancellation
+
+A `CancellationToken` tells whether an activation is canceled: `isCanceled`, and
+`whenCanceled`, a lazy `Task<Unit>` that completes once when the token cancels
+and never fails. `Dependency.cancellation()` reads the token of the activation.
+
+The runtime cancels the token:
+
+| Trigger | Moment |
+|---|---|
+| `Scope.dispose` of the scope or an ancestor | at the call, for each activation in flight in the subtree |
+| `ComponentNode.dispose` | at the call, for the activation in flight of the node |
+| a withdrawal that the activation reads | at the call of the node dispose, for each activation in flight that reads a node of the reach, and at a later read of such a node |
+| an active activation starts to release | before its first dispose function: a rebuild, a withdrawal, and a disposal |
+| a step of the activation fails | before the first dispose function of the rollback |
+
+The runtime checks the token before each step and before the commit, so a
+canceled activation never commits, and the completed steps release in reverse
+order. The cause of a canceled activation holds an `Interrupt`, and it is never
+a `Fail`. A step that ignores the token only delays its own settlement.
+
+`CancellationToken.none` is never canceled. A `CancellationController` has a
+`token` and a `cancel()`, for code that calls a cancelable function outside the
+runtime, such as a test. A `Lazy` creation has a token of its own, a child of
+the token of its owner.
 
 ## Typeclass instances
 
@@ -322,20 +415,22 @@ the list operations:
 final app = [...coreComponents, ...featureComponents];
 ```
 
-The extension `ComponentsOps` on `Iterable<Component<Object?>>` has three
+The extension `ComponentsOps` on `Iterable<Component<Object?>>` has five
 members:
 
 | Member | Meaning |
 |---|---|
-| `publishes` | the keys that the components publish |
-| `requires` | the required keys that no component of the list publishes |
+| `publishes` | the keys that the components publish, with the entry keys of maps, and without effects and contributions |
+| `contributes` | the number of contributions to each set key |
+| `requires` | the required keys that no other component of the list publishes; a component does not satisfy its own requirement |
+| `reads` | every key and collection key that a component reads, without the keys that another component publishes; a collection key stays |
 | `overriddenBy(overrides)` | an `Exit` with a list in which each override replaces the one component that publishes its key, in place |
 
 `overriddenBy` rejects instead of appending. The cause accumulates every
 problem in the order of the overrides, joined with `Both`:
 
 - An override whose key no component publishes, or an override that is an
-  effect, is an `UnmatchedOverrideFailure`.
+  effect or a contribution, is an `UnmatchedOverrideFailure`.
 - A key that more than one component of the list publishes is a
   `DuplicateKeyFailure`.
 - Two overrides with the same key are a `DuplicateKeyFailure`.
@@ -363,6 +458,7 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 | `UnmatchedOverrideFailure` | an override has no single component to replace |
 | `UnavailableKeyFailure` | `get` of a key that no scope of the chain resolves, or a read inside an activation of a key without publisher; `failedNodeStates` lists the failed nodes behind the key |
 | `ScopePhaseFailure` | an operation in a phase where it is not valid, such as `run` of an initialized scope |
+| `DisposedLazyFailure` | `Lazy.force` after the disposal of the owner was requested or after the release |
 | `DisposedScopeFailure` | an operation of a scope that is disposing or disposed |
 | `ReentrantMutationFailure` | a lifecycle operation that started inside a lifecycle operation |
 | `InactiveNodeFailure` | `value` of a node that is not active, and `whenActive` of a removed node |
@@ -407,8 +503,8 @@ child reads.
 ## Examples
 
 Each file in `example/` runs with `dart run`. Most files port an example of
-`fp_di`. The package has no hold, lazy value, collection key, or public
-cancellation token yet, so four examples of `fp_di` have no port.
+`fp_di`. The package has no hold yet, so some examples of `fp_di` have no
+port.
 
 ```sh
 dart run packages/fp_di_fpdart/example/checkout.dart
@@ -430,6 +526,9 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 | [`environments.dart`](example/environments.dart) | Platform, flavor, test fakes, and a two-stage boot with plain lists |
 | [`factory.dart`](example/factory.dart) | A new value for each call, from the nearest database |
 | [`cached_factory.dart`](example/cached_factory.dart) | One value for each id, released with the scope |
+| [`cancellation.dart`](example/cancellation.dart) | A logout during a login, a withdrawal during a read, a failed step, and a token outside the runtime |
+| [`lazy.dart`](example/lazy.dart) | A report that is built on the first `force()`, shared by concurrent calls, and released with its owner |
+| [`collections.dart`](example/collections.dart) | Set and map keys: features contribute, one reader starts them, a fake replaces one entry |
 | [`diagnostics.dart`](example/diagnostics.dart) | Accumulated validation, a cycle that waits, `prettyPrint()`, `get` failures, a waiting child, and `phase` |
 
 ## Not ported
@@ -438,7 +537,4 @@ These examples of `fp_di` need a feature that this package does not have.
 
 | Example of `fp_di` | Reason |
 |---|---|
-| `cancellation.dart` | The package has no public cancellation token yet |
-| `lazy.dart` | The package has no lazy value |
-| `collections.dart` | The package has no set key and no map key |
 | `shape_export.dart` | The package has no inspector and no shape export |

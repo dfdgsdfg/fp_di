@@ -259,6 +259,15 @@ void main() {
                     ),
               readOption: (key) =>
                   map.containsKey(key) ? Some(map[key]) : const None(),
+              readCollection: (key, {required strict}) =>
+                  Left<Cause<DiFailure>, Object>(
+                    Fail<DiFailure>(
+                      UnavailableKeyFailure(key),
+                      StackTrace.current,
+                    ),
+                  ),
+              cancellation: CancellationToken.none,
+              ownerClosed: () => false,
               checkpoint: () => const Right<Cause<DiFailure>, Unit>(unit),
             ),
           )
@@ -360,6 +369,28 @@ final class _Describe implements DependencyAlgebra<_TextTag> {
       _Text<Option<A>>('optional($key)');
 
   @override
+  HKT<_TextTag, Set<A>> collectionSet<A>(
+    DiSetKey<A> key, {
+    required bool strict,
+  }) => _Text<Set<A>>('set($key, $strict)');
+
+  @override
+  HKT<_TextTag, Map<String, A>> collectionMap<A>(
+    DiMapKey<A> key, {
+    required bool strict,
+  }) => _Text<Map<String, A>>('map($key, $strict)');
+
+  @override
+  HKT<_TextTag, CancellationToken> cancellation() =>
+      const _Text<CancellationToken>('cancellation');
+
+  @override
+  HKT<_TextTag, Lazy<A>> lazy<A>(
+    HKT<_TextTag, A> source,
+    DependencyNode<A> tree,
+  ) => _Text<Lazy<A>>('lazy(${_textOf(source)})');
+
+  @override
   HKT<_TextTag, B> ap<A, B>(
     HKT<_TextTag, A> fa,
     HKT<_TextTag, B Function(A a)> ff,
@@ -395,6 +426,28 @@ final class _Count implements DependencyAlgebra<_CountTag> {
 
   @override
   HKT<_CountTag, Option<A>> optional<A>(DiKey<A> key) => _Counted<Option<A>>(1);
+
+  @override
+  HKT<_CountTag, Set<A>> collectionSet<A>(
+    DiSetKey<A> key, {
+    required bool strict,
+  }) => _Counted<Set<A>>(1);
+
+  @override
+  HKT<_CountTag, Map<String, A>> collectionMap<A>(
+    DiMapKey<A> key, {
+    required bool strict,
+  }) => _Counted<Map<String, A>>(1);
+
+  @override
+  HKT<_CountTag, CancellationToken> cancellation() =>
+      const _Counted<CancellationToken>(1);
+
+  @override
+  HKT<_CountTag, Lazy<A>> lazy<A>(
+    HKT<_CountTag, A> source,
+    DependencyNode<A> tree,
+  ) => _Counted<Lazy<A>>(1 + _nodesOf(source));
 
   @override
   HKT<_CountTag, B> ap<A, B>(

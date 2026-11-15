@@ -3,7 +3,9 @@ import 'dart:async';
 
 import 'package:fpdart/fpdart.dart';
 
+import 'cancellation.dart';
 import 'key.dart';
+import 'lazy.dart';
 
 /// The effect of a step: it gives a `Right` value, or a `Left` that fails
 /// the activation. A throw fails the activation, too.
@@ -28,6 +30,27 @@ abstract interface class DependencyAlgebra<G> {
 
   /// An optional read of [key].
   HKT<G, Option<A>> optional<A>(DiKey<A> key);
+
+  /// A read of the set [key]: the values of its contributions.
+  ///
+  /// A strict read waits for every contribution. An optional read yields the
+  /// contributions that resolve.
+  HKT<G, Set<A>> collectionSet<A>(DiSetKey<A> key, {required bool strict});
+
+  /// A read of the map [key]: the values of its entries, by id.
+  HKT<G, Map<String, A>> collectionMap<A>(
+    DiMapKey<A> key, {
+    required bool strict,
+  });
+
+  /// The cancellation token of the activation.
+  HKT<G, CancellationToken> cancellation();
+
+  /// The deferral of the steps of [source], which the tree [tree] describes.
+  ///
+  /// The result is a holder that runs the steps on its first use. The tree is
+  /// the syntax of [source], so an interpreter can read the keys of the steps.
+  HKT<G, Lazy<A>> lazy<A>(HKT<G, A> source, DependencyNode<A> tree);
 
   /// The application of the function value [ff] to the value [fa].
   ///
@@ -124,4 +147,59 @@ final class StepNode<A, B> extends DependencyNode<B> {
   @override
   HKT<G, B> fold<G>(DependencyAlgebra<G> algebra) =>
       algebra.step<A, B>(source.fold(algebra), effect, release);
+}
+
+/// A read of the set [key].
+final class SetNode<A> extends DependencyNode<Set<A>> {
+  /// Creates a read of [key]. A [strict] read waits for every contribution.
+  const SetNode(this.key, {required this.strict});
+
+  /// The key that the node reads.
+  final DiSetKey<A> key;
+
+  /// Whether the read waits for every contribution.
+  final bool strict;
+
+  @override
+  HKT<G, Set<A>> fold<G>(DependencyAlgebra<G> algebra) =>
+      algebra.collectionSet(key, strict: strict);
+}
+
+/// A read of the map [key].
+final class MapNode<A> extends DependencyNode<Map<String, A>> {
+  /// Creates a read of [key]. A [strict] read waits for every entry.
+  const MapNode(this.key, {required this.strict});
+
+  /// The key that the node reads.
+  final DiMapKey<A> key;
+
+  /// Whether the read waits for every entry.
+  final bool strict;
+
+  @override
+  HKT<G, Map<String, A>> fold<G>(DependencyAlgebra<G> algebra) =>
+      algebra.collectionMap(key, strict: strict);
+}
+
+/// The cancellation token of the activation.
+final class CancellationNode extends DependencyNode<CancellationToken> {
+  /// Creates the node.
+  const CancellationNode();
+
+  @override
+  HKT<G, CancellationToken> fold<G>(DependencyAlgebra<G> algebra) =>
+      algebra.cancellation();
+}
+
+/// The deferral of the steps of [source].
+final class LazyNode<A> extends DependencyNode<Lazy<A>> {
+  /// Creates the deferral of [source].
+  const LazyNode(this.source);
+
+  /// The tree that the holder runs on its first use.
+  final DependencyNode<A> source;
+
+  @override
+  HKT<G, Lazy<A>> fold<G>(DependencyAlgebra<G> algebra) =>
+      algebra.lazy<A>(source.fold(algebra), source);
 }

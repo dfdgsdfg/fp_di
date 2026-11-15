@@ -28,21 +28,84 @@ List<NodeRecord> liveNodes(RuntimeState s) => [
     if (!node.removed) node,
 ]..sort((a, b) => a.id.value.compareTo(b.id.value));
 
-// ---- Seams. One function each. A later phase extends them for collections.
+// ---- Seams. One function each.
 
-/// The keys whose publisher the node [n] is bound to: the required keys, then
-/// the optional keys.
+/// The contribution keys that the node [n] reads for the collection key
+/// [collection], in the order of the read.
+///
+/// The keys come from the declarations of the scope of the node and of its
+/// ancestors, the ancestors first, and the declaration order within a scope. A
+/// scope that did not run counts. The declaration of the node itself does not
+/// count, and a node that the runtime removed in an initialized scope does not
+/// count. A key that two scopes declare appears once, at its first position.
+List<DiKey<Object?>> contributionKeysOf(
+  RuntimeState s,
+  NodeId n,
+  DiCollectionKey<Object?> collection,
+) {
+  final node = nodeRecord(s, n);
+  final chain = <ScopeRecord>[];
+  for (
+    ScopeId? at = node.scope;
+    at != null;
+    at = scopeRecord(s, at).parent.toNullable()
+  ) {
+    chain.add(scopeRecord(s, at));
+  }
+  final result = <DiKey<Object?>>[];
+  final seen = <DiKey<Object?>>{};
+  for (final scope in chain.reversed) {
+    for (var i = 0; i < scope.components.length; i++) {
+      final component = scope.components[i];
+      final DiKey<Object?>? contribution = switch (collection) {
+        DiSetKey<Object?>() =>
+          component.contributesTo == collection
+              ? scope.contributionKeys[i]
+              : null,
+        DiMapKey<Object?>() => switch (component.key) {
+          final DiMapEntryKey<Object?> entry
+              when component.hasKey && entry.mapKey == collection =>
+            entry,
+          _ => null,
+        },
+      };
+      if (contribution == null) continue;
+      if (scope.id == node.scope && i == node.index) continue;
+      if (scope.initialized &&
+          i < scope.nodes.length &&
+          nodeRecord(s, scope.nodes[i]).removed) {
+        continue;
+      }
+      if (seen.add(contribution)) result.add(contribution);
+    }
+  }
+  return result;
+}
+
+/// The keys whose publisher the node [n] is bound to: the required keys, the
+/// optional keys, and the contribution keys of every collection that it reads,
+/// strictly or not.
 Set<DiKey<Object?>> plainReads(RuntimeState s, NodeRecord n) {
   final component = componentOf(s, n);
-  return {...component.requires, ...component.optional};
+  return {
+    ...component.requires,
+    ...component.optional,
+    for (final collection in component.collectionKeys)
+      ...contributionKeysOf(s, n.id, collection),
+    for (final collection in component.optionalCollectionKeys)
+      ...contributionKeysOf(s, n.id, collection),
+  };
 }
 
 /// The keys that the node [n] publishes when it commits.
 ///
-/// An effect component publishes no key.
+/// An effect publishes no key. A contribution publishes the key of its
+/// declaration. A map entry publishes its entry key.
 Set<DiKey<Object?>> declaredPublishes(RuntimeState s, NodeRecord n) {
   final component = componentOf(s, n);
-  return component.isEffect ? const {} : {component.key};
+  if (component.hasKey) return {component.key};
+  final contribution = scopeRecord(s, n.scope).contributionKeys[n.index];
+  return contribution == null ? const {} : {contribution};
 }
 
 // ---- Resolution.
@@ -101,20 +164,47 @@ bool targetChanged(RuntimeState s, NodeId n) {
     final committed = node.committed[key] ?? const None();
     if (!_samePublisher(next, committed)) return true;
   }
+  // A collection changed when its members changed, also when no member
+  // resolves differently.
+  final component = componentOf(s, node);
+  for (final collection in [
+    ...component.collectionKeys,
+    ...component.optionalCollectionKeys,
+  ]) {
+    final previous = node.membership[collection];
+    final keys = contributionKeysOf(s, n, collection);
+    if (previous == null || !_sameKeys(previous, keys)) return true;
+  }
   return false;
 }
 
-/// The required keys of the node [n] that do not resolve now, in the order of
-/// the declaration.
-List<DiKey<Object?>> unmet(RuntimeState s, NodeId n) {
+bool _sameKeys(List<DiKey<Object?>> a, List<DiKey<Object?>> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// The keys that keep the node [n] from activating, in a stable order: the
+/// required keys that do not resolve now, in the order of the declaration, and
+/// then each strict collection key that has a contribution key that does not
+/// resolve.
+List<DiKeyBase> unmet(RuntimeState s, NodeId n) {
   final node = nodeRecord(s, n);
+  final component = componentOf(s, node);
+  bool unresolved(DiKey<Object?> key) =>
+      resolve(s, node.scope, key, exclude: Some(n)).isNone();
   return [
-    for (final key in componentOf(s, node).requires)
-      if (resolve(s, node.scope, key, exclude: Some(n)).isNone()) key,
+    for (final key in component.requires)
+      if (unresolved(key)) key,
+    for (final collection in component.collectionKeys)
+      if (contributionKeysOf(s, n, collection).any(unresolved)) collection,
   ];
 }
 
-/// Whether every required key of the node [n] resolves now.
+/// Whether every required key of the node [n] resolves now, and every
+/// contribution of each strict collection that it reads.
 bool satisfied(RuntimeState s, NodeId n) => unmet(s, n).isEmpty;
 
 // ---- Phases.
@@ -249,7 +339,7 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
   final members = scope.components;
   final owners = <DiKey<Object?>, List<String>>{};
   for (final member in members) {
-    if (!member.isEffect) (owners[member.key] ??= []).add(member.label);
+    if (member.hasKey) (owners[member.key] ??= []).add(member.label);
   }
   final declared = <DiKey<Object?>>{};
   for (
@@ -258,7 +348,7 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
     at = scopeRecord(s, at).parent.toNullable()
   ) {
     for (final component in scopeRecord(s, at).components) {
-      if (!component.isEffect) declared.add(component.key);
+      if (component.hasKey) declared.add(component.key);
     }
   }
   final problems = <Cause<DiFailure>>[
@@ -271,7 +361,7 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
       if (declared.contains(key)) continue;
       var published = false;
       for (var j = 0; j < members.length && !published; j++) {
-        published = j != i && !members[j].isEffect && members[j].key == key;
+        published = j != i && members[j].hasKey && members[j].key == key;
       }
       if (!published) {
         problems.add(

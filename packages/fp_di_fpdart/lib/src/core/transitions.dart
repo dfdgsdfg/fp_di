@@ -41,7 +41,7 @@ RuntimeState _bumpOnPhase(
 ) => _phaseChanged(before, after, ids) ? _bumped(after) : after;
 
 /// What an observer sees of one node.
-typedef _NodeView = (NodePhase, List<DiKey<Object?>>, Cause<DiFailure>?, int);
+typedef _NodeView = (NodePhase, List<DiKeyBase>, Cause<DiFailure>?, int);
 
 _NodeView _viewOf(RuntimeState s, NodeId n) => (
   nodePhase(s, n),
@@ -135,7 +135,9 @@ bool _sameView(_NodeView a, _NodeView b) {
 /// Commits the activation of the node [n] in one step.
 ///
 /// The node becomes active with [value], with the committed [view], with the
-/// publishers [deps] that it read, and with the release functions [owned].
+/// publishers [deps] that it read, and with the release functions [owned]. The
+/// [membership] holds the contribution keys of each collection that the
+/// activation read.
 /// The scope binds every key of [declaredPublishes] to a new publisher
 /// identity, which has the new commit number. The caller checked with
 /// [conflictingPublication] that no key is bound. The activation ends, so the
@@ -146,8 +148,9 @@ RuntimeState commit(
   Object? value,
   Map<DiKey<Object?>, Option<PublisherRef>> view,
   Set<NodeId> deps,
-  Finalizers owned,
-) {
+  Finalizers owned, {
+  Map<DiCollectionKey<Object?>, List<DiKey<Object?>>> membership = const {},
+}) {
   final node = nodeRecord(s, n);
   final commits = node.commits + 1;
   final publisher = PublisherRef(n, commits);
@@ -163,6 +166,7 @@ RuntimeState commit(
         doomed: false,
         inFlight: const None(),
         committed: view,
+        membership: membership,
         dependencies: {
           for (final dependency in deps)
             if (dependency != n) dependency,
@@ -256,6 +260,7 @@ RuntimeState endRelease(
       available: false,
       reactivationBlocked: ownFailed,
       committed: const {},
+      membership: const {},
       dependencies: const {},
       value: const None(),
       finalizers: Finalizers.empty,

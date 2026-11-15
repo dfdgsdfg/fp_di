@@ -153,7 +153,7 @@ final class UnavailableKeyFailure extends DiFailure {
   }) : _message = message;
 
   /// The key that no active scope publishes.
-  final DiKey<Object?> key;
+  final DiKeyBase key;
 
   /// The state of each failed node behind [key], each one time.
   ///
@@ -223,8 +223,9 @@ final class InactiveNodeFailure extends DiFailure {
   /// Creates the failure of a node that waits for [missing].
   const InactiveNodeFailure([this.missing = const []]);
 
-  /// The required keys of the node that do not resolve.
-  final List<DiKey<Object?>> missing;
+  /// The keys that the node waits for. A collection key stands for a
+  /// contribution that does not resolve.
+  final List<DiKeyBase> missing;
 
   @override
   String get message => missing.isEmpty
@@ -261,4 +262,18 @@ final class UnsettledFailure extends DiFailure {
   @override
   String get message =>
       'the nodes ${labels.join(', ')} do not settle after $passes passes';
+}
+
+/// `Lazy.force` ran after the disposal of the owner was requested, or after the
+/// owner released the value.
+///
+/// A creation that was in flight when the owner released settles with this
+/// failure, too. The runtime releases the value of such a creation once.
+final class DisposedLazyFailure extends DiFailure {
+  /// Creates the failure.
+  const DisposedLazyFailure();
+
+  @override
+  String get message =>
+      'Lazy.force ran after its owning component was disposed';
 }

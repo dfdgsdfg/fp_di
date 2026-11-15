@@ -220,6 +220,98 @@ void main() {
       expect(done, isTrue, reason: 'the stream of errors closes');
     });
 
+    test('a lazy value created inside, read and released outside', () async {
+      // from: dead_zone_test.dart: a lazy value created inside, read and
+      // released outside
+      var made = 0;
+      var released = 0;
+      const key = DiKey<Lazy<Repo>>();
+      final scope = Scope(
+        components: [
+          Component<Lazy<Repo>>(
+            key: key,
+            dependency: Dependency<Repo>(
+              create: () => Repo(++made),
+              dispose: (_) => released++,
+            ).lazy(),
+          ),
+        ],
+      );
+      late Repo inside;
+      await fake.run(() async {
+        rightOf(await scope.run());
+        inside = rightOf(
+          await rightOf(scope.get<Lazy<Repo>>(key: key)).force().run(),
+        );
+      });
+      final holder = rightOf(scope.get<Lazy<Repo>>(key: key));
+      final outside = rightOf(await holder.force().run().timeout(limit));
+      expect(identical(outside, inside), isTrue);
+      expect(made, 1);
+      rightOf(await scope.dispose().timeout(limit));
+      expect(released, 1);
+      expect(
+        leftOf(await holder.force().run()).only,
+        isA<DisposedLazyFailure>(),
+      );
+    });
+
+    test('a lazy value forced outside, created in an earlier zone', () async {
+      // from: dead_zone_test.dart: a lazy value forced outside, created in an
+      // earlier zone
+      var made = 0;
+      const key = DiKey<Lazy<Repo>>();
+      final scope = Scope(
+        components: [
+          Component<Lazy<Repo>>(
+            key: key,
+            dependency: Dependency<Repo>(create: () => Repo(++made)).lazy(),
+          ),
+        ],
+      );
+      rightOf(await fake.run(scope.run));
+      final holder = rightOf(scope.get<Lazy<Repo>>(key: key));
+      expect(rightOf(await holder.force().run().timeout(limit)).id, 1);
+      rightOf(await scope.dispose().timeout(limit));
+    });
+
+    test('a lazy creation outside ends by the cancellation of a dead-zone '
+        'activation', () async {
+      // from: dead_zone_test.dart: a lazy creation outside ends by the
+      // cancellation of a dead-zone activation
+      const key = DiKey<Lazy<int>>();
+      final scope = Scope(
+        components: [
+          Component<Lazy<int>>(
+            key: key,
+            dependency: Dependency.cancellation()
+                .mapTask<int>((token) => token.whenCanceled.map((_) => 1))
+                .lazy(),
+          ),
+        ],
+      );
+      rightOf(await fake.run(scope.run));
+      final holder = rightOf(scope.get<Lazy<int>>(key: key));
+      final forced = holder.force().run()..ignore();
+      rightOf(await scope.dispose().timeout(limit));
+      expect(leftOf(await forced).only, isA<DisposedLazyFailure>());
+    });
+
+    test('a controller of the dead zone, canceled outside', () async {
+      // from: dead_zone_test.dart: a controller of the dead zone, canceled
+      // outside
+      late CancellationController controller;
+      await fake.run(() async {
+        controller = CancellationController();
+      });
+      final waiting = controller.token.whenCanceled.run();
+      expect(controller.isCanceled, isFalse);
+      controller.cancel();
+      expect(controller.isCanceled, isTrue);
+      await waiting.timeout(limit);
+      await controller.token.whenCanceled.run().timeout(limit);
+    });
+
     test('a waiter for activation, requested inside and outside', () async {
       // from: dead_zone_test.dart: a waiter for activation, requested inside
       // and outside
@@ -423,6 +515,40 @@ void main() {
         rightOf(await child.dispose());
       });
       rightOf(await root.dispose());
+    });
+
+    test('a lazy value forced and released in the zone', () async {
+      // from: dead_zone_test.dart: a lazy value forced and released in the
+      // zone
+      const key = DiKey<Lazy<Repo>>();
+      var made = 0;
+      final scope = Scope(
+        components: [
+          Component<Lazy<Repo>>(
+            key: key,
+            dependency: Dependency<Repo>(create: () => Repo(++made)).lazy(),
+          ),
+        ],
+      );
+      rightOf(await scope.run());
+      await fake.runStrict(() async {
+        final holder = rightOf(scope.get<Lazy<Repo>>(key: key));
+        expect(rightOf(await holder.force().run()).id, 1);
+        expect(rightOf(await holder.force().run()).id, 1);
+        rightOf(await scope.dispose());
+      });
+    });
+
+    test('a controller of the real zone, canceled in the zone', () async {
+      // from: dead_zone_test.dart: a controller of the real zone, canceled in
+      // the zone
+      final controller = CancellationController();
+      await fake.runStrict(() async {
+        final waiting = controller.token.whenCanceled.run();
+        controller.cancel();
+        await waiting;
+        await controller.token.whenCanceled.run();
+      });
     });
 
     test('a node waited for and disposed in the zone', () async {

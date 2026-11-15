@@ -29,10 +29,12 @@
 /// The library depends on fpdart only.
 library;
 
+export 'src/cancellation.dart' hide CancelReason, CancellationSource;
 export 'src/cause.dart';
 export 'src/component.dart' hide runComponent;
 export 'src/dependency.dart' hide StepContext, foldDependency, runDependency;
 export 'src/failure.dart';
-export 'src/key.dart';
+export 'src/key.dart' hide ContributionKey, effectKey;
+export 'src/lazy.dart' hide createLazy;
 export 'src/node.dart' hide componentNodeOf;
 export 'src/scope.dart';

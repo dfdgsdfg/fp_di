@@ -38,6 +38,14 @@ final class Finalizers {
   Finalizers push(String owner, FutureOr<void> Function() release) =>
       Finalizers._([..._entries, _Single(owner, release)]);
 
+  /// A stack with a [release] on top that gives its own cause.
+  ///
+  /// The task never throws. A release of a value that owns more values, such
+  /// as a `Lazy`, uses it: each failure of the inner release is already a `Die`
+  /// of the cause.
+  Finalizers pushCause(Task<Cause<DiFailure>> Function() release) =>
+      Finalizers._([..._entries, _Cause(release)]);
+
   /// A stack with the entries of [next] on top.
   Finalizers then(Finalizers next) =>
       next.isEmpty ? this : Finalizers._([..._entries, ...next._entries]);
@@ -46,11 +54,14 @@ final class Finalizers {
   ///
   /// The entries release from the newest to the oldest, one after the other.
   /// Every entry runs. The cause is `Empty` when no dispose function failed.
-  Task<Cause<DiFailure>> release() => _entries.reversed.fold(
-    Task<Cause<DiFailure>>.of(const Empty<DiFailure>()),
-    (done, entry) =>
-        done.flatMap((before) => entry.release().map((next) => before + next)),
-  );
+  Task<Cause<DiFailure>> release() => Task(() async {
+    // The newest entry starts at once, without a wait before it.
+    var cause = const Empty<DiFailure>() as Cause<DiFailure>;
+    for (final entry in _entries.reversed) {
+      cause += await entry.release().run();
+    }
+    return cause;
+  });
 }
 
 sealed class _Entry {
@@ -75,4 +86,13 @@ final class _Single extends _Entry {
         (error, stackTrace) =>
             Die<DiFailure>(DisposeFailure(owner, error), stackTrace),
       ).match((defect) => defect, (_) => const Empty<DiFailure>());
+}
+
+final class _Cause extends _Entry {
+  const _Cause(this.run);
+
+  final Task<Cause<DiFailure>> Function() run;
+
+  @override
+  Task<Cause<DiFailure>> release() => run();
 }

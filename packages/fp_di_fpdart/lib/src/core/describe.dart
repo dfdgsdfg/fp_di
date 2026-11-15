@@ -33,6 +33,8 @@ String describeScope(RuntimeState s, ScopeId id) {
       if (state.missing.isNotEmpty) {
         parts.add('missing ${state.missing.join(', ')}');
       }
+      final set = componentOf(s, nodeRecord(s, n)).contributesTo;
+      if (set != null) parts.add('contributes to $set');
       final key = state.key.toNullable();
       return '$indent  - ${labeled(state.label, key)}: ${parts.join('; ')}';
     }
@@ -51,7 +53,7 @@ String describeScope(RuntimeState s, ScopeId id) {
         final node = i < record.nodes.length && live(record.nodes[i])
             ? record.nodes[i]
             : null;
-        final key = component.isEffect ? null : component.key;
+        final key = component.hasKey ? component.key : null;
         final label = labeled(component.label, key);
         lines.add(node == null ? '$indent  - $label: declared' : entryOf(node));
       }
