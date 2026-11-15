@@ -90,6 +90,8 @@ final class ScopeSnapshot {
 /// While `isDisposed` of the scope is true, the widget does not call
 /// [builder], because a lookup of a disposed scope throws. A rebuild from
 /// above keeps the widgets of the last build.
+///
+/// {@category Riverpod}
 class ScopeBuilder extends StatefulWidget {
   /// Creates a scope with [create], initializes it, publishes it, and
   /// disposes it when this widget is unmounted.

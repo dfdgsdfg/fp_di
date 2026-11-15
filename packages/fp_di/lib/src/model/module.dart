@@ -31,6 +31,7 @@ import 'key.dart';
 ///
 /// {@category Declaration}
 /// {@category Guides}
+/// {@category Riverpod}
 final class Module {
   /// A module of [components], listed in declaration order.
   ///

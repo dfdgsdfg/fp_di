@@ -28,6 +28,8 @@ import 'package:fp_di/fp_di.dart';
 /// A scope answers no read from the moment its disposal starts, not even for
 /// a key of its parent. With the other order, a widget that reads before the
 /// change gets a `DisposedScopeError`.
+///
+/// {@category Riverpod}
 class ScopeProvider extends StatefulWidget {
   /// Publishes the scope that [scope] holds at the moment of each lookup.
   const ScopeProvider.listenable({

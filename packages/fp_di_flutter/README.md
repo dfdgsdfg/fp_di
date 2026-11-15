@@ -13,6 +13,9 @@ Use `context.di<T>()` for a non-listening lookup and `context.watchDi<T>()` to
 rebuild on publisher identity or availability changes. `watchDi` does not watch
 mutable fields inside `T`.
 
+Coming from Riverpod? [`doc/from_riverpod.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/doc/from_riverpod.md)
+maps `ProviderScope`, the consumer widgets, and `WidgetRef` to this package.
+
 ## Examples
 
 Each file in [`example/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di_flutter/example) is one application with its own `main`:

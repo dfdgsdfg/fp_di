@@ -1,0 +1,8 @@
+# The package has one guide page. `dart doc` builds a topic page only for a
+# category that tags a type, so `ScopeProvider` and `ScopeBuilder` name the
+# category with `{@category Riverpod}` in their doc comments.
+dartdoc:
+  categories:
+    Riverpod:
+      displayName: Coming from Riverpod
+      markdown: doc/from_riverpod.md

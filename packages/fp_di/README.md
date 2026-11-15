@@ -425,6 +425,10 @@ The laws are about `fp_di` itself. They do not import the theorems of the
 - Coming from get_it? [`doc/from_get_it.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/from_get_it.md)
   maps each get_it call to its `fp_di` form and suggests an order for moving
   an application over.
+- Coming from Riverpod? [`doc/from_riverpod.md`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/doc/from_riverpod.md)
+  maps providers, `Ref`, and `ProviderContainer` to `fp_di`, and states what
+  `fp_di` does not do: it holds no state. The guide of `fp_di_flutter` covers
+  the widgets.
 - Each file in [`example/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di/example) runs with `dart run`:
 
   | Example | Shows |

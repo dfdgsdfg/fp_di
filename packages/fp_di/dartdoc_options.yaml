@@ -11,6 +11,7 @@ dartdoc:
     - Observation
     - Errors
     - Guides
+    - Riverpod
   categories:
     Dependency:
       markdown: doc/dependency.md
@@ -28,3 +29,6 @@ dartdoc:
     Guides:
       displayName: Coming from get_it
       markdown: doc/from_get_it.md
+    Riverpod:
+      displayName: Coming from Riverpod
+      markdown: doc/from_riverpod.md

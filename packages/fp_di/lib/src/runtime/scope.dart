@@ -27,6 +27,7 @@ part 'runtime_state.dart';
 ///
 /// {@category Declaration}
 /// {@category Guides}
+/// {@category Riverpod}
 final class Scope {
   Scope._(this._runtime, this._scope);
 
