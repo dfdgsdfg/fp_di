@@ -1,3 +1,4 @@
+import 'change.dart';
 import 'key.dart';
 import 'state.dart';
 
@@ -194,4 +195,28 @@ final class DiListenerException extends DiException {
 
   /// The stack trace of [cause].
   final StackTrace stackTrace;
+}
+
+/// A disposal started with `ignoreHolds` while holds of the disposal were
+/// open.
+///
+/// `Scope.errors` reports it after the transition that starts the disposal,
+/// so each disposal that did not wait leaves a record, whatever code set the
+/// time limit. [holds] lists the holds that the disposal ignored.
+///
+/// {@category Errors}
+final class IgnoredHoldsException extends DiException {
+  /// Creates the report of a disposal that ignored [holds].
+  IgnoredHoldsException(Iterable<HoldState> holds)
+    : this._(List<HoldState>.unmodifiable(holds));
+
+  IgnoredHoldsException._(this.holds)
+    : super(
+        'A disposal ignored ${holds.length} open '
+        '${holds.length == 1 ? 'hold' : 'holds'}: '
+        '${holds.map((hold) => hold.debugLabel ?? 'hold').join(', ')}',
+      );
+
+  /// The open holds that the disposal ignored.
+  final List<HoldState> holds;
 }

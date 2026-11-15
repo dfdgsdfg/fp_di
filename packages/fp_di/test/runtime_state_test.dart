@@ -989,19 +989,24 @@ void main() {
       expect(calls, atDisposal);
     });
 
-    test('addListener rejects a scope from disposeRequested', () async {
+    test('addListener rejects a scope from disposing', () async {
       final root = await Scope().initialize();
       final child = await root.child().initialize();
       void listener() {}
       child.addListener(listener);
       final gone = child.dispose();
       expect(child.state.phase, ScopePhase.disposeRequested);
-      expect(
-        () => child.addListener(() {}),
-        throwsA(isA<DisposedScopeError>()),
-      );
+      // A requested disposal still answers, and a hold can keep it waiting,
+      // so a listener added now hears the start and the end of the disposal.
+      final heard = <ScopePhase>[];
+      void late() => heard.add(child.state.phase);
+      child.addListener(late);
       child.removeListener(listener);
       await gone;
+      expect(
+        heard,
+        containsAllInOrder([ScopePhase.disposing, ScopePhase.disposed]),
+      );
       expect(
         () => child.addListener(() {}),
         throwsA(isA<DisposedScopeError>()),

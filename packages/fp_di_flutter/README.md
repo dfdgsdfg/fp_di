@@ -139,7 +139,7 @@ ScopeBuilder(
   create: (parent) => parent.child(module: editorModule),
   builder: (context, snapshot, child) => switch (snapshot) {
     ScopeSnapshot(:final error?) => Text('the drafts did not open: $error'),
-    ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+    _ when snapshot.scope.isInitialized => child!,
     _ => const Text('opening the drafts'),
   },
   child: const Editor(),
@@ -155,19 +155,23 @@ ScopeBuilder(
 - The widget builds again after each transition that changes the phase or a
   node state of the scope, also after `initialize`: a node that waits for a
   key of an ancestor shows in `snapshot.nodeStates`. A child scope that
-  starts or leaves does not build it again. The phase `initialized` does not
-  mean that each node is active, so read such a key with `watchMaybeDi` or
-  `watchMaybeDiNode`.
+  starts or leaves does not build it again.
+- Show the content when `snapshot.scope.isInitialized` is true, not when the
+  phase is `initialized`. A hold of an ancestor can keep the scope in
+  `disposeRequested`, where the lookups answer and the content should stay
+  on screen. `isInitialized` does not mean that each node is active, so read
+  a key that can wait with `watchMaybeDi` or `watchMaybeDiNode`.
 - Everything that the builder returns is below the scope, from the first
   build. A lookup there reads the keys of the ancestors at once.
-- The widget calls no builder while the scope is disposed. It reports the
-  failure of a disposal, and the rollback failures of an `initialize` that the
-  unmount canceled, to `FlutterError.reportError`.
+- In the phase `disposeRequested` the lookups answer, so the builder runs.
+  Once the disposal starts (`disposing`, `disposed`), the widget calls no
+  builder and keeps no widget below it. It reports the failure of a disposal,
+  and the rollback failures of an `initialize` that the unmount canceled, to
+  `FlutterError.reportError`.
 
-`ScopeBuilder.value(scope: scope, builder: ...)` builds from the state of a
-scope that the caller owns. It calls no `initialize` and no `dispose`, so its
-snapshot has no error. See
+See
 [`page_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/page_scope.dart).
+For a scope that the caller owns, use `ScopeBoundary`.
 
 ## A scope for one route
 
@@ -189,8 +193,51 @@ and the disposal.
 With one provider at the root and a listenable, a replacement reaches a route
 that exits too. A widget of that route that reads a key of the old scope with
 `watchDi` rebuilds in the frame of the change and throws an
-`UnavailableKeyException`. Read such a key with `watchMaybeDi` or `maybeDi`,
-or remove the widget in the frame of the change.
+`UnavailableKeyException`. Put such a route below a `ScopeBoundary`, read the
+key with `watchMaybeDi` or `maybeDi`, or remove the widget in the frame of the
+change.
+
+## A scope that ends outside the tree
+
+A session scope that the host disposes at logout can have routes of a flat
+`Navigator` that read it during their exit transitions. Put each such route
+below a `ScopeBoundary` of the scope:
+
+```dart
+MaterialPageRoute<void>(
+  settings: const RouteSettings(name: '/chat'),
+  builder: (_) => ScopeBoundary(
+    scope: session,
+    builder: (context, snapshot, child) => child!,
+    child: const ChatPage(),
+  ),
+);
+
+// Logout, in one turn. Do not await the disposal before the routes leave:
+// the disposal waits for them.
+current.value = app;
+unawaited(session.dispose());
+navigator.popUntil((route) => route.isFirst);
+```
+
+- At the mount, the boundary takes a hold of the disposal of its scope
+  (`Scope.disposeHold`), and in `State.dispose` it closes the hold. A move
+  with a `GlobalKey` keeps the hold, and a route that another route covers
+  keeps it open.
+- A `dispose()` call marks the scope disposed at once and cancels its
+  activations in flight, but the nodes are released only after the last hold
+  closes. Until then the lookups answer and nothing new is created, so each
+  exiting route reads live values until Flutter removes it.
+- The boundary publishes its scope again, so the change of the listenable
+  above does not reach the widgets below it.
+- The hold has the `debugLabel` of the boundary, else the name of its route,
+  else `ScopeBoundary`. `Scope.openHolds`, `describe`, and a slow report of
+  the wait name the boundaries that a disposal waits for.
+- For a bound on the wait, use
+  `dispose().timeout(limit, onTimeout: () => dispose(ignoreHolds: true))`.
+  A disposal that ignores open holds reports an `IgnoredHoldsException` to
+  `Scope.errors`, and each mounted boundary of the scope then keeps no widget
+  below it.
 
 ## Dialogs, bottom sheets, and snack bars
 

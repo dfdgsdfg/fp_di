@@ -287,6 +287,48 @@ void main() {
       },
     );
 
+    test(
+      'state lists the open holds of a waiting disposal (V-T-TL-DT-006)',
+      () async {
+        final root = _root(
+          module: Module(debugLabel: 'app', components: []),
+        );
+        final child = root.child(
+          module: Module(debugLabel: 'page', components: []),
+        );
+        await root.initialize();
+        await child.initialize();
+        final rootId = await _onlyRootId();
+
+        final labeled = child.disposeHold(debugLabel: 'dialog');
+        final unlabeled = child.disposeHold();
+        var ended = false;
+        final disposal = child.dispose().then((_) => ended = true);
+        await settle();
+        expect(ended, isFalse, reason: 'the holds delay the disposal');
+
+        final tree = _scopeOf(await _state(rootId));
+        final page = scopeByModule(tree, 'page')!;
+        expect(page['phase'], 'disposeRequested');
+        expect(page['holds'], ['dialog', 'hold']);
+        expect(tree['holds'], isEmpty);
+
+        labeled.close();
+        expect(
+          _list(_scopeOf(await _state(rootId))['children']).single['holds'],
+          ['hold'],
+          reason: 'a closed hold leaves the list',
+        );
+
+        unlabeled.close();
+        await disposal;
+        expect(ended, isTrue);
+        final after = _scopeOf(await _state(rootId));
+        expect(after['children'], isEmpty);
+        expect(after['holds'], isEmpty);
+      },
+    );
+
     test('node details: reads, readers, failure, and cause steps', () async {
       final fixture = await _fixture();
       final revision = fixture.root.revision;
@@ -1024,9 +1066,11 @@ void _expectMatches(
   ScopeState state,
   Set<int> ids, {
   List<Scope> children = const [],
+  List<String> holds = const [],
 }) {
   expect(json['phase'], state.phase.name);
   expect(json['module'], scope.module.debugLabel);
+  expect(json['holds'], holds, reason: 'the open holds of the scope');
   final nodes = _list(json['nodes']);
   expect(nodes, hasLength(state.nodeStates.length));
   for (var i = 0; i < nodes.length; i++) {

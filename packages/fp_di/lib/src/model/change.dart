@@ -18,9 +18,11 @@ final class SlowMutation {
     required Iterable<String> ignoringCancellation,
     Iterable<String> disposing = const [],
     required this.queued,
+    Iterable<HoldState> holds = const [],
   }) : running = List.unmodifiable(running),
        ignoringCancellation = List.unmodifiable(ignoringCancellation),
-       disposing = List.unmodifiable(disposing);
+       disposing = List.unmodifiable(disposing),
+       holds = List.unmodifiable(holds);
 
   /// The mutation, such as `initialize` or `Scope.dispose`.
   final String operation;
@@ -43,6 +45,11 @@ final class SlowMutation {
   /// The mutations waiting behind this one.
   final int queued;
 
+  /// The open holds of a disposal that waits for them outside the queue,
+  /// with the operation `Scope.dispose (waiting for holds)`. Empty for a
+  /// mutation that runs.
+  final List<HoldState> holds;
+
   @override
   String toString() =>
       'SlowMutation($operation, ${elapsed.inMilliseconds} ms, '
@@ -50,7 +57,46 @@ final class SlowMutation {
       '${ignoringCancellation.isEmpty ? '' : ', ignoring cancellation: '
                 '${ignoringCancellation.join(', ')}'}'
       '${disposing.isEmpty ? '' : ', disposing: ${disposing.join(', ')}'}'
+      '${holds.isEmpty ? '' : ', holds: ${holds.map(_holdLabel).join(', ')}'}'
       ', queued: $queued)';
+}
+
+String _holdLabel(HoldState hold) => hold.debugLabel ?? 'hold';
+
+/// An open hold of a disposal, as `Scope.openHolds`, a [SlowMutation], and an
+/// `IgnoredHoldsException` report it.
+///
+/// The value names its scope by a path and holds no scope, so a report keeps
+/// no scope alive.
+///
+/// {@category Observation}
+final class HoldState {
+  /// Creates the state of one open hold.
+  const HoldState({
+    this.debugLabel,
+    required this.scopePath,
+    required this.elapsed,
+    this.debugStackTrace,
+  });
+
+  /// The label that the holder gave to `Scope.disposeHold`, or null.
+  final String? debugLabel;
+
+  /// The scope of the hold, as `describe` of the root names it: `scope` for
+  /// the root, and `child scope 1.2` for the second child of its first child.
+  final String scopePath;
+
+  /// How long the hold has been open.
+  final Duration elapsed;
+
+  /// The stack trace of the `disposeHold` call. The runtime records it only
+  /// inside an `assert`, so it is null in a build without assertions.
+  final StackTrace? debugStackTrace;
+
+  @override
+  String toString() =>
+      'HoldState(${_holdLabel(this)}, $scopePath, '
+      '${elapsed.inMilliseconds} ms)';
 }
 
 /// Receives a [SlowMutation] report.

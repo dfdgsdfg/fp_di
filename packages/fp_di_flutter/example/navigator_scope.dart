@@ -160,7 +160,7 @@ final class SessionShell extends StatelessWidget {
 Widget _build(BuildContext context, ScopeSnapshot snapshot, Widget? child) {
   return switch (snapshot) {
     ScopeSnapshot(:final error?) => Text('failed: $error'),
-    ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+    _ when snapshot.scope.isInitialized => child!,
     _ => const Text('opening'),
   };
 }

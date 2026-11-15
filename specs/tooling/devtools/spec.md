@@ -8,7 +8,7 @@ depends_on: ["specs/runtime/lifecycle/spec.md", "specs/architecture/spec.md"]
 
 # DevTools Extension Specification
 
-[Requirements](requirements.md) · [Decision log](log.md) · [Known gaps](gap.md)
+[Requirements](requirements.md) · [Decision log](log.md)
 
 Architecture: [Project architecture](../../architecture/spec.md). Observation
 contract: [Runtime lifecycle, Observation](../../runtime/lifecycle/spec.md#observation).
@@ -260,7 +260,7 @@ to the workspace.
 - **Files:** [`devtools_inspector_test.dart`](../../../packages/fp_di/test/devtools_inspector_test.dart)
 - **Fixtures:** a root with a child scope, two holds of the child, one with a `debugLabel`, and a disposal of the child that waits for them
 - **Pass:** the child lists the label and `hold`; the root lists none; after both holds close and the disposal ends, the child is gone from the tree
-- **Evidence:** missing — not implemented; see [G-TL-DT-002](gap.md#g-tl-dt-002)
+- **Evidence:** present
 
 ### <a id="v-l-tl-dt-001"></a>V-L-TL-DT-001 — `[lint]` Packaging and the core boundary
 

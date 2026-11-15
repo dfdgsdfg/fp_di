@@ -288,6 +288,7 @@ final class _RuntimeInspector {
       'children': [
         for (final child in scope.children) _scopeJson(child, values: values),
       ],
+      'holds': [for (final hold in scope.holds) _holdLabel(hold)],
       'nodes': [
         for (var i = 0; i < scope.nodes.length; i++)
           <String, Object?>{
@@ -298,6 +299,10 @@ final class _RuntimeInspector {
       ],
     };
   }
+
+  /// The label of an open hold of a disposal: its `debugLabel`, or `hold`
+  /// for a hold without a label.
+  static String _holdLabel(_RuntimeHold hold) => hold.debugLabel ?? 'hold';
 
   /// The fields that a node state shows in an answer and in an event.
   static Map<String, Object?> _nodeFields(NodeState state) => <String, Object?>{

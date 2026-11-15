@@ -23,6 +23,7 @@ import 'package:kiri_check/kiri_check.dart'
         boolean,
         combine2,
         combine3,
+        combine4,
         combine5,
         constantFrom,
         forAll,
@@ -364,6 +365,189 @@ final Arbitrary<List<bool>> _chainFlags = list(
   minLength: 8,
   maxLength: 8,
 );
+
+// ---------------------------------------------------------------------------
+// Trees of scopes for the laws of the holds
+
+/// A generated tree: `(size, parents, readsParent, failing)`.
+///
+/// The scope `i` below the root has the parent `parents[i - 1] % i`. Each
+/// scope holds two members, `s{i}a` and `s{i}b`. `b` reads the `a` of its
+/// scope, and also the `b` of the parent scope when `readsParent[i]` is true,
+/// so the release order of the tree is not flat. When `failing` is not
+/// negative, the member `failing % (2 * size)` throws from its dispose
+/// function after it logs its release.
+typedef TreeSpec = (int, List<int>, List<bool>, int);
+
+/// A generated disposal with holds: `(tree, target, holds)`.
+///
+/// `holds` is `(holds, order, waitFirst)`. A hold is `(scope, labelled)`.
+/// `order` ranks the closes of the holds, and `waitFirst` makes a law call
+/// `dispose()` before it calls `dispose(ignoreHolds: true)`.
+typedef HoldCase = (TreeSpec, int, (List<(int, bool)>, List<int>, bool));
+
+final Arbitrary<TreeSpec> _treeSpec = combine4(
+  integer(min: 1, max: 4),
+  list(integer(min: 0, max: 2), minLength: 3, maxLength: 3),
+  list(boolean(), minLength: 4, maxLength: 4),
+  integer(min: -3, max: 7),
+);
+
+final Arbitrary<HoldCase> _holdCase = combine3(
+  _treeSpec,
+  integer(min: 0, max: 3),
+  combine3(
+    list(
+      combine2(integer(min: 0, max: 3), boolean()),
+      minLength: 1,
+      maxLength: 5,
+    ),
+    list(integer(min: 0, max: 9), minLength: 5, maxLength: 5),
+    boolean(),
+  ),
+);
+
+/// A scope tree that logs the release of its members.
+final class _HoldTree {
+  _HoldTree(this.size, this.parents, this.scopes, this.log);
+
+  final int size;
+
+  /// The parent index of each scope, -1 for the root.
+  final List<int> parents;
+  final List<Scope> scopes;
+  final List<String> log;
+
+  /// Whether scope [i] is [ancestor] or one of its descendants.
+  bool inSubtree(int i, int ancestor) {
+    for (var at = i; at >= 0; at = parents[at]) {
+      if (at == ancestor) return true;
+    }
+    return false;
+  }
+}
+
+Future<_HoldTree> _holdTree(TreeSpec spec) async {
+  final (size, rawParents, readsParent, failing) = spec;
+  final log = <String>[];
+  final parents = <int>[
+    -1,
+    for (var i = 1; i < size; i++) rawParents[i - 1] % i,
+  ];
+  final failIndex = failing < 0 ? -1 : failing % (2 * size);
+  final keysA = <DiKey<String>>[
+    for (var i = 0; i < size; i++) DiKey<String>(name: 's${i}a'),
+  ];
+  final keysB = <DiKey<String>>[
+    for (var i = 0; i < size; i++) DiKey<String>(name: 's${i}b'),
+  ];
+  void Function(String) release(int member, String name) => (_) {
+    log.add(name);
+    if (member == failIndex) throw StateError('$name fails');
+  };
+
+  Module moduleOf(int i) {
+    final parent = parents[i];
+    return Module(
+      components: <ComponentBase>[
+        Component<String>(
+          dependency: Dependency<String>(
+            create: () => 's${i}a',
+            dispose: release(2 * i, 's${i}a'),
+          ),
+          key: keysA[i],
+        ),
+        Component<String>(
+          dependency: parent >= 0 && readsParent[i]
+              ? Dependency2<String, String, String>(
+                  key1: keysA[i],
+                  key2: keysB[parent],
+                  create: (a, b) => '$a.$b',
+                  dispose: release(2 * i + 1, 's${i}b'),
+                )
+              : Dependency1<String, String>(
+                  key1: keysA[i],
+                  create: (a) => '$a.b',
+                  dispose: release(2 * i + 1, 's${i}b'),
+                ),
+          key: keysB[i],
+        ),
+      ],
+    );
+  }
+
+  final scopes = <Scope>[];
+  for (var i = 0; i < size; i++) {
+    final scope = i == 0
+        ? Scope(module: moduleOf(0))
+        : scopes[parents[i]].child(module: moduleOf(i));
+    scopes.add(await scope.initialize());
+  }
+  return _HoldTree(size, parents, scopes, log);
+}
+
+/// One `dispose` call: how often it completed, and with which result.
+final class _Call {
+  _Call(Future<void> future) {
+    future.then<void>(
+      (_) {
+        completions++;
+        outcome = 'ok';
+      },
+      onError: (Object e) {
+        completions++;
+        outcome = '${e.runtimeType}';
+      },
+    );
+  }
+
+  int completions = 0;
+  String? outcome;
+}
+
+/// The release trace and the result of the same disposal without a hold.
+Future<(List<String>, String)> _withoutHolds(TreeSpec spec, int target) async {
+  final tree = await _holdTree(spec);
+  final call = _Call(tree.scopes[target].dispose());
+  await _settle(tree.scopes[target].dispose());
+  await pumpEventQueue();
+  expect(call.completions, 1);
+  final trace = List<String>.of(tree.log);
+  await _settle(tree.scopes[0].dispose());
+  return (trace, call.outcome!);
+}
+
+/// Takes the holds of [holds] in order, and returns them by index.
+List<DisposeHold> _takeHolds(_HoldTree tree, List<(int, bool)> holds) => [
+  for (var h = 0; h < holds.length; h++)
+    tree.scopes[holds[h].$1 % tree.size].disposeHold(
+      debugLabel: holds[h].$2 ? 'hold$h' : null,
+    ),
+];
+
+/// The indexes of the holds in the generated close order. The rank decides,
+/// and the index breaks a tie.
+List<int> _closeOrder(int count, List<int> ranks) =>
+    (<int>[for (var h = 0; h < count; h++) h]..sort((a, b) {
+      final byRank = ranks[a].compareTo(ranks[b]);
+      return byRank != 0 ? byRank : a.compareTo(b);
+    }));
+
+const Duration _holdTimeout = Duration(seconds: 5);
+
+/// Waits for [future] up to the time limit, and drops its error: a law
+/// compares the result through a [_Call].
+Future<void> _settle(Future<void> future) => future
+    .timeout(_holdTimeout)
+    .then<void>(
+      (_) {},
+      onError: (Object e) {
+        if (e is TimeoutException) throw e;
+      },
+    );
+
+/// The parent index of scope [i] in the tree of [spec].
+int _parentOf(TreeSpec spec, int i) => spec.$2[i - 1] % i;
 
 // ---------------------------------------------------------------------------
 
@@ -833,6 +1017,189 @@ void main() {
         expect(disposed, orderedEquals(_reverseReleases(j, hasDispose)));
         await scope.dispose();
         expect(disposed, orderedEquals(_reverseReleases(j, hasDispose)));
+      },
+      examples: 50,
+    );
+  });
+  group('holds laws (V-T-RT-LC-042)', () {
+    _law<HoldCase>(
+      '19a close order and delay: every close order gives the trace of the '
+      'disposal without holds, and each waiting call completes once',
+      _holdCase,
+      (c) async {
+        final (spec, rawTarget, (holds, ranks, _)) = c;
+        final target = rawTarget % spec.$1;
+        final (trace, outcome) = await _withoutHolds(spec, target);
+
+        final tree = await _holdTree(spec);
+        final taken = _takeHolds(tree, holds);
+        final open = <int>{
+          for (var h = 0; h < holds.length; h++)
+            if (tree.inSubtree(holds[h].$1 % tree.size, target)) h,
+        };
+        expect(tree.scopes[target].openHolds, hasLength(open.length));
+        final calls = <_Call>[
+          _Call(tree.scopes[target].dispose()),
+          _Call(tree.scopes[target].dispose()),
+          // A call of a descendant joins the disposal of the target.
+          for (var i = target + 1; i < tree.size; i++)
+            if (tree.inSubtree(i, target)) _Call(tree.scopes[i].dispose()),
+        ];
+
+        for (final h in _closeOrder(holds.length, ranks)) {
+          taken[h].close();
+          taken[h].close();
+          open.remove(h);
+          await pumpEventQueue();
+          expect(
+            tree.scopes[target].openHolds,
+            hasLength(open.length),
+            reason: 'the holds of the subtree only shrink',
+          );
+          if (open.isNotEmpty) {
+            expect(tree.log, isEmpty, reason: 'a hold is open: no release');
+            expect(
+              calls.map((call) => call.completions),
+              everyElement(0),
+              reason: 'a hold is open: no waiting call completes',
+            );
+          }
+        }
+
+        await _settle(tree.scopes[target].dispose());
+        await pumpEventQueue();
+        expect(tree.log, orderedEquals(trace));
+        for (final call in calls) {
+          expect(call.completions, 1);
+          expect(call.outcome, outcome);
+        }
+        await _settle(tree.scopes[0].dispose());
+      },
+      examples: 50,
+    );
+
+    _law<HoldCase>(
+      '19b absorption: dispose(ignoreHolds: true) releases while holds are '
+      'open, and a waiting call completes with it',
+      _holdCase,
+      (c) async {
+        final (spec, rawTarget, (holds, _, waitFirst)) = c;
+        final target = rawTarget % spec.$1;
+        final (trace, outcome) = await _withoutHolds(spec, target);
+
+        final tree = await _holdTree(spec);
+        final taken = _takeHolds(tree, holds);
+        final waiting = waitFirst ? _Call(tree.scopes[target].dispose()) : null;
+        final ignoring = _Call(tree.scopes[target].dispose(ignoreHolds: true));
+        await _settle(tree.scopes[target].dispose());
+        await pumpEventQueue();
+        // No hold closed, and the disposal completed.
+        expect(tree.log, orderedEquals(trace));
+        expect(ignoring.completions, 1);
+        expect(ignoring.outcome, outcome);
+        if (waiting != null) {
+          expect(waiting.completions, 1);
+          expect(waiting.outcome, outcome);
+        }
+        // A close after the disposal changes nothing, and never throws.
+        for (final hold in taken) {
+          hold.close();
+        }
+        await pumpEventQueue();
+        expect(tree.log, orderedEquals(trace));
+        await _settle(tree.scopes[0].dispose());
+      },
+      examples: 50,
+    );
+
+    _law<(TreeSpec, int, bool, bool)>(
+      '19c union: the holds of a child delay the disposal of its parent',
+      combine4(_treeSpec, integer(min: 0, max: 2), boolean(), boolean()),
+      (c) async {
+        final (spec, rawChild, labelled, two) = c;
+        // A tree of one scope has no child: the disposal of the root then
+        // waits for a hold of the root itself.
+        final child = spec.$1 > 1 ? 1 + rawChild % (spec.$1 - 1) : 0;
+        final parent = spec.$1 > 1 ? _parentOf(spec, child) : 0;
+        final (trace, outcome) = await _withoutHolds(spec, parent);
+
+        final tree = await _holdTree(spec);
+        final held = <DisposeHold>[
+          tree.scopes[child].disposeHold(debugLabel: labelled ? 'page' : null),
+          if (two) tree.scopes[child].disposeHold(),
+        ];
+        expect(tree.scopes[parent].openHolds, hasLength(held.length));
+        final call = _Call(tree.scopes[parent].dispose());
+        await pumpEventQueue();
+        expect(tree.log, isEmpty);
+        expect(call.completions, 0);
+        for (var h = 0; h < held.length; h++) {
+          held[h].close();
+          await pumpEventQueue();
+          if (h < held.length - 1) {
+            expect(tree.log, isEmpty, reason: 'a hold of the child is open');
+            expect(call.completions, 0);
+          }
+        }
+        await _settle(tree.scopes[parent].dispose());
+        await pumpEventQueue();
+        expect(tree.log, orderedEquals(trace));
+        expect(call.completions, 1);
+        expect(call.outcome, outcome);
+        await _settle(tree.scopes[0].dispose());
+      },
+      examples: 50,
+    );
+
+    _law<HoldCase>(
+      '19d no hold opens after the request: disposeHold throws '
+      'DisposedScopeError in the subtree',
+      _holdCase,
+      (c) async {
+        final (spec, rawTarget, (holds, ranks, _)) = c;
+        final target = rawTarget % spec.$1;
+        final tree = await _holdTree(spec);
+        final taken = _takeHolds(tree, holds);
+        final open = <int>{
+          for (var h = 0; h < holds.length; h++)
+            if (tree.inSubtree(holds[h].$1 % tree.size, target)) h,
+        };
+        final call = _Call(tree.scopes[target].dispose());
+        final outside = <DisposeHold>[];
+        for (var i = 0; i < tree.size; i++) {
+          if (tree.inSubtree(i, target)) {
+            expect(
+              () => tree.scopes[i].disposeHold(),
+              throwsA(isA<DisposedScopeError>()),
+            );
+            expect(
+              () => tree.scopes[i].disposeHold(debugLabel: 'late'),
+              throwsA(isA<DisposedScopeError>()),
+            );
+          } else {
+            // A scope outside the subtree still takes a hold.
+            outside.add(tree.scopes[i].disposeHold());
+          }
+        }
+        // The rejected calls left no hold behind.
+        expect(tree.scopes[target].openHolds, hasLength(open.length));
+        await pumpEventQueue();
+        expect(call.completions, open.isEmpty ? anyOf(0, 1) : 0);
+
+        for (final h in _closeOrder(holds.length, ranks)) {
+          taken[h].close();
+        }
+        await _settle(tree.scopes[target].dispose());
+        // After the disposal, the request of the scope still stands.
+        expect(
+          () => tree.scopes[target].disposeHold(),
+          throwsA(isA<DisposedScopeError>()),
+        );
+        expect(call.completions, 1);
+        for (final hold in outside) {
+          hold.close();
+        }
+        await _settle(tree.scopes[0].dispose());
       },
       examples: 50,
     );

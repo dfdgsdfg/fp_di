@@ -517,46 +517,6 @@ void main() {
     });
   }
 
-  testWidgets('the value constructor publishes a caller-owned scope and '
-      'follows its state', (tester) async {
-    final app = await Scope(module: _appModule('ada')).initialize();
-    final first = app.child(module: _greetingModule());
-    final second = app.child(module: _greetingModule());
-
-    Widget build(Scope scope) => Directionality(
-      textDirection: TextDirection.ltr,
-      child: ScopeBuilder.value(
-        scope: scope,
-        builder: (context, snapshot, child) =>
-            Column(children: [Text(_describe(snapshot)), child!]),
-        child: _reader(_greeting),
-      ),
-    );
-
-    await tester.pumpWidget(build(first));
-    await tester.pump();
-    // The widget calls no initialize.
-    expect(find.text('declared'), findsOneWidget);
-    expect(find.text('absent'), findsOneWidget);
-
-    await first.initialize();
-    await tester.pump();
-    await tester.pump();
-    expect(find.text('ready'), findsOneWidget);
-    expect(find.text('hello ada'), findsOneWidget);
-
-    await tester.pumpWidget(build(second));
-    expect(find.text('declared'), findsOneWidget);
-    expect(find.text('absent'), findsOneWidget);
-
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump();
-    expect(first.isDisposed, isFalse);
-    expect(second.isDisposed, isFalse);
-    expect(tester.takeException(), isNull);
-    await app.dispose();
-  });
-
   testWidgets('create needs a provider above', (tester) async {
     await tester.pumpWidget(
       ScopeBuilder(

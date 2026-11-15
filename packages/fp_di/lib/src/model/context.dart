@@ -35,6 +35,10 @@ abstract interface class DiContext {
   /// The token of the activation that runs the `Dependency`.
   CancellationToken get cancellation;
 
+  /// Whether the disposal of the owner of this activation was requested. A
+  /// `Lazy` holder takes no new creation from then on.
+  bool get ownerDisposalRequested;
+
   /// Throws an `ActivationCanceledException` when [cancellation] is
   /// canceled. The steps of a `Dependency` call it before they run.
   void checkpoint();

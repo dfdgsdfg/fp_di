@@ -9,7 +9,8 @@ final class _Runtime {
   _Runtime({
     SlowMutationListener? onSlowMutation,
     required Duration slowMutationThreshold,
-  }) {
+  }) : slowListener = onSlowMutation,
+       slowThreshold = slowMutationThreshold {
     mutations = _RuntimeMutationQueue(
       onSlow: onSlowMutation == null
           ? null
@@ -21,6 +22,10 @@ final class _Runtime {
 
   /// The serial queue that every mutation of this runtime runs on.
   late final _RuntimeMutationQueue mutations;
+
+  /// The listener of slow work, which also hears of a long wait for holds.
+  final SlowMutationListener? slowListener;
+  final Duration slowThreshold;
 
   final Set<Scope> scopes = <Scope>{};
   final Set<_RuntimeNode> nodes = <_RuntimeNode>{};
@@ -768,6 +773,48 @@ final class _Runtime {
     }
   }
 
+  /// The open holds of [scope] and of its descendants.
+  int subtreeHolds(_RuntimeScope scope) {
+    var count = scope.holds.length;
+    for (final child in scope.children) {
+      count += subtreeHolds(child);
+    }
+    return count;
+  }
+
+  /// The state of each open hold of [scope] and of its descendants.
+  List<HoldState> holdStatesOf(_RuntimeScope scope) => [
+    for (final current in subtreeOf(scope))
+      for (final hold in current.holds) hold.stateIn(pathOf(current)),
+  ];
+
+  /// [scope] as `describe` of its root names it.
+  String pathOf(_RuntimeScope scope) {
+    final indexes = <int>[];
+    for (
+      var current = scope;
+      current.parent != null;
+      current = current.parent!
+    ) {
+      indexes.add(current.parent!.children.toList().indexOf(current) + 1);
+    }
+    if (indexes.isEmpty) return 'scope';
+    return 'child scope ${indexes.reversed.join('.')}';
+  }
+
+  /// A hold of [scope] closed. Queues each waiting disposal of [scope] or of
+  /// an ancestor whose subtree has no open hold any more.
+  void holdClosed(_RuntimeScope scope) {
+    for (
+      _RuntimeScope? current = scope;
+      current != null;
+      current = current.parent
+    ) {
+      final queue = current.queueDisposal;
+      if (queue != null && subtreeHolds(current) == 0) queue();
+    }
+  }
+
   /// Cancels the activation of [node] in flight, at the `dispose` call.
   void requestNodeDisposal(_RuntimeNode node) {
     node.disposeRequested = true;
@@ -1231,7 +1278,12 @@ final class _Runtime {
         release: (node) => deactivate(node, permanent: true),
       ).releaseAlongReads(owned);
 
-  Future<List<DisposeFailure>> disposeScope(_RuntimeScope scope) async {
+  /// [started] runs after the transition that starts the disposal, while
+  /// the error stream of the root is still open.
+  Future<List<DisposeFailure>> disposeScope(
+    _RuntimeScope scope, {
+    void Function()? started,
+  }) async {
     final subtree = <_RuntimeScope>[];
     void collect(_RuntimeScope current) {
       current.disposing = true;
@@ -1243,6 +1295,7 @@ final class _Runtime {
 
     collect(scope);
     scopeTransition(subtree);
+    started?.call();
     final included = subtree.toSet();
     final ownedNodes =
         nodes.where((node) => included.contains(node.scope)).toList()

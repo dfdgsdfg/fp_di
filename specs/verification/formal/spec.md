@@ -129,9 +129,9 @@ Names below designate planned model operators; they are not new runtime requirem
 | `DependentFirst` (Lazy) | Left-composed dependencies are released only after the holder has no live or in-flight lease | [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003), [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `RecipientsExact` (Integration) | A late dispose failure of a canceled activation reaches the caller of that activation (`initialize`, or `Scope.errors` for an automatic activation or a withdrawal); dispose callers receive only the dispose failures of the disposal itself | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoLostDisposeFailure` (Integration) | Every release that ran and failed reaches one recipient | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002) |
-| `CallersAgree` | All callers of one disposal receive the same result, also the callers that waited for holds and the waiting callers of a descendant | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002), [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `CallersAgree` | All callers of one disposal receive the same result | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002) |
+| `SharedResult`, `CallersAgreeD` (Disposal) | The callers of one disposal that waited for holds receive its result, and a waiting caller of a child receives the result of the disposal that released the child | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `NoDisposalWhileHeld` | The disposal mutation of a scope does not start while a hold of the scope or of a descendant is open, unless a call ignored the holds. A deactivation that the withdrawal of a publisher of an ancestor causes is not part of that disposal and may run | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
-| `NoCreationAfterRequest` | No `Lazy` creation starts after the disposal of its owner was requested | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `HeldDisposalProgress` | A requested disposal finishes its release attempts when every hold of its subtree closes or a call ignores the holds, under the assumption that one of the two comes | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `DisposalAfterRollback` | A disposal mutation never overlaps the mutation of the activation that it canceled | [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003), [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoReactivateBeforeWithdrawal` | A reader that a withdrawal canceled activates again only after the publisher's release and the end of the withdrawal | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
@@ -177,7 +177,7 @@ report the limit and rerun with a sufficient larger bound.
 | `Reporting{Members,Lazy}` and their `Progress` variants | `reporting/Reporting.tla` | Three independent members that may each fail and whose releases may each fail; a `Lazy` creation that may fail while its owner's release begins at any time. Each recipient's record must equal the expected one for the fixed outcome (`RecipientsExact`), and every result is eventually delivered (`ReportingCompletes`) |
 | `ReentrancyConforming`, `ReentrancyWitnessDuring` | `reentrancy/Reentrancy.tla` | Three mutations; a callback that fires in its own mutation, after it while the queue is idle, and during a later mutation; a mutation that awaits the request of its own callback |
 | `Teardown{Diamond,Cycle,LowReadsHigh}`, `TeardownProgress{Diamond,Cycle}`, `TeardownWitness{Overlap,CycleDisposeFailures}` | `teardown/Teardown.tla` | Committed read graphs of a disposed scope: a diamond with an independent node (28,633 distinct states, depth 31), an optional-read cycle that reads a publisher (178, depth 28), and a reader created before its publisher (1,161, depth 19); two dispose functions per node, each a begin and an end step, and up to two failures. The fallback walks dependents depth first from the node created last, as `deactivate` does, and collects their dispose failures under that call. The witnesses reach two overlapping releases and a Cycle run with the dispose failures of 1 and 4 |
-| `Disposal{Conforming,Progress}` | `disposal/Disposal.tla` | Two host callers of one disposal, repeated calls, a dispose function that calls `dispose()` on its own target and on another target |
+| `Disposal{Conforming,Progress,HeldIgnoreProgress}` | `disposal/Disposal.tla` | Two host callers of one disposal, repeated calls, a dispose function that calls `dispose()` on its own target and on another target; two open holds of the target and one of its child, a call that ignores the holds, a waiting disposal of the child, and a call of the child that joins the disposal of the target. `Progress` assumes that each hold closes; `HeldIgnoreProgress` assumes only that a call ignores the holds |
 | `CancelConforming*` | `cancellation/Cancellation.tla` | A disposal request during setup, cooperative and uncooperative acquisitions, caught and propagated composite failures, withdrawal reaching in-flight dependents transitively, and the next queued setup |
 | `LazyProgress`, `ReconcileProgress`, `ReconcileFeedbackProgress`, `ReconcileCollectionProgress`, `InitProgress*`, `CancelProgress*`, `Integration*Progress`, `TeardownProgress*` | each model | Finite host input, then draining under the fairness assumptions of each `FairSpec`; each lists exactly one property |
 | `*Neg*` | each model | One deliberate defect per property, in the table below |
@@ -186,6 +186,10 @@ report the limit and rerun with a sufficient larger bound.
 **Model boundaries.** `Disposal.tla` takes the reentrancy decision as given
 (a host call or a call inside the running mutation); `Reentrancy.tla`
 checks that decision from the mutation identity that a callback keeps.
+It models the holds as counts that close in any order and the disposal of the
+child as one step. A hold that closes inside a mutation, the zone that queues
+the waiting disposal, and the closing of `Lazy` holders at the request are
+outside it; [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) covers them.
 Release attempts and their order are checked by
 `Lazy.tla`, `Initialize.tla`, and `Cancellation.tla`, whose releases succeed;
 `Teardown.tla` checks the order of the concurrent releases of a disposed
@@ -279,6 +283,8 @@ flowchart TD
 | Disposal: a call after the scope is marked disposed completes before the disposal's future (`DisposedShortcut`) | `NoopAfterEnd` | `review_regression_test.dart` 7 |
 | Disposal: a call from inside a mutation shares the disposal before the reentrancy check (`ShareFirst`) | `NoSelfWait`, and `DisposalCompletes` under fairness | `review_regression_test.dart` 6 |
 | Disposal: a rejected call marks its target first (`MarkFirst`) | `NoMarkWithoutDisposal` | `review_regression_test.dart` 3 |
+| Disposal: a request queues the disposal with a hold open (`NoWait`) | `NoDisposalWhileHeld` | `dispose_hold_test.dart`, the release log stays empty until the last hold closes |
+| Disposal: the disposal of the target leaves a waiting caller of its child (`LoseDescendant`) | `HeldDisposalProgress` under fairness | `dispose_hold_test.dart`, an ancestor that ignores the holds ends the wait of a descendant |
 | Reconcile: rebuild a node whose target is unchanged (`RebuildUnchanged`) | `NoNeutralReload` | [V-T-RT-LC-004](../../runtime/lifecycle/requirements.md#v-t-rt-lc-004) |
 | Reconcile: activate a disposed member again (`ResurrectRemoved`) | `NoResurrection` | [V-T-RT-LC-003](../../runtime/lifecycle/requirements.md#v-t-rt-lc-003) |
 | Reconcile: let `initialize` succeed with its own members stale at the pass bound (`UnsettledSucceeds`) | `UnsettledFailsInit` | [V-T-RT-LC-004](../../runtime/lifecycle/requirements.md#v-t-rt-lc-004) (`regression_test.dart`) |
@@ -392,7 +398,7 @@ initial lifecycle model or current package tests.
 - **Target:** the nine models via the runner
 - **Files:** `verification/tla/*/*.tla`
 - **Fixtures:** Conforming safety configs plus separate Progress configs, with the bounds in each cfg.
-- **Pass:** Completed checks with all named properties passing and disclosed bounds: Lazy 3, Reconcile 8, Initialize 15, Cancellation 12, Disposal 2, Teardown 5, Reentrancy 1, Reporting 4, and Integration 6 conforming or progress scenarios.
+- **Pass:** Completed checks with all named properties passing and disclosed bounds: Lazy 3, Reconcile 8, Initialize 15, Cancellation 12, Disposal 3, Teardown 5, Reentrancy 1, Reporting 4, and Integration 6 conforming or progress scenarios.
 - **Evidence:** present
 
 ### <a id="v-t-vr-form-002"></a>V-T-VR-FORM-002 — `[test]` Negative controls
@@ -401,7 +407,7 @@ initial lifecycle model or current package tests.
 - **Target:** negative configs
 - **Files:** `verification/tla/*/*.cfg`, `verification/tla/*/scenarios.json`
 - **Fixtures:** Each fault scenario above, with paired positive configs.
-- **Pass:** Each fault scenario above produces its expected property violation, paired positive passes, tool errors fail: Lazy 8, Reconcile 10, Initialize 17, Cancellation 11, Disposal 5, Teardown 5, Reentrancy 3, Reporting 6, and Integration 7 negative configurations, plus 9 Cancellation, 2 Teardown, 1 Reentrancy, and 3 Integration reachability witnesses; 131 scenarios in all.
+- **Pass:** Each fault scenario above produces its expected property violation, paired positive passes, tool errors fail: Lazy 8, Reconcile 10, Initialize 17, Cancellation 11, Disposal 7, Teardown 5, Reentrancy 3, Reporting 6, and Integration 7 negative configurations, plus 9 Cancellation, 2 Teardown, 1 Reentrancy, and 3 Integration reachability witnesses; 146 scenarios in all.
 - **Evidence:** present
 
 ### <a id="v-t-vr-form-003"></a>V-T-VR-FORM-003 — `[test]` Counterexample regressions

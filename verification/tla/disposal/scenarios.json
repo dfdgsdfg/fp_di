@@ -16,6 +16,10 @@
       "expect": "pass"
     },
     {
+      "name": "DisposalHeldIgnoreProgress",
+      "expect": "pass"
+    },
+    {
       "name": "DisposalNegCompleteEarly",
       "expect": {
         "invariant": "CompleteAfterCleanup"
@@ -43,6 +47,18 @@
       "name": "DisposalNegShareFirstProgress",
       "expect": {
         "temporal": "DisposalCompletes"
+      }
+    },
+    {
+      "name": "DisposalNegNoWait",
+      "expect": {
+        "invariant": "NoDisposalWhileHeld"
+      }
+    },
+    {
+      "name": "DisposalNegLoseDescendant",
+      "expect": {
+        "temporal": "HeldDisposalProgress"
       }
     }
   ]

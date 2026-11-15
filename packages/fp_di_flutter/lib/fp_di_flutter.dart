@@ -3,8 +3,9 @@
 /// [ScopeProvider] publishes a caller-owned `Scope` to the widget tree. It
 /// does not create, initialize, or dispose a scope. [ScopeBuilder] creates a
 /// child scope, initializes it, publishes it, builds from its state, and
-/// disposes it when it is unmounted; [ScopeBuilder.value] builds from the
-/// state of a caller-owned scope. [DiBuildContext] reads the published scope
+/// disposes it when it is unmounted. [ScopeBoundary] holds the disposal of a
+/// caller-owned scope while it is mounted, publishes it, and builds from its
+/// state. [DiBuildContext] reads the published scope
 /// from a `BuildContext`: `di` and `maybeDi` read once, and `watchDi`,
 /// `watchMaybeDi`, and `watchMaybeDiNode` rebuild the widget when the value
 /// or the node of a key changes.

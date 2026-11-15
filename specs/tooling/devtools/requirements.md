@@ -9,7 +9,7 @@ depends_on: ["specs/runtime/lifecycle/spec.md", "specs/architecture/spec.md"]
 
 # DevTools Extension Requirements
 
-[Design](spec.md) · [Decisions](log.md) · [Known gaps](gap.md)
+[Design](spec.md) · [Decisions](log.md)
 
 ## Problem Statement
 

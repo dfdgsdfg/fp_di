@@ -208,6 +208,34 @@ earlier. The
 [lifecycle spec](https://github.com/dfdgsdfg/fp_di/blob/main/specs/runtime/lifecycle/spec.md#scope-declaration-and-initialization)
 owns the contract.
 
+### Holds of a disposal
+
+A consumer outside the runtime, such as a page that leaves with an animation,
+can delay the disposal of a scope until it leaves:
+
+```dart
+final hold = session.disposeHold(debugLabel: 'chat page');
+// ... the page reads the session ...
+hold.close(); // when the page leaves
+```
+
+A `dispose()` call then marks the scope and its descendants disposed at once
+(`disposeRequested`) and cancels the activations in flight, but it releases
+the nodes only after every hold of the scope and of its descendants closed.
+Until then the lookups answer, no node starts an activation, and a `Lazy`
+takes no new creation. The wait is outside the mutation queue, so other scopes
+of the root keep working. Do not wait for the `dispose()` future before the
+holds close: the disposal waits for them.
+
+`dispose(ignoreHolds: true)` starts at once. A caller that limits the wait
+writes `dispose().timeout(limit, onTimeout: () => dispose(ignoreHolds: true))`,
+and a disposal that ignores open holds reports an `IgnoredHoldsException` to
+`Scope.errors`. `Scope.openHolds`, `describe`, and the slow report of a root
+with `onSlowMutation` name the holds that a disposal waits for. A hold delays
+the disposal and never prevents it, and it keeps no value of a withdrawn
+publisher. In Flutter, a `ScopeBoundary` of `fp_di_flutter` takes and closes
+such a hold for a widget subtree.
+
 ## Shape and eligibility
 
 A component's shape is the sets of keys that it reads and the key that it

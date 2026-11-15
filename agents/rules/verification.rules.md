@@ -134,6 +134,8 @@ until the documented gap closes. Run the scenarios of the model that owns the ch
 | `zipPar`, branch journals, or `branchFailures` | `Cancel*`, `Teardown*`, `Lazy*`; no model covers the branches, so V-T-RT-LC-024 carries their evidence |
 | `ScopeProvider`, its inherited widgets, or the reads of `DiBuildContext` | No model covers the adapter, so V-T-AR-UI-011 and V-T-AR-UI-012 carry its evidence: `flutter test packages/fp_di_flutter/test` |
 | `ScopeBuilder` | No model covers it, so V-T-AR-UI-013 carries its evidence: `flutter test packages/fp_di_flutter/test/scope_builder_test.dart` |
+| `ScopeBoundary` | No model covers it, so V-T-AR-UI-014 carries its evidence: `flutter test packages/fp_di_flutter/test/scope_boundary_test.dart` |
+| `disposeHold`, `DisposeHold.close`, or `ignoreHolds` | `Disposal*`; V-T-RT-LC-041 and V-T-RT-LC-042 cover the zone of a close inside a mutation and the `Lazy` holders |
 | the inspector in `runtime_inspector.dart` or the extension app `fp_di_devtools` | No model covers the inspector; it only reads. V-T-TL-DT-001 to V-T-TL-DT-005 carry its evidence: `dart run agents/scripts/test_core.dart packages/fp_di/test/devtools_inspector_test.dart` and `flutter test packages/fp_di_devtools/test` |
 
 ## Interpret results

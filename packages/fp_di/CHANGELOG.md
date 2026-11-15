@@ -1,5 +1,24 @@
 ## Unreleased
 
+- Breaking: `Scope.dispose` waits for the holds of the disposal. A consumer
+  outside the runtime takes a hold with `Scope.disposeHold(debugLabel:)` and
+  closes it with `DisposeHold.close()`. While a hold of the scope or of a
+  descendant is open, the scope stays in `disposeRequested`: the lookups
+  answer, no node starts an activation, and the disposal mutation waits
+  outside the queue. `dispose(ignoreHolds: true)` does not wait, and reports
+  an `IgnoredHoldsException` to `Scope.errors` when it ignores open holds.
+  Without a hold, a disposal starts at once, as before.
+- Added `Scope.openHolds` and `HoldState`. `describe` and the `SlowMutation`
+  of a root with `onSlowMutation` name the holds that a disposal waits for,
+  with the operation `Scope.dispose (waiting for holds)` and the new field
+  `SlowMutation.holds`.
+- Breaking: `Lazy.force()` fails with `DisposedLazyException` once the
+  disposal of its owner is requested. A creation in flight continues, and the
+  release awaits it.
+- Breaking: `Scope.addListener` adds a listener in `disposeRequested`, and
+  throws only once the disposal mutation starts.
+- The DevTools inspector lists the labels of the open holds of each scope in
+  `holds` of the `state` answer.
 - Documentation: a guide for readers who know Riverpod,
   `doc/from_riverpod.md`. It maps providers, `Ref`, and `ProviderContainer`
   to `fp_di`, and the API reference shows it as the category Coming from

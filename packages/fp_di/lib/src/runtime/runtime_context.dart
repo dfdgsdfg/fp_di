@@ -34,6 +34,9 @@ final class _RuntimeContext implements DiContext {
   CancellationToken get cancellation => token;
 
   @override
+  bool get ownerDisposalRequested => node.disposalRequested;
+
+  @override
   void checkpoint() {
     if (token.isCanceled) throw ActivationCanceledException();
   }

@@ -120,7 +120,11 @@ split, shared responsibilities, paper adoption, and fpdart interoperability.
   publishers, and nodes that do not read each other release concurrently.
 - The Flutter package owns no scope that a caller supplies. A supplied
   `Scope` remains caller-owned. A `ScopeBuilder` owns only the scope that it
-  creates, from its mount to its unmount.
+  creates, from its mount to its unmount. A `ScopeBoundary` holds the disposal
+  of a caller-owned scope while it is mounted and owns no scope.
+- A hold of a disposal delays the disposal mutation of a scope and never
+  prevents it: a call with `ignoreHolds` does not wait, and a hold keeps no
+  value of a withdrawn publisher.
 
 The lifecycle spec owns the full contract and diagrams. Link to it instead of
 copying the contract into package or folder guidance.

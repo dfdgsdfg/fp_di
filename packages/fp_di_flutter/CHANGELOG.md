@@ -1,3 +1,15 @@
+## Unreleased
+
+- Added `ScopeBoundary(scope:, builder:, child:, debugLabel:)`. It holds the
+  disposal of a caller-owned scope while it is mounted, publishes the scope,
+  and builds from a `ScopeSnapshot`, so an exiting route reads live values
+  until it leaves. It needs `fp_di` with holds of a disposal.
+- Breaking: `ScopeBuilder.value` is removed; use `ScopeBoundary`.
+- Breaking: `ScopeBuilder` runs its builder in `disposeRequested`, where the
+  lookups answer, and keeps no widget below it once the disposal starts.
+- `ScopeProvider` listens to and compares the watched keys until the disposal
+  mutation of the published scope starts, also while a hold keeps it waiting.
+
 ## 0.1.1
 
 - Added `ScopeBuilder`. Its unnamed constructor creates a child of the scope

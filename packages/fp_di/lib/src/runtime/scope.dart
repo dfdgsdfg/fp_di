@@ -234,7 +234,14 @@ final class Scope {
   /// read cycle reports in the depth-first order of its release). Two
   /// members that share an external resource without a key between them
   /// need a token key to keep an order.
-  Future<void> dispose() {
+  ///
+  /// The disposal waits while a hold of this scope or of a descendant is
+  /// open ([disposeHold]). In that time [isDisposed] is true, the lookups
+  /// answer, and no node starts an activation. With [ignoreHolds], the
+  /// disposal starts at once, also when an earlier call waits; that call
+  /// then completes with this disposal. Do not wait for the result before
+  /// you close the holds of this scope: the disposal waits for them.
+  Future<void> dispose({bool ignoreHolds = false}) {
     // The disposal of this scope or of an ancestor, if one was requested.
     // Its future completes after the whole mutation, which can still run
     // after the scope is marked disposed.
@@ -273,6 +280,12 @@ final class Scope {
     // A repeated call, or a call while an ancestor disposes this scope,
     // completes with the disposal that is in progress.
     if (owner != null) {
+      // A call that ignores the holds ends the wait of the disposal it joins.
+      final queue = owner.queueDisposal;
+      if (ignoreHolds && queue != null) {
+        // The disposal reports the ignored holds after its start transition.
+        queue(_runtime.holdStatesOf(owner));
+      }
       // The defect `SecondCallerOk` hides the result from a joining call.
       if (RuntimeFaults.injects(RuntimeDefect.secondCallerOk)) {
         return owner.disposal!.then<void>((_) {}, onError: (Object _) {});
@@ -281,22 +294,140 @@ final class Scope {
     }
     // Cancel the setup in flight now, before the disposal waits in the queue.
     _runtime.requestScopeDisposal(_scope);
-    final disposal = _runtime.mutate('Scope.dispose', () async {
-      if (_scope.disposed) return;
-      final disposeFailures = await _runtime.disposeScope(_scope);
-      if (disposeFailures.isNotEmpty) throw DisposeException(disposeFailures);
-    });
+    final result = Completer<void>();
+    // This call runs outside a mutation of the runtime, so its zone can
+    // queue the disposal when a hold closes inside a mutation.
+    final callerZone = Zone.current;
+    var queued = false;
+    void queue([List<HoldState> ignored = const []]) {
+      if (queued) return;
+      queued = true;
+      _scope.holdTimer?.cancel();
+      _scope
+        ..queueDisposal = null
+        ..heldResult = null
+        ..holdTimer = null;
+      // A waiting disposal of a descendant completes with this one, which
+      // releases its nodes.
+      final waiting = [
+        for (final scope in _runtime.subtreeOf(_scope))
+          if (!identical(scope, _scope) && scope.queueDisposal != null) scope,
+      ];
+      final zone = _runtime.mutations.inMutation ? callerZone : Zone.current;
+      final disposal = zone.run(
+        () => _runtime.mutate('Scope.dispose', () async {
+          if (_scope.disposed) {
+            // An ancestor released this scope first: share its result.
+            for (
+              var scope = _scope.parent;
+              scope != null;
+              scope = scope.parent
+            ) {
+              final ancestor = scope.disposal;
+              if (ancestor != null) return ancestor;
+            }
+            return;
+          }
+          final disposeFailures = await _runtime.disposeScope(
+            _scope,
+            started: ignored.isEmpty
+                ? null
+                : () => _runtime.changes.report(IgnoredHoldsException(ignored)),
+          );
+          if (disposeFailures.isNotEmpty) {
+            throw DisposeException(disposeFailures);
+          }
+        }),
+      );
+      result.complete(disposal);
+      for (final scope in waiting) {
+        final held = scope.heldResult;
+        scope.holdTimer?.cancel();
+        scope
+          ..queueDisposal = null
+          ..heldResult = null
+          ..holdTimer = null;
+        held?.complete(disposal);
+      }
+    }
+
+    final disposal = result.future;
     _scope.disposal = disposal;
     disposal.then<void>(
       (_) => _scope.disposalFinished = true,
       onError: (Object _) => _scope.disposalFinished = true,
     );
-    // The call is accepted: the disposal is recorded and queued. A listener
-    // of this transition that calls `dispose` joins it, and a mutation that
-    // the listener requests runs after it.
+    final ignored = ignoreHolds
+        ? _runtime.holdStatesOf(_scope)
+        : const <HoldState>[];
+    if (ignoreHolds || _runtime.subtreeHolds(_scope) == 0) {
+      queue(ignored);
+    } else {
+      _scope
+        ..queueDisposal = queue
+        ..heldResult = result
+        ..holdTimer = _watchHolds(callerZone);
+    }
+    // The call is accepted: the disposal is recorded, and queued or waiting
+    // for holds. A listener of this transition that calls `dispose` joins
+    // it, and a mutation that the listener requests runs after it.
     _runtime.scopeTransition(_runtime.subtreeOf(_scope));
     return disposal;
   }
+
+  /// Reports a wait for holds after each threshold of the listener of slow
+  /// work. The timer runs in the zone of the caller, outside any mutation.
+  Timer? _watchHolds(Zone callerZone) {
+    final listener = _runtime.slowListener;
+    if (listener == null) return null;
+    final watch = Stopwatch()..start();
+    return callerZone.run(
+      () => Timer.periodic(
+        _runtime.slowThreshold,
+        (_) => listener(
+          SlowMutation(
+            operation: 'Scope.dispose (waiting for holds)',
+            elapsed: watch.elapsed,
+            running: const [],
+            ignoringCancellation: const [],
+            queued: 0,
+            holds: _runtime.holdStatesOf(_scope),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Delays the disposal of this scope until the returned hold closes.
+  ///
+  /// A consumer that reads this scope from outside the runtime, such as a
+  /// page of a widget tree, takes a hold and closes it when it leaves. A
+  /// [dispose] call then marks the scope disposed at once and cancels its
+  /// work, but it releases the nodes only after every hold of this scope and
+  /// of its descendants closed, or after a call with `ignoreHolds`. The
+  /// lookups answer until then.
+  ///
+  /// Throws [DisposedScopeError] when the disposal of this scope or of an
+  /// ancestor was requested.
+  ///
+  /// [debugLabel] names the holder in [openHolds], in [describe], and in the
+  /// reports of a slow wait and of a disposal that ignored the hold.
+  DisposeHold disposeHold({String? debugLabel}) {
+    if (_scope.disposalRequested) throw DisposedScopeError();
+    final hold = _RuntimeHold(debugLabel);
+    assert(() {
+      hold.stackTrace = StackTrace.current;
+      return true;
+    }());
+    _scope.holds.add(hold);
+    return DisposeHold._(this, hold);
+  }
+
+  /// The open holds of the disposal of this scope and of its descendants.
+  ///
+  /// The read does not throw in any phase and starts no mutation.
+  List<HoldState> get openHolds =>
+      List.unmodifiable(_runtime.holdStatesOf(_scope));
 
   /// Whether [initialize] has completed for this scope. It stays true after
   /// [dispose].
@@ -554,7 +685,16 @@ final class Scope {
     void write(_RuntimeScope scope, String path, int depth) {
       final indent = '  ' * depth;
       final title = path.isEmpty ? 'scope' : '${indent}child scope $path';
-      lines.add(scope.initialized ? title : '$title (not initialized)');
+      var heading = scope.initialized ? title : '$title (not initialized)';
+      if (scope.queueDisposal != null) {
+        final labels = [
+          for (final hold in _runtime.holdStatesOf(scope))
+            hold.debugLabel ?? 'hold',
+        ];
+        final count = labels.length == 1 ? '1 hold' : '${labels.length} holds';
+        heading = '$heading (disposal waits for $count: ${labels.join(', ')})';
+      }
+      lines.add(heading);
       String entryOf(_RuntimeNode node) {
         final parts = <String>[_Runtime.stateWord(_runtime.phaseOf(node))];
         final missing = _missingOf(node);
@@ -627,10 +767,12 @@ final class Scope {
   /// reports a [DiListenerException].
   ///
   /// One function is one listener of a scope: a second call with the same
-  /// function adds nothing. Throws [DisposedScopeError] while [isDisposed]
-  /// is true.
+  /// function adds nothing. Throws [DisposedScopeError] once the disposal
+  /// mutation of this scope or of an ancestor starts. A disposal that waits
+  /// for holds still accepts a listener, which then hears the start and the
+  /// end of the disposal.
   void addListener(void Function() listener) {
-    if (_scope.disposalRequested) throw DisposedScopeError();
+    if (_scope.disposing || _scope.disposed) throw DisposedScopeError();
     _runtime.changes.add(_scope, listener);
   }
 
@@ -759,6 +901,53 @@ final class Scope {
 }
 
 /// The state that the runtime keeps for one [Scope].
+/// A hold of the disposal of a scope, from [Scope.disposeHold].
+///
+/// While it is open, a requested disposal of the scope or of an ancestor
+/// waits, unless a call ignores the holds. Close it when the consumer that
+/// took it leaves.
+///
+/// {@category Lifecycle}
+final class DisposeHold {
+  DisposeHold._(this._owner, this._hold);
+
+  final Scope _owner;
+  final _RuntimeHold _hold;
+  bool _closed = false;
+
+  /// Ends the hold. A waiting disposal starts when its last hold closes.
+  ///
+  /// A second call does nothing, and a call after the disposal started
+  /// changes nothing. The call never throws, also inside a mutation of the
+  /// runtime, a listener, or a dispose function: the disposal then starts
+  /// after that mutation.
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    final scope = _owner._scope;
+    scope.holds.remove(_hold);
+    _owner._runtime.holdClosed(scope);
+  }
+}
+
+/// One open hold, as the scope that gave it keeps it.
+final class _RuntimeHold {
+  _RuntimeHold(this.debugLabel);
+
+  final String? debugLabel;
+  final Stopwatch _open = Stopwatch()..start();
+
+  /// The stack trace of the `disposeHold` call, recorded inside an assert.
+  StackTrace? stackTrace;
+
+  HoldState stateIn(String scopePath) => HoldState(
+    debugLabel: debugLabel,
+    scopePath: scopePath,
+    elapsed: _open.elapsed,
+    debugStackTrace: stackTrace,
+  );
+}
+
 final class _RuntimeScope {
   _RuntimeScope(this.parent, this.declared);
 
@@ -841,6 +1030,20 @@ final class _RuntimeScope {
 
   /// Whether [disposal] completed. The scope is marked disposed earlier.
   bool disposalFinished = false;
+
+  /// The open holds of the disposal of this scope.
+  final Set<_RuntimeHold> holds = <_RuntimeHold>{};
+
+  /// Reports a long wait for holds to the listener of slow work, or null.
+  Timer? holdTimer;
+
+  /// Queues the disposal mutation of this scope while its disposal waits
+  /// for holds, or null. The argument lists the holds that a call ignores.
+  void Function([List<HoldState> ignored])? queueDisposal;
+
+  /// The result of the disposal of this scope while it waits for holds. A
+  /// disposal of an ancestor that releases this scope completes it.
+  Completer<void>? heldResult;
 
   /// Whether the disposal of this scope or an ancestor was requested.
   bool get disposalRequested {

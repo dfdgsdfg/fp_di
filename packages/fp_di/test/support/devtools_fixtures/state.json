@@ -11,6 +11,7 @@
         "phase": "initialized",
         "module": "session",
         "children": [],
+        "holds": [],
         "nodes": [
           {
             "id": 0,
@@ -44,9 +45,11 @@
         "phase": "declared",
         "module": null,
         "children": [],
+        "holds": [],
         "nodes": []
       }
     ],
+    "holds": [],
     "nodes": [
       {
         "id": 2,

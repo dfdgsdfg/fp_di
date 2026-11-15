@@ -7,7 +7,7 @@ tags: [architecture, dart, flutter]
 
 # Project Architecture Specification
 
-[Requirements](requirements.md) · [Decisions](log.md) · [Known gaps](gap.md)
+[Requirements](requirements.md) · [Decisions](log.md)
 
 ## Overview
 
@@ -352,9 +352,10 @@ The comparison reads, for each watched key, the `state` of the node that
 It notifies the watchers of a value when the `id`, the `commits`, or the phase
 `active` of that `NodeState` differs, and the watchers of a node when the
 `NodeState` differs. A watched key is a `DiKey`: a collection key has no lookup from
-a scope, so it has no watcher. The provider makes no comparison while
-`isDisposed` of the published scope is true, so the disposal of the scope rebuilds no
-watcher. The failure of an automatic activation changes no value of a key, so
+a scope, so it has no watcher. The provider makes no comparison once the
+disposal mutation of the published scope starts (`disposing`, `disposed`), so
+the disposal of the scope rebuilds no watcher. While a hold keeps the disposal
+waiting, the provider still listens and compares. The failure of an automatic activation changes no value of a key, so
 a watcher of a value does not rebuild for it. A watcher of a node reads
 `activating` and `deactivating` while an activation or a release runs. A widget treats
 every phase except `active` and `activationFailed` as pending. The failure of `initialize` rolls the members
@@ -733,7 +734,7 @@ inside a transition; the build at a later frame is a defense.
 - **Files:** `packages/fp_di_flutter/test/scope_boundary_test.dart`
 - **Fixtures:** An app scope and a session scope with a member that logs its release, a `ValueNotifier<Scope>` above a `MaterialApp`, two pushed routes that read a session key with `context.di` below a `ScopeBoundary`, one with a `debugLabel` and one in a named route, a boundary that mounts after the request, a widget below a boundary that rebuilds on each frame and reads a session key, a boundary under a `GlobalKey` that moves to another parent, a route covered by a pushed route, and a second session scope for the rebuild.
 - **Pass:** After the change of the value and the request in one turn, and the pop of both routes, the reads in the middle of each exit transition return the session value and `takeException` is null; each builder reads `disposeRequested`; the release log stays empty until the second route unmounts, and the `dispose` future completes after it. A boundary that mounts after the request does not delay the disposal. A disposal with `ignoreHolds` and a mounted boundary calls no builder after `disposing`, removes the subtree at the next frame, and an animation below it that ticks in that frame gives no error. A rebuild with the second scope moves the hold. The move with the `GlobalKey` keeps the hold open. The covered route keeps the disposal waiting until it is removed. `describe` of the waiting scope lists the `debugLabel` and the route name. No `initialize` and no `dispose` call comes from the widget.
-- **Evidence:** missing — not implemented, see [G-AR-UI-001](gap.md#g-ar-ui-001)
+- **Evidence:** present
 
 ### <a id="v-l-ar-ui-001"></a>V-L-AR-UI-001 — `[lint]` Adapter imports
 

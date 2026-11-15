@@ -141,7 +141,7 @@ final class CartShell extends StatelessWidget {
       create: (parent) => parent.child(module: cartModule),
       builder: (context, snapshot, child) => switch (snapshot) {
         ScopeSnapshot(:final error?) => Text('failed: $error'),
-        ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+        _ when snapshot.scope.isInitialized => child!,
         _ => const Text('opening'),
       },
       child: Navigator(

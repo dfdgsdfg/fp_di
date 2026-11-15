@@ -355,6 +355,7 @@ final class Dependency<A> {
         final snapshot = _SnapshotContext(
           values,
           CancellationSource.child(context.cancellation),
+          () => context.ownerDisposalRequested,
         );
         try {
           final value = await _run(snapshot);
@@ -372,7 +373,7 @@ final class Dependency<A> {
       }
 
       return context.acquire(
-        () => Lazy<A>._(createDeferred),
+        () => Lazy<A>._(createDeferred, () => context.ownerDisposalRequested),
         dispose: (holder) => holder._release(),
       );
     },
@@ -1024,7 +1025,12 @@ final class Dependency8<A, B, C, D, E, F, G, H, R> extends Dependency<R> {
 /// Serves the values read at activation to the deferred steps of a lazy
 /// [Dependency], and owns what those steps create.
 final class _SnapshotContext implements DiContext {
-  _SnapshotContext(this._values, this.cancellation);
+  _SnapshotContext(this._values, this.cancellation, this._ownerClosed);
+
+  final bool Function() _ownerClosed;
+
+  @override
+  bool get ownerDisposalRequested => _ownerClosed();
 
   final Map<DiKeyBase, Object?> _values;
 

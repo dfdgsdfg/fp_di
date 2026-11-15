@@ -251,10 +251,10 @@ class _ScopeProviderState extends State<ScopeProvider> {
     SchedulerBinding.instance.ensureVisualUpdate();
   }
 
-  /// Listens to [_subscribed]. A scope whose disposal was requested takes no
-  /// listener, and it has no transition that a watcher reads.
+  /// Listens to [_subscribed]. A scope whose disposal mutation started takes
+  /// no listener, and it has no transition that a watcher reads.
   void _listen() {
-    if (!_subscribed.isDisposed) _subscribed.addListener(_onTransition);
+    if (_answers(_subscribed)) _subscribed.addListener(_onTransition);
   }
 
   /// Moves the subscription to [current] when the scope was replaced.
@@ -277,8 +277,16 @@ class _ScopeProviderState extends State<ScopeProvider> {
   }
 
   NodeState? _read(DiKey<Object?> key) {
-    if (_subscribed.isDisposed) return null;
+    if (!_answers(_subscribed)) return null;
     return _subscribed.findNode<Object?>(key: key)?.state;
+  }
+
+  /// Whether the lookups of [scope] answer: until its disposal mutation
+  /// starts. A hold can keep a requested disposal waiting, and a withdrawal
+  /// in that time still changes a watched key.
+  static bool _answers(Scope scope) {
+    final phase = scope.state.phase;
+    return phase != ScopePhase.disposing && phase != ScopePhase.disposed;
   }
 
   /// A transition of the runtime. The runtime calls a listener many times in
@@ -296,9 +304,10 @@ class _ScopeProviderState extends State<ScopeProvider> {
   void _compare() {
     _comparison = null;
     if (!mounted) return;
-    // A disposed scope answers no read, so a rebuild could only throw. The
-    // owner replaces the scope, and the replacement notifies each dependent.
-    if (_subscribed.isDisposed) return;
+    // A scope whose disposal mutation started answers no read, so a rebuild
+    // could only throw. The owner replaces the scope, and the replacement
+    // notifies each dependent.
+    if (!_answers(_subscribed)) return;
     final changed = <Object>{};
     for (final key in _watched.keys.toList()) {
       final before = _watched[key];

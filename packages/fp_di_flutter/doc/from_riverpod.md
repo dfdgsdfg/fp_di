@@ -159,7 +159,7 @@ final class OrderPage extends StatelessWidget {
       create: (parent) => parent.child(module: orderModule(id)),
       builder: (context, snapshot, child) => switch (snapshot) {
         ScopeSnapshot(:final error?) => ErrorView(error),
-        ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+        _ when snapshot.scope.isInitialized => child!,
         _ => const Loading(),
       },
       child: const OrderView(),
@@ -206,7 +206,7 @@ ScopeBuilder(
     ),
   ),
   builder: (context, snapshot, child) =>
-      snapshot.phase == ScopePhase.initialized ? child! : const Loading(),
+      snapshot.scope.isInitialized ? child! : const Loading(),
   child: const DetailPageView(),
 );
 ```
@@ -242,7 +242,10 @@ A session that ends must not leave widgets that read its values. With
 dispose the session scope after that. A route of the session can also live
 below a nested `Navigator` inside a `ScopeBuilder` of the session, so the
 session ends with that route. The examples `session_scope.dart` and
-`navigator_scope.dart` show both forms.
+`navigator_scope.dart` show both forms. A route of a flat `Navigator` that
+reads the session goes below a `ScopeBoundary`: the disposal then waits until
+the route has left, and the route reads live values during its exit
+transition.
 
 ## Widget tests
 

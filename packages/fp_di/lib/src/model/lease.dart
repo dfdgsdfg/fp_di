@@ -43,9 +43,13 @@ Future<Lease<A>> createLease<A>(
 ///
 /// {@category Dependency}
 final class Lazy<A> {
-  Lazy._(this._create);
+  Lazy._(this._create, this._ownerDisposalRequested);
 
   final Future<Lease<A>> Function() _create;
+
+  /// Whether the disposal of the owner was requested. A hold can delay the
+  /// release long after the request.
+  final bool Function() _ownerDisposalRequested;
   Lease<A>? _lease;
 
   /// The result that concurrent callers of [force] share while [_acquiring].
@@ -67,10 +71,14 @@ final class Lazy<A> {
   /// Creates the value on the first call; concurrent and later calls share that
   /// result.
   ///
-  /// Throws [DisposedLazyException] after the owner is disposed, including for
-  /// an acquisition that was still in flight at that moment.
+  /// Throws [DisposedLazyException] after the disposal of the owner is
+  /// requested. An acquisition in flight at the request continues, and the
+  /// release of the owner awaits it; it throws [DisposedLazyException] when
+  /// it settles after that release began.
   Future<A> force() {
-    if (_released) return Future<A>.error(const DisposedLazyException());
+    if (_released || _ownerDisposalRequested()) {
+      return Future<A>.error(const DisposedLazyException());
+    }
     if (_acquiring) return _pending!;
     final lease = _lease;
     if (lease != null) return Future<A>.sync(() => lease.value);

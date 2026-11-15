@@ -9,7 +9,7 @@ legacy_id_prefixes: [AR-UI]
 
 # Project Architecture Requirements
 
-[Spec](spec.md) · [Decisions](log.md) · [Known gaps](gap.md)
+[Spec](spec.md) · [Decisions](log.md)
 
 ## Problem Statement
 

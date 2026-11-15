@@ -117,7 +117,7 @@ final class EditorPage extends StatelessWidget {
       create: (parent) => parent.child(module: editorModule),
       builder: (context, snapshot, child) => switch (snapshot) {
         ScopeSnapshot(:final error?) => Text('the drafts did not open: $error'),
-        ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+        _ when snapshot.scope.isInitialized => child!,
         _ => const Text('opening the drafts'),
       },
       child: const Editor(),
