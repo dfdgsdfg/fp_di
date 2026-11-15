@@ -1,105 +1,154 @@
-import 'package:fp_di/fp_di.dart';
-import 'package:fpdart/fpdart.dart';
+import 'key.dart';
+import 'scope.dart';
 
-/// A failure of an fp_di operation as a value: the error that fp_di threw,
-/// with its stack trace.
+/// One dispose function that failed.
 ///
-/// The error stays the original one, so nothing about it is lost: an
-/// `ActivationException` keeps its `cause` and `rollbackFailures`, and a
-/// `DisposeException` keeps its `disposeFailures`. The getter
-/// [disposeFailures] reads them for either kind.
-final class DiFailure {
-  /// Creates a failure of [error] with its [stackTrace].
-  const DiFailure(this.error, this.stackTrace);
+/// A [Die] holds the failure as its defect. A dispose function that throws is
+/// a defect, not a typed failure.
+final class DisposeFailure {
+  /// Creates the record of a failed dispose function of the component that
+  /// has the label [owner].
+  const DisposeFailure(this.owner, this.error);
 
-  /// The error that fp_di threw.
+  /// The label of the component whose dispose function failed.
+  final String owner;
+
+  /// The error that the dispose function threw.
   final Object error;
 
-  /// The stack trace of [error].
-  final StackTrace stackTrace;
-
-  /// The error that caused an activation to fail or to be canceled, or
-  /// [error] itself.
-  Object get cause => switch (error) {
-    ActivationException(:final cause) => cause,
-    ActivationCanceledException(:final cause?) => cause,
-    _ => error,
-  };
-
-  /// The dispose functions that failed during a rollback or a disposal.
-  List<DisposeFailure> get disposeFailures => switch (error) {
-    ActivationException(:final rollbackFailures) => rollbackFailures,
-    ActivationCanceledException(:final rollbackFailures) => rollbackFailures,
-    DisposeException(:final disposeFailures) => disposeFailures,
-    _ => const [],
-  };
-
-  /// Whether the operation was canceled by the disposal of its owner.
-  bool get isCanceled => error is ActivationCanceledException;
+  @override
+  bool operator ==(Object other) =>
+      other is DisposeFailure && other.owner == owner && other.error == error;
 
   @override
-  String toString() => 'DiFailure($error)';
-}
-
-/// Why a bracketed use of a scope failed. See `Scope.use`.
-sealed class ScopeFailure<E> {
-  const ScopeFailure();
-}
-
-/// `initialize` failed; the use did not run, and the scope was disposed.
-final class InitializeFailed<E> extends ScopeFailure<E> {
-  /// Creates the failure of `initialize` that [failure] describes.
-  const InitializeFailed(this.failure);
-
-  /// The failure that `initialize` reported.
-  final DiFailure failure;
+  int get hashCode => Object.hash(DisposeFailure, owner, error);
 
   @override
-  String toString() => 'InitializeFailed(${failure.error})';
+  String toString() => '$owner: $error';
 }
 
-/// The use returned a `Left`; the scope was disposed.
-final class UseFailed<E> extends ScopeFailure<E> {
-  /// Creates the failure of the use with the `Left` value [error].
-  const UseFailed(this.error);
-
-  /// The `Left` value that the use returned.
-  final E error;
-
-  @override
-  String toString() => 'UseFailed($error)';
-}
-
-/// `dispose` failed after the use. [useError] keeps the use's own `Left`,
-/// if it had one, so neither failure hides the other.
-final class DisposeFailed<E> extends ScopeFailure<E> {
-  /// Creates the failure of `dispose` that [failure] describes. [useError]
-  /// holds the `Left` value of the use.
-  const DisposeFailed(this.failure, this.useError);
-
-  /// The failure that `dispose` reported.
-  final DiFailure failure;
-
-  /// The `Left` value of the use, if the use returned one.
-  final Option<E> useError;
-
-  @override
-  String toString() => 'DisposeFailed(${failure.error}, use: $useError)';
-}
-
-/// Thrown inside a `Dependency` step when a `TaskEither` returned a `Left`
-/// that the host treats as a setup failure. See `mapTaskEither`.
+/// The reason why a scope operation failed with a typed error.
 ///
-/// The activation then fails like any other: its completed steps are
-/// disposed in reverse order, and `initialize` reports an
-/// `ActivationException` whose `cause` is this exception.
-final class DependencyLeft<E> implements Exception {
-  /// Creates the exception for the `Left` value [left].
-  const DependencyLeft(this.left);
+/// No operation of this library throws. A scope operation returns an `Exit`.
+/// Each typed error is a value of one final subclass, inside a `Fail` of a
+/// `Cause`.
+sealed class DiFailure {
+  /// Creates a failure.
+  const DiFailure();
 
-  /// The `Left` value of the step.
-  final E left;
+  /// A short text that describes the failure.
+  String get message;
 
   @override
-  String toString() => 'DependencyLeft($left)';
+  String toString() => '$runtimeType: $message';
+}
+
+/// A required key has no publisher.
+///
+/// Neither the scope nor an ancestor of the scope publishes the key.
+final class UndeclaredKeyFailure extends DiFailure {
+  /// Creates the failure for [key], which the component with the label
+  /// [owner] requires.
+  const UndeclaredKeyFailure(this.key, {required this.owner});
+
+  /// The key that no component publishes.
+  final DiKey<Object?> key;
+
+  /// The label of the component that requires [key].
+  final String owner;
+
+  @override
+  String get message => '$owner requires $key, which no component publishes';
+}
+
+/// Two components of one scope publish the same key.
+final class DuplicateKeyFailure extends DiFailure {
+  /// Creates the failure for [key], which the components with the [labels]
+  /// publish.
+  const DuplicateKeyFailure(this.key, this.labels);
+
+  /// The key that more than one component publishes.
+  final DiKey<Object?> key;
+
+  /// The labels of the components that publish [key].
+  final List<String> labels;
+
+  @override
+  String get message => '$key is provided by ${labels.join(', ')}';
+}
+
+/// The components of one scope read each other in a cycle.
+final class DependencyCycleFailure extends DiFailure {
+  /// Creates the failure for the cycle that [path] lists.
+  const DependencyCycleFailure(this.path);
+
+  /// The keys of the cycle, in reading order.
+  ///
+  /// The first key and the last key are equal. A component that reads its own
+  /// key gives a path of two equal keys.
+  final List<DiKey<Object?>> path;
+
+  @override
+  String get message => 'cycle ${path.join(' -> ')}';
+}
+
+/// A create step of a component threw an error or returned a `Left`.
+///
+/// A throw is a typed failure here, like the `attempt` of ZIO. The `Cause`
+/// that holds the failure also holds the dispose failures of the rollback.
+final class ActivationFailure extends DiFailure {
+  /// Creates the failure of the component with the label [owner].
+  const ActivationFailure(this.owner, this.error);
+
+  /// The label of the component that failed to activate.
+  final String owner;
+
+  /// The error that a step threw, or the `Left` value that a step returned.
+  ///
+  /// The value is not wrapped.
+  final Object? error;
+
+  @override
+  String get message => '$owner failed to activate: $error';
+}
+
+/// The scope and its ancestors do not publish the key.
+final class UnavailableKeyFailure extends DiFailure {
+  /// Creates the failure for [key].
+  const UnavailableKeyFailure(this.key);
+
+  /// The key that no active scope publishes.
+  final DiKey<Object?> key;
+
+  @override
+  String get message => '$key is not available';
+}
+
+/// An operation is not valid in the current phase of the scope.
+///
+/// Examples are a second `run`, or a `get` before a `run` succeeded.
+final class ScopePhaseFailure extends DiFailure {
+  /// Creates the failure of [operation] in [phase].
+  const ScopePhaseFailure({required this.operation, required this.phase});
+
+  /// The name of the operation, such as `run` or `get`.
+  final String operation;
+
+  /// The phase of the scope when the operation started.
+  final ScopePhase phase;
+
+  @override
+  String get message => '$operation is not valid in the phase ${phase.name}';
+}
+
+/// A child scope ran while its parent was not active.
+final class InactiveAncestorFailure extends DiFailure {
+  /// Creates the failure for a parent in [phase].
+  const InactiveAncestorFailure(this.phase);
+
+  /// The phase of the parent scope.
+  final ScopePhase phase;
+
+  @override
+  String get message => 'the parent scope is ${phase.name}, not active';
 }

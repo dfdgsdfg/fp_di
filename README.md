@@ -36,8 +36,9 @@ The workspace has four packages:
 - [`fp_di_flutter`](packages/fp_di_flutter): publishes a caller-owned scope to
   the widget tree, owns the scope of one subtree with `ScopeBuilder`, and
   reads with `BuildContext`.
-- [`fp_di_fpdart`](packages/fp_di_fpdart): the scope lifecycle, lookups, and
-  `Dependency` steps as fpdart types. It is experimental.
+- [`fp_di_fpdart`](packages/fp_di_fpdart): a separate runtime of a static
+  component graph on fpdart, with every failure as a `Left`. It does not
+  depend on `fp_di`. It is experimental.
 - [`fp_di_devtools`](packages/fp_di_devtools): a DevTools extension that shows
   the scopes and nodes of a running app. It is experimental, and a release of
   `fp_di` does not ship it.

@@ -1,0 +1,230 @@
+import 'package:fpdart/fpdart.dart';
+
+/// The type tag of [Cause] for the fpdart higher-kinded types.
+abstract final class _CauseHKT {}
+
+/// The reason why an operation failed, as a tree.
+///
+/// A cause is the `Cause` of ZIO. It keeps every failure of an operation and
+/// the order in which the failures happened. The cases are [Empty], [Fail],
+/// [Die], [Then], and [Both].
+///
+/// A [Fail] holds a typed error. A [Die] holds a defect: an error that the
+/// type `E` does not describe, such as a dispose function that threw.
+/// [Then] joins two causes that happened one after the other. [Both] joins
+/// two causes that happened at the same time.
+///
+/// [Empty] is the identity of `+` and `&`. A cause is a [Functor] over the
+/// typed error. Use [Cause.thenMonoid] and [Cause.bothMonoid] to combine
+/// causes with the fpdart typeclasses.
+sealed class Cause<E> extends HKT<_CauseHKT, E> with Functor<_CauseHKT, E> {
+  /// Creates a cause.
+  const Cause();
+
+  /// A cause that happened after this cause.
+  ///
+  /// [Empty] is the identity. An empty operand gives the other operand.
+  Cause<E> operator +(Cause<E> next) => switch ((this, next)) {
+    (Empty<E>(), _) => next,
+    (_, Empty<E>()) => this,
+    _ => Then<E>(this, next),
+  };
+
+  /// A cause that happened at the same time as this cause.
+  ///
+  /// [Empty] is the identity. An empty operand gives the other operand.
+  Cause<E> operator &(Cause<E> other) => switch ((this, other)) {
+    (Empty<E>(), _) => other,
+    (_, Empty<E>()) => this,
+    _ => Both<E>(this, other),
+  };
+
+  /// A cause with the typed errors changed by [f].
+  ///
+  /// The structure and the defects stay as they are.
+  @override
+  Cause<B> map<B>(B Function(E error) f) => switch (this) {
+    Empty<E>() => Empty<B>(),
+    Fail<E>(:final error, :final stackTrace) => Fail<B>(f(error), stackTrace),
+    Die<E>(:final defect, :final stackTrace) => Die<B>(defect, stackTrace),
+    Then<E>(:final first, :final second) => Then<B>(
+      first.map(f),
+      second.map(f),
+    ),
+    Both<E>(:final left, :final right) => Both<B>(left.map(f), right.map(f)),
+  };
+
+  /// Folds the tree into one value, from the leaves to the root.
+  ///
+  /// Each argument handles one case. The folded values of the two branches of
+  /// a [Then] or a [Both] go to [then] or [both].
+  Z fold<Z>({
+    required Z Function() empty,
+    required Z Function(E error, StackTrace stackTrace) fail,
+    required Z Function(Object defect, StackTrace stackTrace) die,
+    required Z Function(Z first, Z second) then,
+    required Z Function(Z left, Z right) both,
+  }) => switch (this) {
+    Empty<E>() => empty(),
+    Fail<E>(:final error, :final stackTrace) => fail(error, stackTrace),
+    Die<E>(:final defect, :final stackTrace) => die(defect, stackTrace),
+    Then<E>(:final first, :final second) => then(
+      first.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+      second.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+    ),
+    Both<E>(:final left, :final right) => both(
+      left.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+      right.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+    ),
+  };
+
+  /// The typed errors of the cause, from left to right.
+  List<E> get failures => fold<List<E>>(
+    empty: () => const [],
+    fail: (error, _) => [error],
+    die: (_, _) => const [],
+    then: (first, second) => [...first, ...second],
+    both: (left, right) => [...left, ...right],
+  );
+
+  /// The defects of the cause, from left to right.
+  List<Object> get defects => fold<List<Object>>(
+    empty: () => const [],
+    fail: (_, _) => const [],
+    die: (defect, _) => [defect],
+    then: (first, second) => [...first, ...second],
+    both: (left, right) => [...left, ...right],
+  );
+
+  /// The first typed error, or `None` when the cause has no typed error.
+  Option<E> get failureOption {
+    final all = failures;
+    return all.isEmpty ? const None() : Some(all.first);
+  }
+
+  /// Whether the cause has no [Fail] and no [Die].
+  bool get isEmpty => failures.isEmpty && defects.isEmpty;
+
+  /// An indented tree of the cause, for a message.
+  ///
+  /// The text has no stack trace.
+  String prettyPrint() => fold<List<String>>(
+    empty: () => const ['Empty'],
+    fail: (error, _) => ['Fail: $error'],
+    die: (defect, _) => ['Die: $defect'],
+    then: (first, second) => ['Then', ..._indent(first), ..._indent(second)],
+    both: (left, right) => ['Both', ..._indent(left), ..._indent(right)],
+  ).join('\n');
+
+  /// The monoid of sequential composition: `+` with [Empty] as identity.
+  static Monoid<Cause<E>> thenMonoid<E>() =>
+      Monoid.instance<Cause<E>>(Empty<E>(), (x, y) => x + y);
+
+  /// The monoid of parallel composition: `&` with [Empty] as identity.
+  static Monoid<Cause<E>> bothMonoid<E>() =>
+      Monoid.instance<Cause<E>>(Empty<E>(), (x, y) => x & y);
+
+  @override
+  String toString() => prettyPrint();
+}
+
+List<String> _indent(List<String> lines) => [
+  for (final line in lines) '  $line',
+];
+
+/// A cause with no failure.
+///
+/// [Empty] is the identity of `+` and `&`.
+final class Empty<E> extends Cause<E> {
+  /// Creates an empty cause.
+  const Empty();
+
+  @override
+  bool operator ==(Object other) => other is Empty<Object?>;
+
+  @override
+  int get hashCode => (Empty).hashCode;
+}
+
+/// A typed failure.
+final class Fail<E> extends Cause<E> {
+  /// Creates a failure of [error] that happened at [stackTrace].
+  const Fail(this.error, this.stackTrace);
+
+  /// The typed error.
+  final E error;
+
+  /// The stack trace of the place where the failure happened.
+  final StackTrace stackTrace;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Fail<Object?> && other.error == error;
+
+  @override
+  int get hashCode => Object.hash(Fail, error);
+}
+
+/// A defect: an error that the type `E` does not describe.
+///
+/// A dispose function that threw, or a program that threw, is a defect.
+final class Die<E> extends Cause<E> {
+  /// Creates a defect of [defect] that happened at [stackTrace].
+  const Die(this.defect, this.stackTrace);
+
+  /// The error that was thrown, or the value that describes the defect.
+  final Object defect;
+
+  /// The stack trace of the place where the defect happened.
+  final StackTrace stackTrace;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Die<Object?> && other.defect == defect;
+
+  @override
+  int get hashCode => Object.hash(Die, defect);
+}
+
+/// Two causes that happened one after the other.
+final class Then<E> extends Cause<E> {
+  /// Creates a sequence of [first] and then [second].
+  const Then(this.first, this.second);
+
+  /// The cause that happened first.
+  final Cause<E> first;
+
+  /// The cause that happened next.
+  final Cause<E> second;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Then<Object?> && other.first == first && other.second == second;
+
+  @override
+  int get hashCode => Object.hash(Then, first, second);
+}
+
+/// Two causes that happened at the same time.
+final class Both<E> extends Cause<E> {
+  /// Creates a pair of [left] and [right] that happened at the same time.
+  const Both(this.left, this.right);
+
+  /// The left cause.
+  final Cause<E> left;
+
+  /// The right cause.
+  final Cause<E> right;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Both<Object?> && other.left == left && other.right == right;
+
+  @override
+  int get hashCode => Object.hash(Both, left, right);
+}
+
+/// The result of an operation: a [Cause] on failure, or a value.
+///
+/// The type is the `Exit` of ZIO, as an fpdart `Either`.
+typedef Exit<E, A> = Either<Cause<E>, A>;

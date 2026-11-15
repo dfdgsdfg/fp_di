@@ -68,7 +68,7 @@ Language choice and document-specific style: [documentation rules](agents/rules/
 ## Scope and ownership
 
 The [project architecture](specs/architecture/spec.md) explains the package
-split, shared responsibilities, paper adoption, and fpdart interoperability.
+split, shared responsibilities, and paper adoption.
 
 - `packages/fp_di/` owns the Dart-only component algebra, keys, context,
   transactional activation, cleanup, dependency tracking, and runtime errors.
@@ -92,9 +92,10 @@ split, shared responsibilities, paper adoption, and fpdart interoperability.
   `model/` and the scope library in `runtime/`
 - Flutter API: `packages/fp_di_flutter/lib/fp_di_flutter.dart`
 - Flutter integration: `packages/fp_di_flutter/lib/src/`
-- fpdart API: `packages/fp_di_fpdart/lib/fp_di_fpdart.dart`, with the
-  example `packages/fp_di_fpdart/example/checkout.dart`. The core never
-  depends on fpdart or on this package.
+- fpdart runtime: `packages/fp_di_fpdart/lib/fp_di_fpdart.dart`, with the
+  examples in `packages/fp_di_fpdart/example/`. The package is a
+  separate runtime on fpdart; it does not depend on `fp_di`, and the core
+  never depends on fpdart or on this package.
 - DevTools inspector: `packages/fp_di/lib/src/runtime/runtime_inspector.dart`.
   The experimental extension app is `packages/fp_di_devtools/`. A local build
   goes in `packages/fp_di/extension/devtools/`, which Git ignores. Contract:

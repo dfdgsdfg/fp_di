@@ -1,5 +1,5 @@
 name: fp_di_fpdart
-description: fpdart-shaped API for fp_di scopes, nodes, and dependencies.
+description: A lifecycle-aware dependency-injection runtime built on fpdart.
 version: 0.1.0
 publish_to: none
 environment:
@@ -8,8 +8,6 @@ environment:
 resolution: workspace
 
 dependencies:
-  fp_di:
-    path: ../fp_di
   fpdart: ^1.2.0
 
 dev_dependencies:

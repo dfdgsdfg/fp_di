@@ -1,23 +1,34 @@
-/// An fpdart-shaped API for fp_di.
+/// A lifecycle-aware dependency-injection runtime built on fpdart.
 ///
-/// fp_di owns composition and lifecycle: which values exist, what they read,
-/// when they are created, and when they are disposed. fpdart describes the
-/// programs that use them. This library puts the fp_di operations into
-/// fpdart's types:
+/// A [Component] publishes a value under a [DiKey]. Its [Dependency] states
+/// the keys that the value reads. A [Scope] takes a list of components, runs
+/// the list once, and disposes the values when the scope ends.
 ///
-/// - scope lifecycle as `TaskEither` (`initializeTask`, `disposeTask`) and a
-///   bracket (`use`);
-/// - lookups as `Either` and `Option` (`getEither`, `getOption`), and node
-///   availability as a `TaskEither` (`whenActiveTask`);
-/// - `Dependency` steps that run a `TaskEither`, with the `Left` policy in
-///   the name (`mapTaskEither` fails the setup, `mapTaskEitherAsData` keeps
-///   the `Left` as data), and optional reads as `Option` (`toOption`).
+/// The graph is static. The runtime knows each read before it creates a
+/// value, so it checks the components first and creates independent
+/// components concurrently. A component is disposed before the components
+/// that it reads.
 ///
-/// A failure is a [DiFailure] that keeps the original error, its stack
-/// trace, and its rollback failures. The core `fp_di` package does not depend
-/// on fpdart.
+/// The design follows ZIO. A [Cause] is the tree of the failures of an
+/// operation, and an [Exit] is a `Cause` or a value. A [Component] is the
+/// `ZLayer` of this package: one output key, and the inputs that its
+/// dependency reads. The list of components that a [Scope] takes is the
+/// argument list of `ZLayer.make`. The package has no operator that composes
+/// layers, such as `>>>` or `++`. The scope derives the wiring from the
+/// graph. A [Dependency] is an applicative description, and it is not a
+/// monad. A [Scope] holds finalizers and runs them in reverse order.
+///
+/// No operation throws. Every failure is a `Left` with a [Cause]. A step of a
+/// [Dependency] can return a `TaskEither`, and a `Left` of the step fails the
+/// activation. `Scope.use` brackets a program of type `ReaderTaskEither`:
+/// run, use, and always dispose.
+///
+/// The library depends on fpdart only.
 library;
 
-export 'src/dependency.dart';
+export 'src/cause.dart';
+export 'src/component.dart' hide buildComponent;
+export 'src/dependency.dart' hide StepContext, runDependency;
 export 'src/failure.dart';
+export 'src/key.dart';
 export 'src/scope.dart';
