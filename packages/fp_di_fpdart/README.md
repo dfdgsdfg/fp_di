@@ -51,8 +51,6 @@ track `R` in a type. The package states the reads as a set of keys instead.
 The package has no layer composition operators, such as `>>>` or `++`. The
 scope derives the wiring from the graph of the keys.
 
-The package has no inspector yet.
-
 ## Structure
 
 The runtime has a pure core and an effectful shell.
@@ -600,6 +598,121 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 A `DisposeFailure(owner, error)` is not a `DiFailure`. A dispose function that
 threw is a defect, so a `Die` holds the `DisposeFailure`.
 
+## Shape graph
+
+`package:fp_di_fpdart/tooling.dart` reads components without a runtime, for a
+script or a test. An application does not import it.
+
+```dart
+import 'package:fp_di_fpdart/tooling.dart';
+
+final graph = ShapeGraph.of(appComponents(), label: 'app');
+print(graph.toJson());
+print(graph.toMermaid());
+```
+
+`ShapeGraph` lists each component with its reads, each wait of one component
+for another (`edges`, with the kind of the read), the `depths`, the `cycles`,
+one `longestChain`, the `undeclared` keys, and the `duplicates`. Nothing is
+created and no `create` runs. `toJson` and `toMermaid` have the schema and the
+text of `ShapeGraph` of `fp_di`: `format` is `fp_di.shape` and `version` is 1.
+`toMermaid(collapsed: true)` draws one node for each origin.
+
+A list of components has no label and no origin. A `ShapeModule` gives a list
+the `label` of its scope and an origin for each component. `ShapeModule.all`
+joins modules and keeps the origin of each component.
+`ShapeGraph.of(components, label:, origins:, ancestors:)` and
+`ShapeGraph.ofModule(module, ancestors:)` take the modules of the ancestor
+scopes, root first. They decide which required keys are `undeclared`, and the
+chart draws the reads that cross a scope. Both `label` values and the
+origins are only for the tools: a `Scope` ignores them. A `Scope` takes the
+same label as `debugLabel`.
+
+The time of the build and of each export is linear in the number of components
+and reads. The sets `publishes`, `requires`, `reads`, and `contributes` of the
+graph are the sets of `ComponentsOps`.
+
+[`example/shape_export.dart`](example/shape_export.dart) writes the JSON and the
+chart of each variant of an application.
+
+## DevTools inspector
+
+A debug build serves an inspector to Dart DevTools. The inspector is the
+inspector of `fp_di` over the reactive runtime of this package. It has the same
+protocol: the service extensions `ext.fp_di.roots`, `ext.fp_di.state`,
+`ext.fp_di.node`, `ext.fp_di.shape`, and `ext.fp_di.listen`, the events
+`fp_di:transition`, `fp_di:error`, and `fp_di:slowMutation`, the format
+`fp_di.devtools`, and the version 1. The tests compare the answers and the events
+of a scenario with the answers that `fp_di` recorded for the extension app
+`packages/fp_di_devtools`. The comparison is equal but for the fields in the
+table below. A run of the app against this package was not made.
+
+- The inspector exists only when Dart assertions are enabled. The factory of
+  `Scope` registers it inside an `assert`, so a release build carries no
+  inspector work. This is the rule of `fp_di`. A root without
+  `onSlowMutation` starts no timer for the inspector.
+- The inspector changes no state. A query reads the same snapshots as
+  `Scope.state`. `listen` with `enabled: true` adds one listener for each root,
+  and the first transition of an event-loop turn schedules one
+  `fp_di:transition` event for the turn. The values of the nodes are in an
+  answer or an event only when the caller asks for them with `values: true`.
+  Every text is cut at 4 KiB, and an event lists 500 changed nodes at most.
+- A root has the label of its `debugLabel`, or `root <id>`. The `module` of a
+  scope in `state` is its `debugLabel`, and the `origin` of each node is the
+  label of its scope.
+
+Differences in the content of the protocol:
+
+| Field | Value here |
+|---|---|
+| `failure.type` and `failure.message` of a node | the type and the text of the error that a step threw, or of the `Left` value that a step returned |
+| `type` of `fp_di:error` | the type of the first failure of the reported cause, such as `ActivationFailure`, where `fp_di` has `ActivationException` |
+| `message` of `fp_di:error` | the `message` of that failure |
+| `operation` of `fp_di:slowMutation` | `run` where `fp_di` has `initialize` |
+| `stackTrace` | the stack trace of the first `Fail` or `Die` in the cause |
+
+The extension app shows these values as text. The test file
+`devtools_inspector_test.dart` states the differences: the other answers and
+events of the scenario are equal to the recorded ones, but for the `revision`.
+
+### Two copies of the inspector in one isolate
+
+A service extension name can be registered one time in an isolate, and a name
+cannot be unregistered. An app that loads `fp_di` and this package has two
+inspectors under the same names. The copy that creates a root first owns the
+names. The other copy detects that the name is taken, skips it, and goes on: no
+root fails. Then only the first owner answers the queries, and the roots of the
+other copy are not visible in DevTools. `fp_di` and this package give one
+inspector to each isolate, so an app that wants to inspect its scopes uses one
+of the two runtimes.
+
+### Use the extension app
+
+The package ships no built extension, and this package did not run DevTools
+with the extension app. DevTools loads the extension of a package that the
+connected app depends on from the folder `extension/devtools/` of that package.
+The `name` in the `config.yaml` of the folder should be the name of the package
+that holds the folder (`devtools_shared` states this rule). The `config.yaml`
+of `fp_di_devtools` has the name `fp_di`, so the copy needs a new name. The
+`validate` command checks the characters of the name only.
+
+For a local build, from `packages/fp_di_devtools`:
+
+```sh
+dart run devtools_extensions build_and_copy --source=. --dest=../fp_di_fpdart/extension/devtools
+cp config.yaml ../fp_di_fpdart/extension/devtools/config.yaml
+```
+
+Then set `name: fp_di_fpdart` in the copied `config.yaml`, and check the folder
+from the workspace root:
+
+```sh
+dart run devtools_extensions validate --package=packages/fp_di_fpdart
+```
+
+Run the app with assertions (a debug build) and open DevTools. The folder
+`packages/fp_di_fpdart/extension/` is local build output. Do not commit it.
+
 ## Internals
 
 The package exports no layer type and no composition operator. A `Component`
@@ -635,7 +748,7 @@ child reads.
 ## Examples
 
 Each file in `example/` runs with `dart run`. Most files port an example of
-`fp_di`. Only the example of the shape export has no port.
+`fp_di`.
 
 ```sh
 dart run packages/fp_di_fpdart/example/checkout.dart
@@ -661,14 +774,7 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 | [`lazy.dart`](example/lazy.dart) | A report that is built on the first `force()`, shared by concurrent calls, and released with its owner |
 | [`collections.dart`](example/collections.dart) | Set and map keys: features contribute, one reader starts them, a fake replaces one entry |
 | [`diagnostics.dart`](example/diagnostics.dart) | Accumulated validation, a cycle that waits, `prettyPrint()`, `get` failures, a waiting child, and `phase` |
-
-## Not ported
-
-These examples of `fp_di` need a feature that this package does not have.
-
-| Example of `fp_di` | Reason |
-|---|---|
-| `shape_export.dart` | The package has no inspector and no shape export |
+| [`shape_export.dart`](example/shape_export.dart) | A tool script that writes the shape of each variant as JSON and as a Mermaid chart, with the output of `fp_di` |
 
 ## Known differences
 
@@ -684,5 +790,14 @@ The package does not reproduce these behaviors of `fp_di`.
   `SlowMutation.disposing`.
 - A slow listener that throws leaves a `ListenerFailure` in `errors`. `fp_di`
   leaves the error to the zone of the timer.
+- The inspector gives the failure of a node by the error that a step threw,
+  and the type of a reported cause by the first failure (see the table in
+  [DevTools inspector](#devtools-inspector)).
+- `ShapeGraph` takes a list of components and an optional `ShapeModule`
+  for the label and the origins, where `fp_di` takes a `Module`. A component
+  without a debug label and without a key has the label `effect<T>#id` in a
+  scope and `effect<T>` in a shape, where `fp_di` says `Component<T>`.
+- A `Scope` has an optional `debugLabel`, which `fp_di` has as the label of
+  its module.
 - A `Component` constructor never throws. The checks of `fp_di` that throw at
   construction are failures of `run` here.

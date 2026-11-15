@@ -399,6 +399,23 @@ String _causeText(Cause<DiFailure> cause) {
   };
 }
 
+/// The nearest node of [key], from the scope of [reader] to the root, other
+/// than [reader] itself, or `null` when no scope has a node for the key.
+///
+/// The node can wait, fail, or be disposed: it is the node that the search for
+/// the cause of an unavailable key follows.
+NodeId? nodeBehind(RuntimeState s, NodeId reader, DiKey<Object?> key) {
+  for (
+    ScopeId? at = nodeRecord(s, reader).scope;
+    at != null;
+    at = scopeRecord(s, at).parent.toNullable()
+  ) {
+    final node = nodeForKey(s, at, key).toNullable();
+    if (node != null && node != reader) return node;
+  }
+  return null;
+}
+
 /// The failure of a `get` of [key] from the scope [scope], when the key has no
 /// value.
 ///
@@ -434,18 +451,6 @@ UnavailableKeyFailure unavailableKey(
     );
   }
 
-  NodeId? behind(NodeId reader, DiKey<Object?> missing) {
-    for (
-      ScopeId? at = nodeRecord(s, reader).scope;
-      at != null;
-      at = scopeRecord(s, at).parent.toNullable()
-    ) {
-      final node = nodeForKey(s, at, missing).toNullable();
-      if (node != null && node != reader) return node;
-    }
-    return null;
-  }
-
   final failed = <NodeState>[];
   final seen = <NodeId>{};
   final pending = <NodeId>[first];
@@ -465,12 +470,12 @@ UnavailableKeyFailure unavailableKey(
         for (final contribution in contributionKeysOf(s, node, missing)) {
           final scope = nodeRecord(s, node).scope;
           if (resolve(s, scope, contribution, exclude: Some(node)).isNone()) {
-            final found = behind(node, contribution);
+            final found = nodeBehind(s, node, contribution);
             if (found != null) next.add(found);
           }
         }
       } else if (missing is DiKey<Object?>) {
-        final found = behind(node, missing);
+        final found = nodeBehind(s, node, missing);
         if (found != null) next.add(found);
       }
     }

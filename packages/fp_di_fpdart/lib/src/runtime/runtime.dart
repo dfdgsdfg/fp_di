@@ -23,6 +23,7 @@ import '../finalizers.dart';
 import '../hold.dart';
 import '../key.dart';
 import '../slow_mutation.dart';
+import 'inspector.dart';
 
 part 'activation.dart';
 part 'disposal.dart';
@@ -177,6 +178,7 @@ final class Runtime {
       _parked = IORef.create<Map<ScopeId, Parked>>(const {}).run(),
       _releasing = IORef.create<List<String>>(const []).run(),
       _queued = IORef.create<int>(0).run(),
+      _labels = IORef.create<Map<ScopeId, String>>(const {}).run(),
       _errors = StreamController<Cause<DiFailure>>.broadcast(sync: true);
 
   /// Creates the runtime of a new root.
@@ -263,6 +265,9 @@ final class Runtime {
 
   /// The number of operations that wait for an earlier operation to end.
   final IORef<int> _queued;
+
+  /// The labels that the callers gave to scopes. A tool shows them.
+  final IORef<Map<ScopeId, String>> _labels;
 
   /// The stream of the failures that no caller receives. The controller is the
   /// only effect cell that is not an `IORef`: a stream cannot be a value.

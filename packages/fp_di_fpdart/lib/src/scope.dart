@@ -9,6 +9,7 @@ import 'failure.dart';
 import 'hold.dart';
 import 'key.dart';
 import 'node.dart';
+import 'runtime/inspector.dart';
 import 'runtime/runtime.dart';
 import 'slow_mutation.dart';
 
@@ -52,13 +53,30 @@ final class Scope {
   /// the runtime starts no timer. The listener runs outside the operation, so
   /// it can request an operation, which queues. A listener that throws leaves
   /// a [ListenerFailure] in [errors].
+  ///
+  /// The [debugLabel] names the scope for the tools: the DevTools inspector
+  /// and the shape graph show it. It has no other effect.
+  ///
+  /// A debug build, one that runs with assertions, registers the DevTools
+  /// inspector for the root. See the README.
   factory Scope({
     required List<Component<Object?>> components,
+    String? debugLabel,
     SlowMutationListener? onSlowMutation,
     Duration slowMutationThreshold = const Duration(seconds: 2),
   }) {
+    // The inspector wraps the listener, so it can post the report first. A root
+    // without a listener has no relay, so it starts no timer. The assert
+    // keeps the inspector out of a build without assertions.
+    InspectorSlowRelay? relay;
+    var listener = onSlowMutation;
+    assert(() {
+      relay = InspectorSlowRelay.of(onSlowMutation);
+      listener = relay?.report ?? onSlowMutation;
+      return true;
+    }());
     final runtime = Runtime.create(
-      onSlowMutation: onSlowMutation,
+      onSlowMutation: listener,
       slowMutationThreshold: slowMutationThreshold,
     );
     late final ScopeId id;
@@ -67,6 +85,11 @@ final class Scope {
       id = created;
       return next;
     });
+    runtime.labelScope(id, debugLabel);
+    assert(() {
+      Inspector.rootCreated(runtime, id, relay);
+      return true;
+    }());
     return Scope._(runtime, id);
   }
 
@@ -74,6 +97,11 @@ final class Scope {
   final ScopeId _id;
 
   ScopeRecord get _record => scopeRecord(_runtime.state, _id);
+
+  /// The label that the tools show for the scope, or `null`.
+  ///
+  /// The label has no effect on the scope.
+  String? get debugLabel => _runtime.scopeLabel(_id);
 
   /// The components that the scope declares.
   ///
@@ -190,7 +218,8 @@ final class Scope {
   /// and the `dispose` of a node return to their callers.
   Stream<Cause<DiFailure>> get errors => _runtime.errors;
 
-  /// Creates a child scope of [components].
+  /// Creates a child scope of [components]. The [debugLabel] names the child
+  /// for the tools, as it does for a root.
   ///
   /// The child reads the values of this scope and of its ancestors. The child
   /// can run before this scope runs: its nodes then wait for the publishers.
@@ -200,6 +229,7 @@ final class Scope {
   /// `disposeRequested`.
   Either<DiFailure, Scope> child({
     List<Component<Object?>> components = const [],
+    String? debugLabel,
   }) {
     if (_gone) return Left(const DisposedScopeFailure('child'));
     late final ScopeId id;
@@ -208,6 +238,7 @@ final class Scope {
       id = created;
       return next;
     });
+    _runtime.labelScope(id, debugLabel);
     return Right(Scope._(_runtime, id));
   }
 

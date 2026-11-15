@@ -33,7 +33,13 @@ extension RuntimeDisposal on Runtime {
     for (final scope in tree.reversed) {
       apply((s) => markDisposed(s, scope), disposed: Some(scope));
     }
-    if (scopeRecord(state, id).parent.isNone()) await closeErrors();
+    if (scopeRecord(state, id).parent.isNone()) {
+      assert(() {
+        Inspector.rootDisposed(this);
+        return true;
+      }());
+      await closeErrors();
+    }
     return failures;
   });
 

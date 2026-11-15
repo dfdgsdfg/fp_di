@@ -4,6 +4,7 @@
 // transitions. The core holds no mutable cell and runs no program.
 export 'describe.dart';
 export 'ids.dart';
+export 'inspect.dart';
 export 'phases.dart';
 export 'queries.dart';
 export 'records.dart';

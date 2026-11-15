@@ -7,6 +7,7 @@ build/
 .flutter-plugins-dependencies
 # The DevTools extension is experimental; a local build only (specs/tooling/devtools).
 packages/fp_di/extension/
+packages/fp_di_fpdart/extension/
 coverage/
 output/
 tmp/pdfs/

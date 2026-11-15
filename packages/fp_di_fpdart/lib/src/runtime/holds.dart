@@ -42,6 +42,23 @@ extension RuntimeHolds on Runtime {
         hold.stateIn(scopePath(state, scope)),
   ];
 
+  /// Gives the scope [id] the [label] that tools show. A `null` label leaves
+  /// the scope unnamed.
+  void labelScope(ScopeId id, String? label) {
+    if (label == null) return;
+    _labels.update((all) => {...all, id: label});
+  }
+
+  /// The label that a caller gave to the scope [id], or `null`.
+  String? scopeLabel(ScopeId id) => _labels.now[id];
+
+  /// The labels of the open holds of the scope [id], without its descendants.
+  /// A hold without a label has the label `hold`.
+  List<String> holdLabelsOf(ScopeId id) => [
+    for (final hold in _holds.now[id] ?? const <HoldEntry>[])
+      hold.debugLabel ?? 'hold',
+  ];
+
   /// The labels of the holds that each parked disposal waits for.
   Map<ScopeId, List<String>> waitingLabels() => {
     for (final id in _parked.now.keys)
