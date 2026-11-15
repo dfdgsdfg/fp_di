@@ -438,6 +438,7 @@ The laws are about `fp_di` itself. They do not import the theorems of the
   | [`parallel.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/parallel.dart) | Independent members at the same time |
   | [`token_key.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/token_key.dart) | A token key orders a member after an effect |
   | [`session_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/session_scope.dart) | A login scope and a logout |
+  | [`drain_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/drain_scope.dart) | What a logout must finish and what it may drop: a scope for the database of a session, a hold for work outside the graph, and a time limit |
   | [`environments.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/environments.dart) | Platform, flavor, test fakes, and a two-stage start |
   | [`collections.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/collections.dart) | Many elements of one interface in one set or map |
   | [`shape_export.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/shape_export.dart) | The shape of each variant as JSON and Mermaid |

@@ -1,3 +1,9 @@
+## Unreleased
+
+- Documentation: the example `drain_scope.dart` separates what a logout must
+  finish from what it may drop, with a scope for the database of a session,
+  a hold for work outside the graph, and a time limit.
+
 ## 0.2.0
 
 - Breaking: `Scope.dispose` waits for the holds of the disposal. A consumer

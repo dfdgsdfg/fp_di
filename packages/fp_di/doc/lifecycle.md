@@ -236,6 +236,15 @@ the disposal and never prevents it, and it keeps no value of a withdrawn
 publisher. In Flutter, a `ScopeBoundary` of `fp_di_flutter` takes and closes
 such a hold for a widget subtree.
 
+A hold delays a whole scope, so put what must finish and what may be dropped
+in different scopes. A store whose writes must land goes in a scope of its
+own, and the live parts of a session go in a child of it. A logout disposes
+the child at once and waits, with a limit, only for the scope of the store.
+The dispose function of the store flushes before it closes, and a reader of
+the store, such as an editor that saves a draft, releases before the store,
+also from a child scope. See
+[`drain_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di/example/drain_scope.dart).
+
 ## Shape and eligibility
 
 A component's shape is the sets of keys that it reads and the key that it
