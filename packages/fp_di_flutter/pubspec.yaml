@@ -1,6 +1,6 @@
 name: fp_di_flutter
 description: "Flutter integration for fp_di: publish a caller-owned scope to the widget tree and read it from BuildContext."
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di_flutter
 issue_tracker: https://github.com/dfdgsdfg/fp_di/issues
 topics:
@@ -16,7 +16,7 @@ resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
-  fp_di: ^0.1.0
+  fp_di: ^0.2.0
 
 dev_dependencies:
   flutter_test:

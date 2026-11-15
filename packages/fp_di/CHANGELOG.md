@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - Breaking: `Scope.dispose` waits for the holds of the disposal. A consumer
   outside the runtime takes a hold with `Scope.disposeHold(debugLabel:)` and

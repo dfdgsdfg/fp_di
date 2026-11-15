@@ -1,6 +1,6 @@
 name: fp_di
 description: "Algebraic, lifecycle-aware dependency injection for Dart: dependencies are create/dispose pairs that compose."
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/dfdgsdfg/fp_di/tree/main/packages/fp_di
 issue_tracker: https://github.com/dfdgsdfg/fp_di/issues
 topics:
