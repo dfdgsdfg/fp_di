@@ -247,7 +247,11 @@ void main() {
       ) => internal
           .runDependency(
             dependency,
-            internal.StepContext('probe', Environment.of(map), ref),
+            internal.StepContext.fromEnvironment(
+              'probe',
+              Environment.of(map),
+              ref,
+            ),
           )
           .run();
       final full = await runWith({intKey: 5, textKey: 'xy', flagKey: true});

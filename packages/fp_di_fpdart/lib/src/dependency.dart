@@ -14,21 +14,64 @@ abstract final class _DependencyHKT {}
 
 /// The context of one component while the runtime creates its value.
 ///
-/// The context holds the owner label, the values that the component can read,
-/// and the place where the steps register the dispose functions of the values
-/// that they own. A scope creates one context for each component.
+/// The context holds the owner label, the reads of the activation, the check
+/// that tells whether a caller canceled the activation, and the place where
+/// the steps register the dispose functions of the values that they own. The
+/// runtime creates one context for each activation of a component.
+///
+/// The functions of the context read the state of the runtime when a step
+/// runs, so a read sees the publishers of that moment. A read records the
+/// publisher that it saw.
 final class StepContext {
   /// Creates the context of the component with the label [owner].
-  const StepContext(this.owner, this.environment, this.finalizers);
+  const StepContext({
+    required this.owner,
+    required this.finalizers,
+    required this.read,
+    required this.readOption,
+    required this.checkpoint,
+  });
+
+  /// Creates a context that reads [environment] and is never canceled.
+  ///
+  /// The context serves tests and tools that run a dependency without a
+  /// scope.
+  factory StepContext.fromEnvironment(
+    String owner,
+    Environment environment,
+    IORef<Finalizers> finalizers,
+  ) => StepContext(
+    owner: owner,
+    finalizers: finalizers,
+    read: (key) => environment
+        .lookup(key)
+        .match(
+          () => Left<Cause<DiFailure>, Object?>(
+            Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current),
+          ),
+          Right<Cause<DiFailure>, Object?>.new,
+        ),
+    readOption: environment.lookup,
+    checkpoint: () => const Right<Cause<DiFailure>, Unit>(unit),
+  );
 
   /// The label of the component.
   final String owner;
 
-  /// The values that the component can read.
-  final Environment environment;
-
   /// The dispose functions of the values that the component owns.
   final IORef<Finalizers> finalizers;
+
+  /// A required read of a key: the value, or the cause of the failed read.
+  final Either<Cause<DiFailure>, Object?> Function(DiKey<Object?> key) read;
+
+  /// An optional read of a key: the value when a publisher resolves.
+  final Option<Object?> Function(DiKey<Object?> key) readOption;
+
+  /// Gives a `Left` with an [Interrupt] when a caller canceled the
+  /// activation.
+  ///
+  /// A step runs the check before it starts.
+  final Either<Cause<DiFailure>, Unit> Function() checkpoint;
 }
 
 /// A step program: the form that a dependency has after the interpreter ran.
@@ -133,22 +176,27 @@ _Program<B> _attempt<B>(
   StepRelease<B>? release,
 ) => _withContext<B>(
   (context) =>
-      TaskEither<Cause<DiFailure>, Either<Object?, B>>.tryCatch(
-            effect,
-            (error, stackTrace) => Fail<DiFailure>(
-              ActivationFailure(context.owner, error),
-              stackTrace,
-            ),
-          )
-          .chainEither(
-            (result) => result.mapLeft<Cause<DiFailure>>(
-              (error) => Fail<DiFailure>(
-                ActivationFailure(context.owner, error),
-                StackTrace.current,
-              ),
-            ),
-          )
-          .flatMap((value) => _own(context, value, release)),
+      TaskEither<Cause<DiFailure>, Unit>.fromEither(
+        context.checkpoint(),
+      ).flatMap(
+        (_) =>
+            TaskEither<Cause<DiFailure>, Either<Object?, B>>.tryCatch(
+                  effect,
+                  (error, stackTrace) => Fail<DiFailure>(
+                    ActivationFailure(context.owner, error),
+                    stackTrace,
+                  ),
+                )
+                .chainEither(
+                  (result) => result.mapLeft<Cause<DiFailure>>(
+                    (error) => Fail<DiFailure>(
+                      ActivationFailure(context.owner, error),
+                      StackTrace.current,
+                    ),
+                  ),
+                )
+                .flatMap((value) => _own(context, value, release)),
+      ),
 );
 
 /// The interpreter that turns a tree into a step program.
@@ -162,8 +210,10 @@ final class _ProgramAlgebra implements DependencyAlgebra<_ProgramTag> {
 
   @override
   HKT<_ProgramTag, A> require<A>(DiKey<A> key) => _ProgramOf<A>(
-    ReaderTaskEither<StepContext, Cause<DiFailure>, A>.asks(
-      (context) => context.environment.read(key),
+    _withContext<A>(
+      (context) => TaskEither<Cause<DiFailure>, A>.fromEither(
+        context.read(key).map((value) => value as A),
+      ),
     ),
   );
 
@@ -171,9 +221,7 @@ final class _ProgramAlgebra implements DependencyAlgebra<_ProgramTag> {
   HKT<_ProgramTag, Option<A>> optional<A>(DiKey<A> key) =>
       _ProgramOf<Option<A>>(
         ReaderTaskEither<StepContext, Cause<DiFailure>, Option<A>>.asks(
-          (context) => context.environment.contains(key)
-              ? Some(context.environment.read(key))
-              : const None(),
+          (context) => context.readOption(key).map((value) => value as A),
         ),
       );
 
@@ -273,9 +321,9 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
 
   /// A dependency that reads the value of [key] when a scope publishes it.
   ///
-  /// The result is `None` when neither the scope nor an ancestor publishes
-  /// the key. When the key is present, the activation still waits for the
-  /// publisher.
+  /// The result is `None` when no scope resolves the key at the moment that
+  /// the activation reads it. A later publisher makes the runtime release the
+  /// value and create it again.
   static Dependency<Option<T>> option<T>({DiKey<T>? key}) =>
       Dependency<Option<T>>._(OptionalNode<T>(key ?? DiKey<T>()));
 

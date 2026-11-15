@@ -8,13 +8,14 @@
 //
 // Differences from the fp_di version:
 //
-// - The scope has no listener. The fake resources print from their own
-//   constructors and methods, so the output shows the order of the events.
-// - `app.child(components: ...)` creates the child. The child runs only after
-//   its parent is active. `run()` returns an `Exit`, and `login` returns an
+// - The fake resources print from their own constructors and methods, so the
+//   output shows the order of the events without a listener.
+// - `child(components: ...)` gives an `Either`: a `Left` for a scope that is
+//   disposing. `run()` returns an `Exit`, and `login` returns an
 //   `Option<Scope>`.
-// - A scope runs once. The second login is a new child scope.
-// - `get` is an `Either`. A disposed scope gives a `ScopePhaseFailure`.
+// - A scope that succeeded does not run again. The second login is a new child
+//   scope.
+// - `get` is an `Either`. A disposed scope gives a `DisposedScopeFailure`.
 //
 // Run: dart run packages/fp_di_fpdart/example/session_scope.dart
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
@@ -153,7 +154,7 @@ List<Component<Object?>> sessionComponents(String userId) => [
 
 /// Logs in: runs a child scope of [app] with the session components.
 Future<Option<Scope>> login(Scope app, String userId) async {
-  final session = app.child(components: sessionComponents(userId));
+  final session = childOf(app, sessionComponents(userId));
   final started = await session.run();
   return started.match((cause) {
     print('  login failed:\n${cause.prettyPrint()}');
@@ -180,6 +181,12 @@ Future<void> close(Scope scope) async {
   final stopped = await scope.dispose();
   stopped.match((cause) => print(cause.prettyPrint()), (_) {});
 }
+
+/// A child scope of [parent]. `child` is a `Left` only for a scope that is
+/// disposing or disposed, so the example reads it as a bug.
+Scope childOf(Scope parent, List<Component<Object?>> components) => parent
+    .child(components: components)
+    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   print('bootstrap');

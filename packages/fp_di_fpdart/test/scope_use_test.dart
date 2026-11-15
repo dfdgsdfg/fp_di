@@ -152,7 +152,7 @@ void main() {
       leftOf(result).only.getLeft().toNullable(),
       isA<ScopePhaseFailure>(),
     );
-    expect(scope.phase, ScopePhase.active);
+    expect(scope.phase, ScopePhase.initialized);
     expect(log, ['create a']);
     rightOf(await scope.dispose());
   });
@@ -162,7 +162,7 @@ void main() {
     final result = await scopeOf(log)
         .use(
           ReaderTaskEither<Scope, DiFailure, String>((scope) async {
-            final child = scope.child(
+            final child = scope.kid(
               components: [
                 Component<String>(
                   dependency: Dependency.require<int>(

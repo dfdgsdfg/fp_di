@@ -1,5 +1,5 @@
+import 'core/phases.dart';
 import 'key.dart';
-import 'scope.dart';
 
 /// One dispose function that failed.
 ///
@@ -97,7 +97,10 @@ final class UnmatchedOverrideFailure extends DiFailure {
       '$owner overrides $key, which no single component publishes';
 }
 
-/// The components of one scope read each other in a cycle.
+/// A read inside an activation would close a cycle of committed reads.
+///
+/// Components that require each other wait and are no failure, so only a read
+/// of a node that already reads the reader can raise this failure.
 final class DependencyCycleFailure extends DiFailure {
   /// Creates the failure for the cycle that [path] lists.
   const DependencyCycleFailure(this.path);
@@ -161,14 +164,75 @@ final class ScopePhaseFailure extends DiFailure {
   String get message => '$operation is not valid in the phase ${phase.name}';
 }
 
-/// A child scope ran while its parent was not active.
-final class InactiveAncestorFailure extends DiFailure {
-  /// Creates the failure for a parent in [phase].
-  const InactiveAncestorFailure(this.phase);
+/// The scope is disposing or disposed, so the operation is not valid.
+final class DisposedScopeFailure extends DiFailure {
+  /// Creates the failure of [operation].
+  const DisposedScopeFailure(this.operation);
 
-  /// The phase of the parent scope.
-  final ScopePhase phase;
+  /// The name of the operation, such as `get` or `child`.
+  final String operation;
 
   @override
-  String get message => 'the parent scope is ${phase.name}, not active';
+  String get message => '$operation is not valid in a disposed scope';
+}
+
+/// A lifecycle operation started inside a lifecycle operation of the same
+/// runtime.
+///
+/// A dispose function, a listener, or a callback of a running operation
+/// cannot start `run`, `dispose`, or the `dispose` of a node.
+final class ReentrantMutationFailure extends DiFailure {
+  /// Creates the failure of [operation].
+  const ReentrantMutationFailure(this.operation);
+
+  /// The name of the operation that the runtime rejected.
+  final String operation;
+
+  @override
+  String get message => '$operation started inside a running operation';
+}
+
+/// A node has no value now, so a read of its value failed.
+final class InactiveNodeFailure extends DiFailure {
+  /// Creates the failure of a node that waits for [missing].
+  const InactiveNodeFailure([this.missing = const []]);
+
+  /// The required keys of the node that do not resolve.
+  final List<DiKey<Object?>> missing;
+
+  @override
+  String get message => missing.isEmpty
+      ? 'the node is not active'
+      : 'the node is not active, and waits for ${missing.join(', ')}';
+}
+
+/// A listener threw an error.
+///
+/// The runtime removes the listener and reports this failure to `errors`.
+final class ListenerFailure extends DiFailure {
+  /// Creates the failure for the [error] that a listener threw.
+  const ListenerFailure(this.error);
+
+  /// The error that the listener threw.
+  final Object error;
+
+  @override
+  String get message => 'a listener threw: $error';
+}
+
+/// Optional reads feed back into each other, so the nodes never settle.
+final class UnsettledFailure extends DiFailure {
+  /// Creates the failure for the nodes with the [labels], after [passes]
+  /// passes of the reconciliation.
+  const UnsettledFailure(this.labels, this.passes);
+
+  /// The labels of the nodes that still changed in the last pass.
+  final List<String> labels;
+
+  /// The number of passes that the reconciliation made.
+  final int passes;
+
+  @override
+  String get message =>
+      'the nodes ${labels.join(', ')} do not settle after $passes passes';
 }

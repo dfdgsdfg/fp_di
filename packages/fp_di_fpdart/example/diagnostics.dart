@@ -1,18 +1,21 @@
 // Seeing why a scope failed, and what a scope can still tell you.
 //
-// This package has no `describe`, no `missing`, and no `whenActive`. A scope
-// runs once, and it checks its components before it creates any value. The
-// check reports a problem as a `Cause`, so a forgotten key cannot leave a
-// reader waiting. This example shows five tools:
+// A scope checks its components before it creates any node. The check reports
+// a problem as a `Cause`, so a forgotten key cannot leave a reader waiting for
+// a key that nobody declares. A key that a component declares but does not
+// publish yet makes a reader wait, and the node says what it waits for. This
+// example shows five tools:
 //
 // 1. The check accumulates every duplicate key and every undeclared key. The
-//    cause joins them with `Both`.
-// 2. A cycle is a `Fail(DependencyCycleFailure)`. The check for a cycle runs
-//    only when the other checks pass.
+//    cause joins them with `Both`. A failed check changes nothing, so the
+//    scope stays `declared`.
+// 2. Two components that read each other wait. The run succeeds, and each node
+//    names the key that it waits for in `missing`.
 // 3. `prettyPrint()` shows the tree. `failures` lists the typed failures, and
 //    a `switch` over the sealed `DiFailure` reads each one.
 // 4. `get` and `getOption` say why a value is not there:
-//    `UnavailableKeyFailure` or `ScopePhaseFailure`.
+//    `UnavailableKeyFailure` or `DisposedScopeFailure`. A child that runs
+//    before its parent waits, and `state` shows the phase of each node.
 // 5. `phase` shows where a scope is in its life.
 //
 // Run: dart run packages/fp_di_fpdart/example/diagnostics.dart
@@ -62,7 +65,12 @@ String describe(DiFailure failure) => switch (failure) {
   UnavailableKeyFailure(:final key) => 'unavailable: $key',
   ScopePhaseFailure(:final operation, :final phase) =>
     'phase: $operation in ${phase.name}',
-  InactiveAncestorFailure(:final phase) => 'parent is ${phase.name}',
+  DisposedScopeFailure(:final operation) => 'disposed: $operation',
+  ReentrantMutationFailure(:final operation) => 'reentrant: $operation',
+  InactiveNodeFailure(:final missing) => 'inactive node, missing $missing',
+  ListenerFailure(:final error) => 'listener threw $error',
+  UnsettledFailure(:final labels, :final passes) =>
+    'unsettled: ${labels.join(', ')} after $passes passes',
 };
 
 /// Runs [scope] and prints the cause of the failure, if any.
@@ -77,6 +85,12 @@ Future<void> tryRun(String label, Scope scope) async {
     }
   }, (_) => print('  $label runs, phase ${scope.phase.name}'));
 }
+
+/// A child scope of [parent]. `child` is a `Left` only for a scope that is
+/// disposing or disposed, so the example reads it as a bug.
+Scope childOf(Scope parent, List<Component<Object?>> components) => parent
+    .child(components: components)
+    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   print('1. the check accumulates');
@@ -105,20 +119,23 @@ Future<void> main() async {
 
   print('2. a cycle');
   // Auth reads Mailer, and Mailer reads Auth. Every key has a publisher, so
-  // the first two checks pass and the check for a cycle runs.
-  await tryRun(
-    'a cycle',
-    Scope(
-      components: [
-        Component<Auth>(
-          dependency: Dependency.require<Mailer>().map<Auth>((_) => Auth()),
-        ),
-        Component<Mailer>(
-          dependency: Dependency.require<Auth>().map<Mailer>((_) => Mailer()),
-        ),
-      ],
-    ),
+  // the check passes. Neither value can exist before the other one, so both
+  // nodes wait. The run succeeds, and `missing` names the keys.
+  final cycle = Scope(
+    components: [
+      Component<Auth>(
+        dependency: Dependency.require<Mailer>().map<Auth>((_) => Auth()),
+      ),
+      Component<Mailer>(
+        dependency: Dependency.require<Auth>().map<Mailer>((_) => Mailer()),
+      ),
+    ],
   );
+  await tryRun('a cycle', cycle);
+  for (final node in cycle.nodes) {
+    print('  ${node.label}: ${node.state.phase.name}, missing ${node.missing}');
+  }
+  await cycle.dispose();
 
   print('3. a forgotten type argument');
   // Without `<Database>`, Dart infers `PgDatabase` from the create function.
@@ -147,18 +164,22 @@ Future<void> main() async {
   print('  get an unpublished key: ${app.get<UserRepository>()}');
   print('  getOption: ${app.getOption<UserRepository>()}');
 
-  // A scope runs once.
+  // A scope that succeeded cannot run again.
   final again = await app.run();
   again.match(
     (cause) => print('  run again: ${cause.failures.map(describe).toList()}'),
     (_) => print('  run again: started'),
   );
 
-  // A child runs only after its parent is active.
+  // A child can run before its parent. Its node waits for the key of the
+  // parent, and the run of the parent wakes the node.
   final late = Scope(components: [database]);
-  final feature = late.child(components: [repository]);
+  final feature = childOf(late, [repository]);
   await tryRun('a child before its parent', feature);
+  final waiting = feature.nodes.single;
+  print('  the child waits: ${waiting.state.phase.name}, ${waiting.missing}');
   await tryRun('the parent', late);
+  print('  the child woke: ${waiting.state.phase.name}');
 
   print('5. the phase after the end');
   for (final scope in [app, late, feature]) {

@@ -8,8 +8,9 @@
 //
 // Differences from the fp_di version:
 //
-// - The cache lives as long as the scope. The runtime has no reactivation, so
-//   the example does not show a cache that a new publisher replaces.
+// - The cache lives as long as the scope. The example does not show a cache
+//   that a new publisher replaces. Such a cache would release and build again,
+//   like the greeter of `reactive.dart`.
 // - The lookup of a released cache returns `None`. The fp_di version throws a
 //   `StateError`.
 // - `Dependency.require<Database>().map(..., dispose: ...)` replaces
@@ -74,11 +75,17 @@ final rowViewFactory = Component<RowViewFactory>(
       .map<RowViewFactory>((cache) => cache.view),
 );
 
+/// A child scope of [parent]. `child` is a `Left` only for a scope that is
+/// disposing or disposed, so the example reads it as a bug.
+Scope childOf(Scope parent, List<Component<Object?>> components) => parent
+    .child(components: components)
+    .getOrElse((failure) => throw StateError('$failure'));
+
 Future<void> main() async {
   final app = Scope(components: [database('main')]);
   // A nearer scope that publishes another database.
-  final replica = app.child(components: [database('replica')]);
-  final feature = replica.child(components: [rowViewFactory]);
+  final replica = childOf(app, [database('replica')]);
+  final feature = childOf(replica, [rowViewFactory]);
 
   print('run');
   final started = await TaskEither<Cause<DiFailure>, Scope>(app.run)

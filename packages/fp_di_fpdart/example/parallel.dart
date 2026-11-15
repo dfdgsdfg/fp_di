@@ -1,8 +1,8 @@
 // Independent components of a scope activate and release at the same time.
 //
 // The runtime reads independence from the keys. No component reads a key that
-// another component publishes. The three slow connections below are in one
-// layer, so they start together. The `run` call takes about as long as the
+// another component publishes. The three slow connections below read nothing,
+// so they start together. The `run` call takes about as long as the
 // slowest connection, not the sum. They close together too: a component
 // releases after the components that read it, and these read nothing of each
 // other.
@@ -11,8 +11,7 @@
 //
 // - `run()` and `dispose()` return an `Exit`. The example handles each one
 //   with `match`.
-// - `scope.get` replaces `app.nodes`. The scope has no node list.
-// - The scope runs once. It has no `initialize` that can run again.
+// - `scope.get` is an `Either`, and `scope.nodes` lists the node handles.
 //
 // Run: dart run packages/fp_di_fpdart/example/parallel.dart
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';

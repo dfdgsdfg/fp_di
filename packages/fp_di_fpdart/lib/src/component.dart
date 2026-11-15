@@ -2,9 +2,7 @@ import 'package:fpdart/fpdart.dart';
 
 import 'cause.dart';
 import 'dependency.dart';
-import 'environment.dart';
 import 'failure.dart';
-import 'finalizers.dart';
 import 'key.dart';
 
 /// A [Dependency] and the key that publishes its value.
@@ -73,60 +71,19 @@ final class Component<A> {
   /// label.
   String get label => _debugLabel ?? key.toString();
 
-  /// Makes the value of the component from the [input] environment.
-  ///
-  /// The component is a function from an environment to a `TaskEither`, like
-  /// a `ZLayer`. The task runs the dependency. When a step fails, the task
-  /// releases the values that the component owns, in reverse order. The cause
-  /// is then the failure followed by the dispose failures.
-  TaskEither<Cause<DiFailure>, Built> _build(Environment input) =>
-      TaskEither<Cause<DiFailure>, IORef<Finalizers>>.fromTask(
-        IORef.create<Finalizers>(Finalizers.monoid.empty).toTask(),
-      ).flatMap(
-        (owned) => runDependency(_dependency, StepContext(label, input, owned))
-            .orElse(
-              (failure) => _rollback(owned).flatMap(
-                (rollback) =>
-                    TaskEither<Cause<DiFailure>, A>.left(failure + rollback),
-              ),
-            )
-            .flatMap(
-              (value) =>
-                  TaskEither<Cause<DiFailure>, Finalizers>.fromTask(
-                    owned.read().toTask(),
-                  ).map(
-                    (finalizers) => (
-                      // An effect publishes nothing.
-                      isEffect
-                          ? Environment.empty
-                          : Environment.of({key: value}),
-                      finalizers,
-                    ),
-                  ),
-            ),
-      );
-
-  /// The release of the owned values, as a task.
-  ///
-  /// The task reads the owned values when it runs.
-  TaskEither<Cause<DiFailure>, Cause<DiFailure>> _rollback(
-    IORef<Finalizers> owned,
-  ) => TaskEither<Cause<DiFailure>, Finalizers>.fromTask(owned.read().toTask())
-      .flatMap(
-        (finalizers) => TaskEither<Cause<DiFailure>, Cause<DiFailure>>.fromTask(
-          finalizers.release(),
-        ),
-      );
+  /// The debug label of the component, or `null`.
+  String? get debugLabel => _debugLabel;
 }
 
-/// Makes the value of [component] from the [input] environment.
+/// Runs the steps of [component] in [context] and gives its value.
 ///
-/// The task never throws. A failed task has released the values that the
-/// component owned.
-TaskEither<Cause<DiFailure>, Built> buildComponent(
+/// The task never throws. A failed task has not released the values that the
+/// steps registered in the finalizers of the context. The runtime releases
+/// them.
+TaskEither<Cause<DiFailure>, Object?> runComponent(
   Component<Object?> component,
-  Environment input,
-) => component._build(input);
+  StepContext context,
+) => runDependency(component._dependency, context);
 
 /// Operations on a group of components.
 ///

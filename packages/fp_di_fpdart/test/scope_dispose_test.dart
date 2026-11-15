@@ -13,7 +13,7 @@ void main() {
         components: [Component<int>.value(key: intKey, value: 10)],
       );
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [
           Component<String>(
             key: textKey,
@@ -39,7 +39,7 @@ void main() {
         components: [Component<int>.value(key: intKey, value: 1)],
       );
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [
           Component<int>.value(key: intKey, value: 2),
           Component<String>(
@@ -61,9 +61,9 @@ void main() {
         components: [Component<int>.value(key: intKey, value: 1)],
       );
       rightOf(await root.run());
-      final middle = root.child();
+      final middle = root.kid();
       rightOf(await middle.run());
-      final leaf = middle.child(
+      final leaf = middle.kid(
         components: [
           Component<String>(
             key: textKey,
@@ -82,7 +82,7 @@ void main() {
         components: [Component<int>.value(key: intKey, value: 1)],
       );
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [
           Component<String>(
             key: textKey,
@@ -99,7 +99,7 @@ void main() {
     test('a key that no ancestor publishes is undeclared', () async {
       final parent = Scope(components: []);
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [
           Component<String>(
             key: textKey,
@@ -116,43 +116,50 @@ void main() {
       );
     });
 
-    test(
-      'a child of a parent that is not active fails at its own run',
-      () async {
-        final parent = Scope(
-          components: [Component<int>.value(key: intKey, value: 1)],
-        );
-        final child = parent.child(
-          components: [
-            Component<String>(
-              dependency: Dependency.require<int>(
-                key: intKey,
-              ).map<String>((v) => '$v'),
-            ),
-          ],
-        );
-        expect(
-          await failureOfRun(child),
-          isA<InactiveAncestorFailure>().having(
-            (f) => f.phase,
-            'phase',
-            ScopePhase.declared,
+    test('a child that runs before its parent waits for the parent', () async {
+      // from: core_test.dart: a child initialized before its parent is dormant
+      // until the parent initializes
+      final parent = Scope(
+        components: [Component<int>.value(key: intKey, value: 1)],
+      );
+      final child = parent.kid(
+        components: [
+          Component<String>(
+            key: textKey,
+            dependency: Dependency.require<int>(
+              key: intKey,
+            ).map<String>((v) => 'saw $v'),
           ),
-        );
-        expect(child.phase, ScopePhase.failed);
-        rightOf(await parent.run());
-        rightOf(await parent.dispose());
-        final late = parent.child();
-        expect(
-          await failureOfRun(late),
-          isA<InactiveAncestorFailure>().having(
-            (f) => f.phase,
-            'phase',
-            ScopePhase.disposed,
-          ),
-        );
-      },
-    );
+        ],
+      );
+      rightOf(await child.run());
+      final waiting = rightOf(child.node<String>(key: textKey));
+      expect(waiting.state.phase, NodePhase.waiting);
+      expect(waiting.missing, [intKey]);
+      expect(
+        leftOf(child.get<String>(key: textKey)),
+        isA<UnavailableKeyFailure>(),
+      );
+      rightOf(await parent.run());
+      expect(waiting.isActive, isTrue);
+      expect(rightOf(child.get<String>(key: textKey)), 'saw 1');
+    });
+
+    test('a child of a disposed parent is a Left', () async {
+      final parent = Scope(
+        components: [Component<int>.value(key: intKey, value: 1)],
+      );
+      rightOf(await parent.run());
+      rightOf(await parent.dispose());
+      expect(
+        leftOf(parent.child()),
+        isA<DisposedScopeFailure>().having(
+          (f) => f.operation,
+          'operation',
+          'child',
+        ),
+      );
+    });
 
     test(
       'a child cannot read the key of a parent after the parent disposes',
@@ -161,11 +168,14 @@ void main() {
           components: [Component<int>.value(key: intKey, value: 1)],
         );
         rightOf(await parent.run());
-        final child = parent.child();
+        final child = parent.kid();
         rightOf(await child.run());
         rightOf(await parent.dispose());
         expect(child.phase, ScopePhase.disposed);
-        expect(leftOf(child.get<int>(key: intKey)), isA<ScopePhaseFailure>());
+        expect(
+          leftOf(child.get<int>(key: intKey)),
+          isA<DisposedScopeFailure>(),
+        );
       },
     );
   });
@@ -195,7 +205,7 @@ void main() {
           ],
         );
         rightOf(await parent.run());
-        final first = parent.child(
+        final first = parent.kid(
           components: [
             loggedReading<double>(
               'child 1',
@@ -205,7 +215,7 @@ void main() {
             ),
           ],
         );
-        final second = parent.child(
+        final second = parent.kid(
           components: [
             loggedReading<BigInt>(
               'child 2',
@@ -272,7 +282,7 @@ void main() {
           ],
         );
         rightOf(await parent.run());
-        final child = parent.child(
+        final child = parent.kid(
           components: [
             logged<double>('child', 1.0, log, failDispose: 'child failed'),
           ],
@@ -293,17 +303,18 @@ void main() {
           'b',
           'a',
         ]);
-        // The child first, then the strata in reverse order, one after the
-        // other: Then(child, Then(b, a)).
+        // The failures follow descending node id, whatever order the releases
+        // finished in: the child, b, and a.
         expect(
           cause.fold<String>(
             empty: () => '_',
             fail: (_, _) => 'F',
             die: (_, _) => 'D',
+            interrupt: (_) => 'I',
             then: (first, second) => '($first $second)',
             both: (left, right) => '[$left $right]',
           ),
-          '(D (D D))',
+          '((D D) D)',
         );
         expect(
           log,
@@ -327,8 +338,10 @@ void main() {
         final second = scope.dispose();
         expect(identical(first, second), isTrue);
         final one = leftOf(await first);
-        final two = leftOf(await scope.dispose());
-        expect(two, same(one));
+        expect(one.defects.single, isA<DisposeFailure>());
+        // A call after the disposal ended gives `Right`, and does not replay
+        // the failure.
+        rightOf(await scope.dispose());
         expect(log.where((l) => l == 'dispose a'), hasLength(1));
       },
     );
@@ -344,7 +357,7 @@ void main() {
       final declared = Scope(components: []);
       rightOf(await declared.dispose());
       expect(declared.phase, ScopePhase.disposed);
-      expect(await failureOfRun(declared), isA<ScopePhaseFailure>());
+      expect(await failureOfRun(declared), isA<DisposedScopeFailure>());
 
       final log = <String>[];
       final failed = Scope(
@@ -365,7 +378,9 @@ void main() {
       expect(log, isEmpty);
     });
 
-    test('dispose during a run waits for the run to settle', () async {
+    test('dispose during a run cancels the activation in flight', () async {
+      // from: cancellation_test.dart: dispose cancels the token at the call and
+      // nothing commits (CancelPrompt, NoCommitAfterCancel)
       final gate = Completer<void>();
       final log = <String>[];
       final scope = Scope(
@@ -383,19 +398,19 @@ void main() {
         ],
       );
       final run = scope.run();
-      var disposed = false;
-      final disposal = scope.dispose().then((result) {
-        disposed = true;
-        return result;
-      });
       await pause();
-      expect(disposed, isFalse);
-      expect(scope.phase, ScopePhase.running);
+      final disposal = scope.dispose();
+      // The disposal is accepted at once, and it waits in the queue.
+      expect(scope.phase, ScopePhase.disposeRequested);
+      expect(scope.isDisposed, isTrue);
       gate.complete();
-      rightOf(await run);
+      final cause = leftOf(await run);
+      expect(cause.isInterrupted, isTrue);
+      expect(cause.failures, isEmpty);
       rightOf(await disposal);
       expect(log, ['create', 'dispose']);
       expect(scope.phase, ScopePhase.disposed);
+      expect(scope.nodes, isEmpty);
     });
 
     test(
@@ -420,9 +435,12 @@ void main() {
           ],
         );
         final run = scope.run();
+        await pause();
         final disposal = scope.dispose();
         gate.complete();
-        expect(leftOf(await run).only, isA<ActivationFailure>());
+        final cause = leftOf(await run);
+        expect(cause.only, isA<ActivationFailure>());
+        expect(cause.isInterrupted, isTrue);
         rightOf(await disposal);
         expect(log, ['dispose']);
       },
@@ -432,7 +450,7 @@ void main() {
       final log = <String>[];
       final parent = Scope(components: []);
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [logged<int>('a', 1, log, failDispose: 'failed')],
       );
       rightOf(await child.run());

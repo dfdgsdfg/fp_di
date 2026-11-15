@@ -3,7 +3,8 @@
 // Part 1 is a failed run. One chain owns two steps and then fails in a third
 // step. The runtime releases the second step and the first step, in that
 // order. It publishes nothing. The cause of the run is a tree: the failure
-// of the third step. The retry is a new scope.
+// of the third step. The scope returns to `declared`, and the retry is a second
+// `run` of the same scope.
 //
 // Part 2 is a failed program inside `use`. The run succeeds, and then the
 // program fails. `use` disposes the scope on every path. Three cases show the
@@ -12,9 +13,9 @@
 //
 // Differences from the fp_di version:
 //
-// - A scope runs once. A failed scope stays `failed`, and a second `run`
-//   is a `ScopePhaseFailure`. The retry builds a new `Scope` from the same
-//   components.
+// - A failed run rolls back, and the scope is `declared` again. A second `run`
+//   retries, like the second `initialize` of `fp_di`. A scope that succeeded
+//   cannot run again: that `run` is a `ScopePhaseFailure`.
 // - The run does not throw. The `Exit` holds a `Cause`, and the example prints
 //   it with `prettyPrint()`.
 // - The third step fails once, and the retry succeeds. The failing step is a
@@ -82,40 +83,39 @@ Future<void> main() async {
   await failedProgram();
 }
 
-/// Part 1: a failed run rolls back, and the retry is a new scope.
+/// Part 1: a failed run rolls back, and the retry is a second run.
 Future<void> failedRun() async {
-  final first = Scope(components: components);
+  final scope = Scope(components: components);
 
   print('run');
-  final started = await first.run();
+  final started = await scope.run();
   started.match(
     (cause) => print('  failed:\n${indent(cause.prettyPrint())}'),
     (_) => print('  started'),
   );
-  print('  phase: ${first.phase.name}');
-  print('  published: ${first.getOption<Part>()}');
+  print('  phase: ${scope.phase.name}');
+  print('  published: ${scope.getOption<Part>()}');
 
-  // A failed scope cannot run again.
-  final again = await first.run();
+  // The scope is `declared` again, so the same scope can retry.
+  print('retry');
+  final retried = await scope.run();
+  retried.match(
+    (cause) => print('  failed:\n${indent(cause.prettyPrint())}'),
+    (_) => print('  published: ${scope.getOption<Part>()}'),
+  );
+
+  // A scope that succeeded cannot run again.
+  final again = await scope.run();
   again.match(
     (cause) => print('  run again: ${cause.failures.first}'),
     (_) => print('  run again: started'),
   );
 
-  // The components are the same, so a new scope can retry.
-  print('retry with a new scope');
-  final second = Scope(components: components);
-  final retried = await second.run();
-  retried.match(
-    (cause) => print('  failed:\n${indent(cause.prettyPrint())}'),
-    (scope) => print('  published: ${scope.getOption<Part>()}'),
-  );
-
   print('dispose');
-  final stopped = await second.dispose();
+  final stopped = await scope.dispose();
   stopped.match(
     (cause) => print('  failed:\n${indent(cause.prettyPrint())}'),
-    (_) => print('  phase: ${second.phase.name}'),
+    (_) => print('  phase: ${scope.phase.name}'),
   );
 }
 

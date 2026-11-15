@@ -87,3 +87,10 @@ List<String> disposeFailuresOf(Cause<Object?> cause) => [
 /// A short pause that lets other futures run.
 Future<void> pause([int milliseconds = 5]) =>
     Future<void>.delayed(Duration(milliseconds: milliseconds));
+
+/// A child scope that must exist, or a test failure.
+extension ScopeTest on Scope {
+  /// The child scope of [components].
+  Scope kid({List<Component<Object?>> components = const []}) =>
+      rightOf(child(components: components));
+}

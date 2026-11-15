@@ -18,7 +18,8 @@ void main() {
       final result = rightOf(await task());
       expect(result, same(scope));
       expect(log, ['create a']);
-      expect(scope.phase, ScopePhase.active);
+      expect(scope.phase, ScopePhase.initialized);
+      expect(scope.isInitialized, isTrue);
     });
 
     test('a second run is a Left, never a cached Right', () async {
@@ -29,73 +30,87 @@ void main() {
         second,
         isA<ScopePhaseFailure>()
             .having((f) => f.operation, 'operation', 'run')
-            .having((f) => f.phase, 'phase', ScopePhase.active),
+            .having((f) => f.phase, 'phase', ScopePhase.initialized),
       );
       expect(second.message, contains('run'));
     });
 
-    test('a second run during the first run is a Left', () async {
-      final gate = Completer<void>();
+    test(
+      'a second run during the first run waits and then is a Left',
+      () async {
+        // from: core_test.dart: concurrent lifecycle mutations are serialized
+        final gate = Completer<void>();
+        final scope = Scope(
+          components: [
+            Component<int>(
+              dependency: Dependency<int>(
+                create: () async {
+                  await gate.future;
+                  return 1;
+                },
+              ),
+            ),
+          ],
+        );
+        final first = scope.run();
+        final second = scope.run();
+        await pause(1);
+        expect(scope.phase, ScopePhase.initializing);
+        gate.complete();
+        rightOf(await first);
+        expect(
+          leftOf(await second).only,
+          isA<ScopePhaseFailure>().having(
+            (f) => f.phase,
+            'phase',
+            ScopePhase.initialized,
+          ),
+        );
+      },
+    );
+
+    test('a run after a failed run starts again', () async {
+      // from: core_test.dart: a failed initialize binds nothing and a retry
+      // can succeed
+      var attempts = 0;
       final scope = Scope(
         components: [
           Component<int>(
             dependency: Dependency<int>(
-              create: () async {
-                await gate.future;
-                return 1;
-              },
+              create: () => ++attempts == 1 ? throw 'x' : attempts,
             ),
           ),
         ],
       );
-      final first = scope.run();
-      expect(scope.phase, ScopePhase.running);
-      expect(
-        leftOf(await scope.run()).only,
-        isA<ScopePhaseFailure>().having(
-          (f) => f.phase,
-          'phase',
-          ScopePhase.running,
-        ),
-      );
-      gate.complete();
-      rightOf(await first);
-    });
-
-    test('a second run after a failed run is a Left', () async {
-      final scope = Scope(
-        components: [
-          Component<int>(dependency: Dependency<int>(create: () => throw 'x')),
-        ],
-      );
       expect(await failureOfRun(scope), isA<ActivationFailure>());
-      expect(scope.phase, ScopePhase.failed);
-      expect(await failureOfRun(scope), isA<ScopePhaseFailure>());
+      expect(scope.phase, ScopePhase.declared);
+      expect(scope.nodes, isEmpty);
+      rightOf(await scope.run());
+      expect(scope.phase, ScopePhase.initialized);
+      expect(rightOf(scope.get<int>()), 2);
     });
 
-    test('get before run and after dispose is a Left', () async {
+    test('get answers before run, and is a Left after dispose', () async {
+      // from: core_test.dart: nodes is empty and get throws before initialize
       final scope = Scope(
         components: [Component<int>.value(key: intKey, value: 1)],
       );
-      expect(
-        leftOf(scope.get<int>(key: intKey)),
-        isA<ScopePhaseFailure>()
-            .having((f) => f.operation, 'operation', 'get')
-            .having((f) => f.phase, 'phase', ScopePhase.declared),
-      );
+      expect(leftOf(scope.get<int>(key: intKey)), isA<UnavailableKeyFailure>());
       expect(scope.getOption<int>(key: intKey), isA<None>());
+      expect(scope.nodes, isEmpty);
       rightOf(await scope.run());
       expect(rightOf(scope.get<int>(key: intKey)), 1);
       expect(scope.getOption<int>(key: intKey), const Some(1));
       rightOf(await scope.dispose());
       expect(
         leftOf(scope.get<int>(key: intKey)),
-        isA<ScopePhaseFailure>().having(
-          (f) => f.phase,
-          'phase',
-          ScopePhase.disposed,
+        isA<DisposedScopeFailure>().having(
+          (f) => f.operation,
+          'operation',
+          'get',
         ),
       );
+      expect(scope.getOption<int>(key: intKey), isA<None>());
     });
 
     test('get of an unpublished key is an UnavailableKeyFailure', () async {
@@ -181,7 +196,9 @@ void main() {
       expect(rightOf(scope.get<String>()), 'b');
     });
 
-    test('a layer settles before the next layer starts', () async {
+    test('a node starts when its own publishers committed', () async {
+      // Each node commits on its own: `b` does not wait for the slow
+      // independent node.
       final log = <String>[];
       final scope = Scope(
         components: [
@@ -199,7 +216,7 @@ void main() {
             key: textKey,
             dependency: Dependency<String>(
               create: () async {
-                await pause(30);
+                await pause(60);
                 log.add('slow');
                 return 's';
               },
@@ -215,7 +232,7 @@ void main() {
         ],
       );
       rightOf(await scope.run());
-      expect(log, ['a', 'slow', 'b']);
+      expect(log, ['a', 'b', 'slow']);
     });
 
     test(
@@ -269,6 +286,8 @@ void main() {
     test(
       'a failed member rolls back committed members in reverse order',
       () async {
+        // from: core_test.dart: activation failure rolls back all completed
+        // effects
         final log = <String>[];
         final scope = Scope(
           components: [
@@ -302,19 +321,18 @@ void main() {
           'dispose b',
           'dispose a',
         ]);
-        expect(scope.phase, ScopePhase.failed);
+        expect(scope.phase, ScopePhase.declared);
       },
     );
 
     test(
-      'a failure rolls back the members of other layers and the same layer',
+      'a failure rolls back every committed member, dependents first',
       () async {
         final log = <String>[];
         final scope = Scope(
           components: [
             logged<int>('a', 1, log, key: intKey, failDispose: 'a rollback'),
             logged<String>('x', 'x', log, key: textKey),
-            // Layer 1: d commits, c fails.
             loggedReading<bool>(
               'd',
               Dependency.require<int>(key: intKey),
@@ -333,70 +351,75 @@ void main() {
         );
         final cause = await causeOfRun(scope);
         expect((cause.only as ActivationFailure).owner, 'c');
-        // Layer 1 disposes before layer 0.
+        // The rollback releases the members in reverse order of declaration,
+        // and a reader before its publisher.
         expect(log.indexOf('dispose d'), lessThan(log.indexOf('dispose a')));
+        expect(log.indexOf('dispose x'), lessThan(log.indexOf('dispose a')));
         expect(log.indexOf('dispose d'), lessThan(log.indexOf('dispose x')));
         expect(disposeFailuresOf(cause), ['d: d rollback', 'a: a rollback']);
-        // The failure comes first, then the rollback of each stratum.
+        // The failure comes first, then the rollback of each member.
         expect(
           cause.fold<String>(
             empty: () => '_',
             fail: (_, _) => 'F',
             die: (_, _) => 'D',
+            interrupt: (_) => 'I',
             then: (first, second) => '($first $second)',
             both: (left, right) => '[$left $right]',
           ),
           '(F (D D))',
         );
+        expect(scope.phase, ScopePhase.declared);
       },
     );
 
-    test('a layer with two failing members reports both failures', () async {
-      final scope = Scope(
-        components: [
-          Component<int>(
-            key: intKey,
-            debugLabel: 'slow',
-            dependency: Dependency<int>(
-              create: () async {
-                await pause(30);
-                throw 'slow failed';
-              },
-              dispose: (_) {},
+    test(
+      'the failure of the lowest id wins, and no new member starts',
+      () async {
+        final scope = Scope(
+          components: [
+            Component<int>(
+              key: intKey,
+              debugLabel: 'slow',
+              dependency: Dependency<int>(
+                create: () async {
+                  await pause(30);
+                  throw 'slow failed';
+                },
+                dispose: (_) {},
+              ),
             ),
-          ),
-          Component<String>(
-            key: textKey,
-            debugLabel: 'quick',
-            dependency: Dependency<String>(
-              create: () => 'x',
-              dispose: (_) {},
-            ).map<String>((_) => throw 'quick failed'),
-          ),
-          // A later layer: never starts.
-          Component<bool>(
-            key: flagKey,
-            dependency: Dependency.require<int>(key: intKey).map<bool>((_) {
-              fail('The next layer must not start.');
-            }),
-          ),
-        ],
-      );
-      final cause = await causeOfRun(scope);
-      expect(cause, isA<Both<DiFailure>>());
-      // Declaration order, not completion order.
-      expect(
-        [for (final f in cause.failures) (f as ActivationFailure).owner],
-        ['slow', 'quick'],
-      );
-      expect(
-        [for (final f in cause.failures) (f as ActivationFailure).error],
-        ['slow failed', 'quick failed'],
-      );
-      expect(cause.defects, isEmpty);
-    });
+            Component<String>(
+              key: textKey,
+              debugLabel: 'quick',
+              dependency: Dependency<String>(
+                create: () => 'x',
+                dispose: (_) {},
+              ).map<String>((_) => throw 'quick failed'),
+            ),
+            // It reads a member that fails: it never starts.
+            Component<bool>(
+              key: flagKey,
+              dependency: Dependency.require<int>(key: intKey).map<bool>((_) {
+                fail('The next member must not start.');
+              }),
+            ),
+          ],
+        );
+        final cause = await causeOfRun(scope);
+        // The member in flight settles, so both failed, and the first by id
+        // is the failure of the call.
+        expect(
+          [for (final f in cause.failures) (f as ActivationFailure).owner],
+          ['slow'],
+        );
+        expect(cause.defects, isEmpty);
+      },
+    );
 
     test('rollback failures of other failed members are kept', () async {
+      // from: review_regression_test.dart: 4. the rollback failures of every
+      // failed member are kept
       Component<int> failing(String name, DiKey<int> key) => Component<int>(
         key: key,
         debugLabel: name,
@@ -412,19 +435,16 @@ void main() {
         ],
       );
       final cause = await causeOfRun(scope);
+      // The failure of the first member by id, with its own rollback, and the
+      // rollback failures of the other member.
       expect(
         [for (final f in cause.failures) (f as ActivationFailure).owner],
-        ['one', 'two'],
+        ['one'],
       );
       expect(
         [for (final d in cause.defects) (d as DisposeFailure).owner],
         ['one', 'two'],
       );
-      // Each member keeps its own failure and rollback: Both(Then, Then).
-      expect(cause, isA<Both<DiFailure>>());
-      final both = cause as Both<DiFailure>;
-      expect(both.left, isA<Then<DiFailure>>());
-      expect(both.right, isA<Then<DiFailure>>());
     });
 
     test('nothing is published after a failed run', () async {
@@ -439,18 +459,10 @@ void main() {
           ),
         ],
       );
-      final run = scope.run();
-      expect(leftOf(scope.get<int>(key: intKey)), isA<ScopePhaseFailure>());
-      await run;
-      expect(
-        leftOf(scope.get<int>(key: intKey)),
-        isA<ScopePhaseFailure>().having(
-          (f) => f.phase,
-          'phase',
-          ScopePhase.failed,
-        ),
-      );
+      await scope.run();
+      expect(leftOf(scope.get<int>(key: intKey)), isA<UnavailableKeyFailure>());
       expect(scope.getOption<int>(key: intKey), isA<None>());
+      expect(scope.phase, ScopePhase.declared);
       rightOf(await scope.dispose());
     });
   });
@@ -499,10 +511,10 @@ void main() {
             .having((f) => f.owner, 'owner', 'b'),
       );
       expect(log, isEmpty);
-      expect(scope.phase, ScopePhase.failed);
+      expect(scope.phase, ScopePhase.declared);
     });
 
-    test('a cycle is a Left with its path and creates nothing', () async {
+    test('a cycle leaves its members waiting', () async {
       final log = <String>[];
       final scope = Scope(
         components: [
@@ -523,40 +535,60 @@ void main() {
           ),
         ],
       );
-      final failure = await failureOfRun(scope);
-      expect(
-        failure,
-        isA<DependencyCycleFailure>().having((f) => f.path, 'path', [
-          intKey,
-          textKey,
-          intKey,
-        ]),
-      );
-      expect(failure.message, contains('->'));
-      expect(log, isEmpty);
+      rightOf(await scope.run());
+      // Nothing creates a value of a member that waits for the other one.
+      expect(log, ['create free']);
+      final [free, a, b] = scope.nodes;
+      expect(free.isActive, isTrue);
+      expect(a.state.phase, NodePhase.waiting);
+      expect(a.missing, [textKey]);
+      expect(b.state.phase, NodePhase.waiting);
+      expect(b.missing, [intKey]);
     });
 
-    test('a cycle through an optional read is a Left', () async {
+    test('optional feedback among the members fails the run', () async {
+      // from: regression_test.dart: optional feedback among the members fails
+      // initialize
+      var runs = 0;
       final scope = Scope(
         components: [
           Component<int>(
             key: intKey,
+            debugLabel: 'x',
             dependency: Dependency.option<String>(
               key: textKey,
-            ).map<int>((_) => 1),
+            ).map<int>((_) => ++runs),
           ),
           Component<String>(
             key: textKey,
+            debugLabel: 'y',
             dependency: Dependency.require<int>(
               key: intKey,
-            ).map<String>((_) => 'x'),
+            ).map<String>((_) => 'y'),
           ),
         ],
       );
-      expect(await failureOfRun(scope), isA<DependencyCycleFailure>());
+      final errors = <Cause<DiFailure>>[];
+      final subscription = scope.errors.listen(errors.add);
+      final failure = await failureOfRun(scope);
+      expect(
+        failure,
+        isA<UnsettledFailure>().having((f) => f.passes, 'passes', 3).having(
+          (f) => f.labels,
+          'labels',
+          ['x'],
+        ),
+      );
+      // Two nodes allow three passes, so x runs a bounded number of times.
+      expect(runs, lessThanOrEqualTo(4));
+      expect(scope.phase, ScopePhase.declared, reason: 'the call rolls back');
+      expect(scope.getOption<int>(key: intKey), isA<None>());
+      await pause(1);
+      expect(errors, isEmpty, reason: 'the caller receives the failure');
+      await subscription.cancel();
     });
 
-    test('a component that reads its own key is a cycle', () async {
+    test('a component that requires its own key is undeclared', () async {
       final scope = Scope(
         components: [
           Component<int>(
@@ -567,10 +599,7 @@ void main() {
       );
       expect(
         await failureOfRun(scope),
-        isA<DependencyCycleFailure>().having((f) => f.path, 'path', [
-          intKey,
-          intKey,
-        ]),
+        isA<UndeclaredKeyFailure>().having((f) => f.key, 'key', intKey),
       );
     });
 
@@ -609,36 +638,16 @@ void main() {
           empty: () => false,
           fail: (_, _) => true,
           die: (_, _) => false,
+          interrupt: (_) => false,
           then: (_, _) => false,
           both: (left, right) => left && right,
         ),
         isTrue,
       );
       expect(log, isEmpty);
-      expect(scope.phase, ScopePhase.failed);
-    });
-
-    test('the cycle check runs only when the other checks pass', () async {
-      Component<int> cyclic() => Component<int>(
-        key: intKey,
-        dependency: Dependency.require<int>(key: intKey).map<int>((v) => v),
-      );
-      final undeclared = Component<String>(
-        key: textKey,
-        dependency: Dependency.require<bool>(
-          key: flagKey,
-        ).map<String>((_) => 'x'),
-      );
-      final both = await causeOfRun(
-        Scope(components: [cyclic(), undeclared, undeclared]),
-      );
-      expect(both.failures.map((f) => f.runtimeType), [
-        DuplicateKeyFailure,
-        UndeclaredKeyFailure,
-        UndeclaredKeyFailure,
-      ]);
-      final only = await causeOfRun(Scope(components: [cyclic(), undeclared]));
-      expect(only.only, isA<UndeclaredKeyFailure>());
+      expect(scope.phase, ScopePhase.declared);
+      expect(scope.nodes, isEmpty);
+      expect(scope.state.nodeStates, isEmpty);
     });
   });
 }

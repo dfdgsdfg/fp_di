@@ -13,7 +13,8 @@
 // Differences from the fp_di version:
 //
 // - The example does not rebuild the factory when a nearer publisher appears.
-//   The graph is static, so each scope runs once, after its parent.
+//   `reactive.dart` shows that rule. Here each feature scope runs after the
+//   scopes that publish its database.
 // - `Dependency.require<Database>().map(...)` replaces `Dependency1`, and a
 //   record `zip` replaces `Dependency2`.
 //
@@ -113,12 +114,18 @@ void inspect(String label, Scope scope) {
   });
 }
 
+/// A child scope of [parent]. `child` is a `Left` only for a scope that is
+/// disposing or disposed, so the example reads it as a bug.
+Scope childOf(Scope parent, List<Component<Object?>> components) => parent
+    .child(components: components)
+    .getOrElse((failure) => throw StateError('$failure'));
+
 Future<void> main() async {
   final app = Scope(components: [database('main')]);
   // A nearer scope that publishes another database.
-  final replica = app.child(components: [database('replica')]);
-  final onReplica = replica.child(components: featureComponents);
-  final onMain = app.child(components: featureComponents);
+  final replica = childOf(app, [database('replica')]);
+  final onReplica = childOf(replica, featureComponents);
+  final onMain = childOf(app, featureComponents);
 
   print('run');
   if (await start('app', app) &&

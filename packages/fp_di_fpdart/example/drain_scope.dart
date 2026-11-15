@@ -156,8 +156,8 @@ final class Login {
 
 /// Runs the database scope, and then the session scope inside it.
 Future<Option<Login>> login(Scope app, String userId) async {
-  final db = app.child(components: sessionDbComponents(userId));
-  final session = db.child(components: sessionComponents);
+  final db = childOf(app, sessionDbComponents(userId));
+  final session = childOf(db, sessionComponents);
   final started = await TaskEither<Cause<DiFailure>, Scope>(
     db.run,
   ).flatMap((_) => TaskEither<Cause<DiFailure>, Scope>(session.run)).run();
@@ -189,6 +189,12 @@ void draft(Login login, String text) {
     composer.draft = text;
   }
 }
+
+/// A child scope of [parent]. `child` is a `Left` only for a scope that is
+/// disposing or disposed, so the example reads it as a bug.
+Scope childOf(Scope parent, List<Component<Object?>> components) => parent
+    .child(components: components)
+    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   final app = Scope(components: appComponents);

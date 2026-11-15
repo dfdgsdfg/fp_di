@@ -13,6 +13,8 @@ void main() {
     fail(1),
     die('d'),
     Then<int>(fail(1), die('d')),
+    Interrupt<int>(trace),
+    Then<int>(Interrupt<int>(trace), fail(1)),
     Both<int>(fail(1), Then<int>(fail(2), die('e'))),
   ];
 
@@ -33,7 +35,9 @@ void main() {
       expect((fail(1) & fail(2)), Both<int>(fail(1), fail(2)));
     });
 
-    test('isEmpty means no Fail and no Die anywhere', () {
+    test('isEmpty means no Fail, no Die, and no Interrupt anywhere', () {
+      expect(Interrupt<int>(trace).isEmpty, isFalse);
+      expect(Then<int>(empty, Interrupt<int>(trace)).isEmpty, isFalse);
       expect(empty.isEmpty, isTrue);
       expect(const Then<int>(Empty(), Empty()).isEmpty, isTrue);
       expect(
@@ -72,6 +76,15 @@ void main() {
       expect(mapped, isA<Both<String>>());
     });
 
+    test('map keeps an interruption', () {
+      final mapped = Then<int>(
+        Interrupt<int>(trace),
+        fail(1),
+      ).map((e) => 'e$e');
+      expect(mapped.isInterrupted, isTrue);
+      expect(mapped.failures, ['e1']);
+    });
+
     test('map keeps the stack trace', () {
       final mapped = fail(1).map((e) => e + 1) as Fail<int>;
       expect(mapped.stackTrace, same(trace));
@@ -100,13 +113,53 @@ void main() {
         empty: () => '_',
         fail: (error, _) => 'F$error',
         die: (defect, _) => 'D$defect',
+        interrupt: (_) => 'I',
         then: (first, second) => '($first>$second)',
         both: (left, right) => '[$left|$right]',
       );
       expect(shape, '[(F1>Da)|(F2>[Db|F3])]');
     });
 
+    test('fold visits an interruption', () {
+      final shape = Then<int>(fail(1), Interrupt<int>(trace)).fold<String>(
+        empty: () => '_',
+        fail: (error, _) => 'F$error',
+        die: (defect, _) => 'D$defect',
+        interrupt: (_) => 'I',
+        then: (first, second) => '($first>$second)',
+        both: (left, right) => '[$left|$right]',
+      );
+      expect(shape, '(F1>I)');
+    });
+
+    test('interruptions and isInterrupted read the interruptions', () {
+      final other = StackTrace.fromString('other');
+      final both = Both<int>(
+        Interrupt<int>(trace),
+        Then<int>(fail(1), Interrupt<int>(other)),
+      );
+      expect(both.interruptions, [trace, other]);
+      expect(both.isInterrupted, isTrue);
+      expect(both.failures, [1]);
+      expect(cause.isInterrupted, isFalse);
+      expect(cause.interruptions, isEmpty);
+      expect(empty.isInterrupted, isFalse);
+    });
+
+    test('onlyDefects keeps the defects in their structure', () {
+      final mixed = Then<int>(
+        Both<int>(fail(1), die('a')),
+        Then<int>(Interrupt<int>(trace), die('b')),
+      );
+      expect(mixed.onlyDefects.defects, ['a', 'b']);
+      expect(mixed.onlyDefects.failures, isEmpty);
+      expect(mixed.onlyDefects.isInterrupted, isFalse);
+      expect(fail(1).onlyDefects, empty);
+      expect(Interrupt<int>(trace).onlyDefects, empty);
+    });
+
     test('prettyPrint is an indented tree', () {
+      expect(Interrupt<int>(trace).prettyPrint(), 'Interrupt');
       expect(
         Then<int>(fail(1), Both<int>(die('b'), empty)).prettyPrint(),
         'Then\n'
@@ -134,11 +187,15 @@ void main() {
         Both<int>(Fail<int>(1, other), Die<int>('d', other)).hashCode,
       );
       expect(const Empty<int>(), const Empty<String>());
+      expect(Interrupt<int>(trace), Interrupt<String>(other));
+      expect(Interrupt<int>(trace).hashCode, Interrupt<int>(other).hashCode);
     });
 
     test('different cases and values differ', () {
       expect(fail(1), isNot(fail(2)));
       expect(fail(1), isNot(die(1)));
+      expect(Interrupt<int>(trace), isNot(fail(1)));
+      expect(Interrupt<int>(trace), isNot(const Empty<int>()));
       expect(fail(1) + fail(2), isNot(fail(1) & fail(2)));
       expect(fail(1) + fail(2), isNot(fail(2) + fail(1)));
       expect(const Empty<int>(), isNot(fail(1)));
@@ -198,6 +255,8 @@ void main() {
         Fail<int>(1, other),
         Die<int>('d', other),
         Then<int>(Fail<int>(1, other), Die<int>('d', other)),
+        Interrupt<int>(other),
+        Then<int>(Interrupt<int>(other), Fail<int>(1, other)),
         Both<int>(
           Fail<int>(1, other),
           Then<int>(Fail<int>(2, other), Die<int>('e', other)),

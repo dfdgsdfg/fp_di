@@ -9,27 +9,38 @@ A lifecycle-aware dependency-injection runtime built on
 `fp_di`. It keeps the names of `fp_di` where they fit, and it follows the
 conventions of fpdart.
 
-The scope is small and fixed: one static graph that runs once.
+The runtime is reactive and has the lifecycle of `fp_di`: one static graph of
+keys, and nodes that activate, release, and activate again when a publisher
+changes.
 
 - A `Component` publishes a value under a `DiKey`. A `Scope` takes a plain list
   of components.
 - A `Dependency` states the keys that the value reads. The reads are static,
   so the runtime knows the graph before it creates a value. A dependency is an
   applicative, and it is not a monad.
-- A `Scope` runs the components once, creates the values in layers, and disposes
-  them in reverse order.
-- No operation throws. Each failure is a `Left` with a `Cause`.
+- `Scope.run` creates one node for each component. A node activates when each
+  required key resolves, and it waits when a key has no publisher yet. A
+  nearer publisher, a withdrawn publisher, or a node that you dispose makes
+  the readers release their values and create them again.
+- A `Scope` disposes the nodes in reverse order of their reads: a reader
+  before the publisher that it reads.
+- A scope is a tree. A child scope reads the keys of its ancestors, and it can
+  run before its parent.
+- No operation throws. Each failure is a `Left` with a `Cause`, or a value of
+  `DiFailure` in an `Either`.
 
 The design follows [ZIO](https://zio.dev) and the typeclasses of fpdart 1.2.
 
 | ZIO | This package |
 |---|---|
-| `Cause`, `Exit` | `Cause<E>` with `Empty`, `Fail`, `Die`, `Then`, `Both`; `Exit<E, A>` is `Either<Cause<E>, A>` |
+| `Cause`, `Exit` | `Cause<E>` with `Empty`, `Fail`, `Die`, `Interrupt`, `Then`, `Both`; `Exit<E, A>` is `Either<Cause<E>, A>` |
 | `ZLayer` | `Component<A>`: a layer with one output key and the inputs that its `Dependency` reads |
 | `ZLayer.make` arguments | the list of components that you give to `Scope` |
 | `R` and `ZIO.service` reads | `Dependency<A>`: `Functor` and `Applicative`, no `flatMap` |
 | `Scope` with finalizers | `Scope`: it holds an immutable stack of dispose functions |
-| `ZEnvironment` | an internal immutable environment, stacked with a monoid |
+| `ZEnvironment` | an internal immutable environment, stacked with a monoid; a node reads the values of the publishers that its scope resolves |
+| `Fiber.interrupt` | `Interrupt`: a canceled activation is never a `Fail` |
+| `Ref` | `IORef`: the runtime keeps its state in one cell for each root |
 | `ZIO.scoped` | `Scope.use` |
 | `ZIO.attempt` | a throw in a create step is a typed `ActivationFailure` |
 | a finalizer that throws | a defect: `Die` with a `DisposeFailure` |
@@ -40,9 +51,21 @@ track `R` in a type. The package states the reads as a set of keys instead.
 The package has no layer composition operators, such as `>>>` or `++`. The
 scope derives the wiring from the graph of the keys.
 
-The package has no reactive features: no dormant member, no second
-activation, no node-level dispose, no listener, no hold, no lazy value, no
-collection key, no cancellation token, and no inspector.
+The package has no hold, no lazy value, no collection key, no public
+cancellation token, no `describe`, and no inspector yet.
+
+## Structure
+
+The runtime has a pure core and an effectful shell.
+
+- The core (`lib/src/core/`) is one immutable `RuntimeState` value for each
+  root. Every rule is a pure query or a pure transition on that value. The
+  core has no `Future`, no `IORef`, and no zone.
+- The shell (`lib/src/runtime/`) holds the `IORef` cells of one root: the
+  state, the queue of mutations, the listeners, the reports of `errors`, the
+  running activations, the callers of `whenActive`, and the disposals. Each
+  program of the shell is a `Task`: it reads the state, runs the steps of a
+  component, and applies the transitions of the core.
 
 ## A scope
 
@@ -73,7 +96,8 @@ and a `Right` is an error of the program.
 
 `use` never throws. A throw of the program is a `Die`, and the scope is
 disposed. A scope that is not in the phase `declared` stays under the control
-of its owner: `use` returns a `ScopePhaseFailure` and does not dispose it.
+of its owner: `use` returns a `ScopePhaseFailure` or a `DisposedScopeFailure`
+and does not dispose it.
 
 Without the bracket, call `run()` and `dispose()` yourself:
 
@@ -84,8 +108,10 @@ final value = scope.get<Checkout>(); // Either<DiFailure, Checkout>
 final stopped = await scope.dispose(); // Exit<DiFailure, Unit>
 ```
 
-A scope runs once. A second `run()` is a `Left` with a `ScopePhaseFailure`.
-`get` is a `Left` until `run` succeeds and after `dispose` starts.
+A scope that succeeded does not run again: a second `run()` is a `Left` with a
+`ScopePhaseFailure`. A failed `run` rolls back, and the scope is `declared`
+again, so a second `run()` retries. `get` answers in every phase except
+`disposing` and `disposed`. It is a `Left` while no publisher resolves.
 
 ## Cause and Exit
 
@@ -97,11 +123,13 @@ of the failures.
 | `Empty()` | no failure; the identity of `+` and `&` |
 | `Fail(error, stackTrace)` | a typed failure |
 | `Die(defect, stackTrace)` | a defect, such as a dispose function that threw |
+| `Interrupt(stackTrace)` | an operation that a caller canceled, such as an activation that a disposal canceled |
 | `Then(first, second)` | one failure after another; made by `+` |
 | `Both(left, right)` | two failures at the same time; made by `&` |
 
 A cause has `map` (a `Functor`), `fold`, `failures`, `defects`,
-`failureOption`, `isEmpty`, and `prettyPrint()`. `Cause.thenMonoid<E>()` and
+`interruptions`, `isInterrupted`, `onlyDefects`, `failureOption`, `isEmpty`,
+and `prettyPrint()`. `Cause.thenMonoid<E>()` and
 `Cause.bothMonoid<E>()` are fpdart `Monoid` instances. The `==` of a case
 compares the structure and ignores the stack traces. `Then` and `Both` are
 associative for `failures` and `defects`, but not for `==`.
@@ -118,36 +146,87 @@ exit.match((cause) => print(cause.prettyPrint()), (scope) {});
 
 ## Lifecycle
 
-| Phase | Meaning |
+| Phase of a scope | Meaning |
 |---|---|
-| `declared` | the scope exists; `run` has not started |
-| `running` | `run` creates the components |
-| `active` | `run` succeeded; `get` works |
-| `failed` | `run` failed; nothing is published |
-| `disposing`, `disposed` | `dispose` is releasing, or has finished |
+| `declared` | the scope exists, or a `run` failed and rolled back |
+| `initializing` | `run` creates and activates the nodes |
+| `initialized` | `run` succeeded |
+| `disposeRequested` | the scope or an ancestor accepted `dispose`, which waits for the earlier operations |
+| `disposing` | `dispose` releases the nodes; lookups are a `Left` |
+| `disposed` | `dispose` finished; the parent does not hold the scope |
+
+| Phase of a node | Meaning |
+|---|---|
+| `active` | the node has a value and publishes its key |
+| `activating` | an activation runs, or a failed activation of a `run` waits for the rollback |
+| `deactivating` | the release runs: the key is withdrawn, the readers release first |
+| `waiting` | a required key has no publisher; `missing` lists the keys |
+| `inactive` | no narrower phase applies |
+| `activationFailed` | the last automatic activation failed; `activationFailure` has the cause |
+| `disposeFailed` | an own dispose function failed in a release that is not final; the node never activates again |
+| `disposed` | the runtime removed the node |
 
 `run` checks the components before it creates anything. The check accumulates:
 the cause holds every duplicate key and then every undeclared key, each in
-declaration order, joined with `Both`. The check for a cycle runs only when
-those checks pass. A wrong phase or an inactive parent is a single failure.
+declaration order, joined with `Both`. A key counts as declared when another
+component of the scope or any ancestor declares it. The ancestor can be
+`declared` still. A failed check changes nothing.
 
-Then `run` creates the components in layers. A component is in the layer
-after the layers of the components that it reads. The components of one layer
-start together, and all of them settle. The next layer starts when every
-component of the layer has succeeded.
+Then `run` creates one node for each component. A node starts when the nodes
+of the same scope that publish its keys have settled. Independent nodes start
+together, and each node commits on its own: its keys resolve at its commit. A
+node with an unmet required key waits and is not a failure.
 
-If components fail, the failures of the layer join with `Both`. Then `run`
-disposes every committed value: the layers in reverse order, one after the
-other (`Then`), and the members of one layer at the same time (`Both`). The
-cause of the run is the failures followed by the dispose defects. `run`
-publishes the values only when every component has committed.
+When a node fails, no further node starts, and the nodes in flight settle. Then
+`run` releases the nodes of the scope in reverse order, one after the other,
+the scope is `declared` again, and the cause is the failure of the node with
+the lowest id, followed by the dispose defects. A failure of a node that the
+`run` woke in its last reconciliation fails the `run` in the same way. A
+failure of a node of another scope goes to `errors`.
 
-`dispose` releases the child scopes first, the most recent child first. Then
-it releases the components in reverse layer order, so a dependent is released
-before its publishers. Every dispose function runs. The result is `Right`, or
-a `Left` with a cause that holds only `Die` values of `DisposeFailure`.
-`dispose` is idempotent, and `dispose` during a run waits for the run to
-settle.
+After `run`, the runtime reconciles. An active node whose resolved publisher
+changed releases (dependents first), and each node that is not active and whose
+required keys resolve activates. A nearer scope that runs later, a withdrawn
+publisher, and a node that you dispose change the publishers. The
+reconciliation repeats while an active node is stale, and gives an
+`UnsettledFailure` when optional reads feed back and never settle.
+
+`ComponentNode.dispose()` removes one node. The nodes that read it release
+first. An activation in flight that reads one of those values is canceled: it
+rolls back, waits for the withdrawal to end, and activates again against another
+publisher if one resolves.
+
+`dispose` is a lifecycle operation. The call accepts the disposal at once and
+cancels the activations in flight in the subtree: they end with an `Interrupt`.
+The mutation then releases the nodes along their reads. Nodes that do not
+read each other release at the same time, and the dispose failures follow
+descending node id. Every dispose function runs. The result is `Right`, or a
+`Left` with a cause that holds only `Die` values of `DisposeFailure`. A second
+call joins the first, a call of a descendant joins the disposal of an ancestor,
+and a call after the end is `Right`. `dispose` does not reconcile.
+
+`run`, `dispose`, and `ComponentNode.dispose` of one root run one after the
+other, in the order of the calls. A call from inside one of them, such as a
+dispose function that calls `run`, is a `ReentrantMutationFailure`. A callback
+that outlives the operation can start one.
+
+## Observation
+
+- `scope.state` is a `ScopeState`: the phase, the `NodeState` of each node
+  (`id`, `label`, `key`, `phase`, `missing`, `activationFailure`, `commits`),
+  and the states of the children. `scope.revision` counts the observable
+  changes of the whole tree. A read changes nothing.
+- `addListener` calls a function after each change, with the new state
+  already in place. Listeners run in rounds, one round after the other. A
+  listener that throws leaves, and `errors` reports a `ListenerFailure` after
+  the round. A scope hears its own disposal, and then its listeners leave.
+- `errors` is a broadcast `Stream<Cause<DiFailure>>` for the failures that no
+  caller receives: a failed automatic activation, the dispose failures of a
+  reconciliation, an `UnsettledFailure`, and a `ListenerFailure`. The root
+  closes the stream.
+- `ComponentNode.whenActive` is a `TaskEither` that completes at the next
+  commit. `Scope.getWhenAvailable` waits for a key of the scope or an
+  ancestor, and fails when no scope can publish it any more.
 
 ## Dependency
 
@@ -210,8 +289,11 @@ The types of the package have the fpdart typeclass instances that fit them.
 The effects of the interpreters are fpdart values. A step is a
 `ReaderTaskEither` that uses `TaskEither.tryCatch`, `flatMap`, and
 `chainEither`. The registration of a finalizer is an `IO` that the step
-composes. Only the edge of the package runs an effect: `Scope.run`,
-`Scope.dispose`, and the program that `Scope.use` receives.
+composes. A program of the shell is a `Task` that runs when a lifecycle call
+starts it: `Scope.run`, `Scope.dispose`, `ComponentNode.dispose`, and the
+program that `Scope.use` receives. The shell uses `async` loops and `Future`
+values for the pumps and the queue of mutations, and its mutable cells are
+`IORef` values, `Completer` values, and one stream controller.
 
 ## Components
 
@@ -258,12 +340,16 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 |---|---|
 | `DuplicateKeyFailure` | two components of a list publish one key |
 | `UndeclaredKeyFailure` | a required key has no publisher in the scope or an ancestor |
-| `DependencyCycleFailure` | components read each other in a cycle; `path` lists the keys |
+| `DependencyCycleFailure` | a read inside an activation would close a cycle of committed reads; `path` lists the keys. Components that require each other wait, and the check of a scope raises no cycle |
 | `ActivationFailure` | a create step threw or returned a `Left`; `error` is the error or the `Left` value |
 | `UnmatchedOverrideFailure` | an override has no single component to replace |
-| `UnavailableKeyFailure` | `get` of a key that the scope and its ancestors do not publish |
-| `ScopePhaseFailure` | an operation in a phase where it is not valid |
-| `InactiveAncestorFailure` | `run` of a child whose parent is not active |
+| `UnavailableKeyFailure` | `get` of a key that no scope of the chain resolves, or a read inside an activation of a key without publisher |
+| `ScopePhaseFailure` | an operation in a phase where it is not valid, such as `run` of an initialized scope |
+| `DisposedScopeFailure` | an operation of a scope that is disposing or disposed |
+| `ReentrantMutationFailure` | a lifecycle operation that started inside a lifecycle operation |
+| `InactiveNodeFailure` | `value` of a node that is not active, and `whenActive` of a removed node |
+| `ListenerFailure` | a listener threw |
+| `UnsettledFailure` | the reconciliation did not settle |
 
 A `DisposeFailure(owner, error)` is not a `DiFailure`. A dispose function that
 threw is a defect, so a `Die` holds the `DisposeFailure`.
@@ -274,34 +360,37 @@ The package exports no layer type and no composition operator. A `Component`
 is the unit of composition, and the graph of the keys is the only wiring
 surface. Inside, the pieces are pure values.
 
-- `Plan` is a pure function of the components and of the keys that the
-  ancestors publish. It gives the validation cause, or the strata.
-- A `Component` is also a function from an environment to a `TaskEither` of
-  the made value and its finalizers, like a `ZLayer`. The function is
-  internal.
-- The internal name of a group of components that start together is a
-  stratum. The public documents call the group a layer. A stratum is the
-  parallel combination of its components: they read the same environment,
-  start together, and all settle.
-- The plan is a fold over the strata that adds the outputs of each stratum to
-  the environment, like the `>+>` of ZIO. A failed fold releases the
-  committed values once, in reverse order.
-- A scope holds one immutable state in one fpdart `IORef`. The state is one of
-  declared, running, active, failed, disposing, and disposed.
+- `RuntimeState` holds `ScopeRecord` and `NodeRecord` values. The queries
+  (`resolve`, `target`, `satisfied`, `nodePhase`, `scopePhase`, `dormantCandidates`,
+  `dependentsOf`, `withdrawalReach`, `preCheck`) and the transitions
+  (`createNodes`, `beginActivation`, `commit`, `beginRelease`, `endRelease`,
+  `requestScopeDisposal`, and the others) are functions of that value. A
+  transition raises `revision` exactly when an observer can see the change.
+- A node resolves a key to the nearest scope, from its own scope to the root,
+  that has a committed publisher that is not releasing. A node never resolves
+  its own publication. The runtime compares the identity of each commit, so a
+  node that commits again is a new publisher for its readers.
+- The program of a component runs as a `ReaderTaskEither` over a context that
+  reads the state when a step runs. The context records each read, checks the
+  cancellation token before each step, and holds the finalizers.
+- A `Component` has no layer. The runtime has no stratum: the order of
+  activation comes from the reads of the nodes of one scope.
 
 ## Child scopes
 
-`scope.child(components:)` creates a child that reads the keys of its parent and
-of the ancestors of the parent. The child reads each key from the nearest
-scope that publishes it, so a key of the child shadows the key of the parent.
-The parent must be active when the child runs. The parent disposes the child
-before it disposes its own components.
+`scope.child(components:)` gives an `Either`: a `Left` when the scope is
+disposing or disposed. The child reads the keys of its parent and of the
+ancestors of the parent. The child reads each key from the nearest scope that
+publishes it, so a key of the child shadows the key of the parent. A child can
+run before its parent, and its nodes wait for the keys that the parent
+declares. The parent disposes the child before it releases the nodes that the
+child reads.
 
 ## Examples
 
 Each file in `example/` runs with `dart run`. Most files port an example of
-`fp_di`. The package has no hold, listener, or collection key, so five
-examples of `fp_di` have no port.
+`fp_di`. The package has no hold, lazy value, collection key, or public
+cancellation token yet, so four examples of `fp_di` have no port.
 
 ```sh
 dart run packages/fp_di_fpdart/example/checkout.dart
@@ -316,13 +405,14 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 | [`chaining.dart`](example/chaining.dart) | Several owned steps in one component, and a `zip` with an optional read |
 | [`parallel.dart`](example/parallel.dart) | Independent components start and release at the same time |
 | [`token_key.dart`](example/token_key.dart) | A token key orders one component after the effect of another |
-| [`rollback.dart`](example/rollback.dart) | A failed run rolls back in reverse, and the retry is a new scope; a failed program inside `use` disposes the scope |
+| [`rollback.dart`](example/rollback.dart) | A failed run rolls back in reverse, and the retry is a second `run`; a failed program inside `use` disposes the scope |
+| [`reactive.dart`](example/reactive.dart) | A nearer publisher and a withdrawn publisher reach only the readers; a listener traces the nodes |
 | [`session_scope.dart`](example/session_scope.dart) | A login child scope, and a logout that disposes it |
 | [`drain_scope.dart`](example/drain_scope.dart) | A logout flushes the database after the readers of the database release |
 | [`environments.dart`](example/environments.dart) | Platform, flavor, test fakes, and a two-stage boot with plain lists |
 | [`factory.dart`](example/factory.dart) | A new value for each call, from the nearest database |
 | [`cached_factory.dart`](example/cached_factory.dart) | One value for each id, released with the scope |
-| [`diagnostics.dart`](example/diagnostics.dart) | Accumulated validation, a cycle, `prettyPrint()`, `get` failures, and `phase` |
+| [`diagnostics.dart`](example/diagnostics.dart) | Accumulated validation, a cycle that waits, `prettyPrint()`, `get` failures, a waiting child, and `phase` |
 
 ## Not ported
 
@@ -330,8 +420,7 @@ These examples of `fp_di` need a feature that this package does not have.
 
 | Example of `fp_di` | Reason |
 |---|---|
-| `cancellation.dart` | The package has no cancellation token and no dormant component |
+| `cancellation.dart` | The package has no public cancellation token yet |
 | `lazy.dart` | The package has no lazy value |
 | `collections.dart` | The package has no set key and no map key |
-| `reactive.dart` | A scope runs once, so a nearer publisher cannot change a reader |
 | `shape_export.dart` | The package has no inspector and no shape export |

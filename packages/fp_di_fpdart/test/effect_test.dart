@@ -171,7 +171,7 @@ void main() {
       final log = <String>[];
       final parent = Scope(components: [logged<int>('a', 1, log, key: intKey)]);
       rightOf(await parent.run());
-      final child = parent.child(
+      final child = parent.kid(
         components: [
           effect('hook', log, reads: Dependency.require<int>(key: intKey)),
         ],

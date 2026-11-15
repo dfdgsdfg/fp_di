@@ -49,7 +49,7 @@ void main() {
     list.add(number(2, key: const DiKey<int>(name: 'other')));
     expect(scope.components, hasLength(1));
     expect(() => scope.components.add(number(3)), throwsUnsupportedError);
-    expect(scope.child().components, isEmpty);
+    expect(scope.kid().components, isEmpty);
   });
 
   group('overriddenBy', () {

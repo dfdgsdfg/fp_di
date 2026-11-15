@@ -11,8 +11,10 @@ abstract final class _CauseHKT {}
 ///
 /// A [Fail] holds a typed error. A [Die] holds a defect: an error that the
 /// type `E` does not describe, such as a dispose function that threw.
-/// [Then] joins two causes that happened one after the other. [Both] joins
-/// two causes that happened at the same time.
+/// An [Interrupt] marks an operation that a caller canceled, such as an
+/// activation that a disposal canceled. [Then] joins two causes that happened
+/// one after the other. [Both] joins two causes that happened at the same
+/// time.
 ///
 /// [Empty] is the identity of `+` and `&`. A cause is a [Functor] over the
 /// typed error, and a [Foldable] over the typed errors, from left to right.
@@ -49,6 +51,7 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     Empty<E>() => Empty<B>(),
     Fail<E>(:final error, :final stackTrace) => Fail<B>(f(error), stackTrace),
     Die<E>(:final defect, :final stackTrace) => Die<B>(defect, stackTrace),
+    Interrupt<E>(:final stackTrace) => Interrupt<B>(stackTrace),
     Then<E>(:final first, :final second) => Then<B>(
       first.map(f),
       second.map(f),
@@ -64,19 +67,49 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     required Z Function() empty,
     required Z Function(E error, StackTrace stackTrace) fail,
     required Z Function(Object defect, StackTrace stackTrace) die,
+    required Z Function(StackTrace stackTrace) interrupt,
     required Z Function(Z first, Z second) then,
     required Z Function(Z left, Z right) both,
   }) => switch (this) {
     Empty<E>() => empty(),
     Fail<E>(:final error, :final stackTrace) => fail(error, stackTrace),
     Die<E>(:final defect, :final stackTrace) => die(defect, stackTrace),
+    Interrupt<E>(:final stackTrace) => interrupt(stackTrace),
     Then<E>(:final first, :final second) => then(
-      first.fold(empty: empty, fail: fail, die: die, then: then, both: both),
-      second.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+      first.fold(
+        empty: empty,
+        fail: fail,
+        die: die,
+        interrupt: interrupt,
+        then: then,
+        both: both,
+      ),
+      second.fold(
+        empty: empty,
+        fail: fail,
+        die: die,
+        interrupt: interrupt,
+        then: then,
+        both: both,
+      ),
     ),
     Both<E>(:final left, :final right) => both(
-      left.fold(empty: empty, fail: fail, die: die, then: then, both: both),
-      right.fold(empty: empty, fail: fail, die: die, then: then, both: both),
+      left.fold(
+        empty: empty,
+        fail: fail,
+        die: die,
+        interrupt: interrupt,
+        then: then,
+        both: both,
+      ),
+      right.fold(
+        empty: empty,
+        fail: fail,
+        die: die,
+        interrupt: interrupt,
+        then: then,
+        both: both,
+      ),
     ),
   };
 
@@ -85,6 +118,7 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     empty: () => const [],
     fail: (error, _) => [error],
     die: (_, _) => const [],
+    interrupt: (_) => const [],
     then: (first, second) => [...first, ...second],
     both: (left, right) => [...left, ...right],
   );
@@ -94,8 +128,35 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     empty: () => const [],
     fail: (_, _) => const [],
     die: (defect, _) => [defect],
+    interrupt: (_) => const [],
     then: (first, second) => [...first, ...second],
     both: (left, right) => [...left, ...right],
+  );
+
+  /// The stack traces of the interruptions in the cause, from left to right.
+  List<StackTrace> get interruptions => fold<List<StackTrace>>(
+    empty: () => const [],
+    fail: (_, _) => const [],
+    die: (_, _) => const [],
+    interrupt: (stackTrace) => [stackTrace],
+    then: (first, second) => [...first, ...second],
+    both: (left, right) => [...left, ...right],
+  );
+
+  /// Whether the cause holds an [Interrupt].
+  bool get isInterrupted => interruptions.isNotEmpty;
+
+  /// The cause without its typed errors and its interruptions: the [Die]
+  /// values only, in the structure of the cause.
+  ///
+  /// The result is [Empty] when the cause holds no defect.
+  Cause<E> get onlyDefects => fold<Cause<E>>(
+    empty: Empty<E>.new,
+    fail: (_, _) => Empty<E>(),
+    die: Die<E>.new,
+    interrupt: (_) => Empty<E>(),
+    then: (first, second) => first + second,
+    both: (left, right) => left & right,
   );
 
   /// The first typed error, or `None` when the cause has no typed error.
@@ -104,8 +165,9 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     return all.isEmpty ? const None() : Some(all.first);
   }
 
-  /// Whether the cause has no [Fail] and no [Die].
-  bool get isEmpty => failures.isEmpty && defects.isEmpty;
+  /// Whether the cause has no [Fail], no [Die], and no [Interrupt].
+  bool get isEmpty =>
+      failures.isEmpty && defects.isEmpty && interruptions.isEmpty;
 
   /// An indented tree of the cause, for a message.
   ///
@@ -114,6 +176,7 @@ sealed class Cause<E> extends HKT<_CauseHKT, E>
     empty: () => const ['Empty'],
     fail: (error, _) => ['Fail: $error'],
     die: (defect, _) => ['Die: $defect'],
+    interrupt: (_) => const ['Interrupt'],
     then: (first, second) => ['Then', ..._indent(first), ..._indent(second)],
     both: (left, right) => ['Both', ..._indent(left), ..._indent(right)],
   ).join('\n');
@@ -216,6 +279,24 @@ final class Die<E> extends Cause<E> {
 
   @override
   int get hashCode => Object.hash(Die, defect);
+}
+
+/// An operation that a caller canceled.
+///
+/// An activation that a disposal canceled is an interruption. It is never a
+/// [Fail].
+final class Interrupt<E> extends Cause<E> {
+  /// Creates an interruption that happened at [stackTrace].
+  const Interrupt(this.stackTrace);
+
+  /// The stack trace of the place where the cancellation took effect.
+  final StackTrace stackTrace;
+
+  @override
+  bool operator ==(Object other) => other is Interrupt<Object?>;
+
+  @override
+  int get hashCode => (Interrupt).hashCode;
 }
 
 /// Two causes that happened one after the other.
