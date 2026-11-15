@@ -7,7 +7,7 @@ tags: [architecture, dart, flutter]
 
 # Project Architecture Specification
 
-[Requirements](requirements.md) · [Decisions](log.md)
+[Requirements](requirements.md) · [Decisions](log.md) · [Known gaps](gap.md)
 
 ## Overview
 
@@ -248,7 +248,8 @@ does the same for `MultiProvider`.
 | Surface | Responsibility and ownership |
 |---|---|
 | `ScopeProvider` | Publish a caller-owned scope, subscribe to changes, and detach listeners on replacement/unmount. It does not create, initialize, or dispose a scope. `ScopeProvider.listenable` reads the scope from a `ValueListenable<Scope>` at each lookup; `ScopeProvider.fixed` publishes one scope that lives longer than the widget. |
-| `ScopeBuilder` | Create a child of the scope of the closest provider, call `initialize`, publish the child, build from a `ScopeSnapshot` with the phase, the node states, and the failure of `initialize`, and dispose the child at the unmount. `ScopeBuilder.value` publishes a caller-owned scope and builds from its state; it does not call `initialize` or `dispose`. |
+| `ScopeBuilder` | Create a child of the scope of the closest provider, call `initialize`, publish the child, build from a `ScopeSnapshot` with the phase, the node states, and the failure of `initialize`, and dispose the child at the unmount. |
+| `ScopeBoundary` | Hold the disposal of a caller-owned scope while mounted, publish the scope, and build from a `ScopeSnapshot`. It does not call `initialize` or `dispose`. |
 | `di` / `maybeDi` | Read a required/optional binding without subscribing to publisher changes. |
 | `watchDi` / `watchMaybeDi` | Subscribe by dependency key to publisher identity/availability changes; mutations inside a published object do not notify. |
 | `maybeDiNode` / `watchMaybeDiNode` | Read the node that publishes a key, as `Scope.findNode` does. The watching read rebuilds when the state, the failure, or the missing keys of that node change, and when the publisher of the key changes. |
@@ -262,9 +263,15 @@ calls `dispose`. A lookup reads the value at the moment of the call, so no
 widget reads the disposed scope. `ScopeProvider.fixed` has no such
 guarantee and is for a scope that is not disposed while the widget is mounted.
 
-The disposal of a scope rebuilds no watching widget. A disposed scope answers
-no read, so such a rebuild could only throw. The replacement of the scope
-notifies every dependent, and the change of a key notifies its watchers.
+The disposal of a scope rebuilds no watching widget. A scope whose disposal
+was requested starts no activation, and its lookups throw once the disposal
+mutation starts, so the provider makes no comparison from that start on.
+While a hold delays the disposal, the lookups answer and the watchers below
+the provider keep the values of their last build, unless the withdrawal of a
+publisher of an ancestor deactivates a member that a watched key resolves to.
+That change notifies its watchers, as at any other time. The replacement of
+the scope notifies every dependent, and the change of a key notifies its
+watchers.
 
 `ScopeProvider` creates, initializes, and disposes no scope. `ScopeBuilder`
 owns the scope of one widget subtree
@@ -284,11 +291,45 @@ old scope after that. The phase `initialized` does not mean that each node is
 active, because a node can wait for a key of an ancestor. The widget listens to
 its scope like the provider does. A transition schedules a build before the
 next frame only when it changes the phase or a node state of the scope; a
-transition of a child scope schedules nothing. While `isDisposed` of its scope
-is true, the widget calls no builder: a build keeps the widgets of the last
-build, so a rebuild from above reaches no lookup. The failure of a disposal, the rollback failures of a canceled
+transition of a child scope schedules nothing. In the phase `disposeRequested`
+the lookups answer, so the builder runs. In the phases `disposing` and
+`disposed` the lookups throw, so the widget calls no builder and keeps no
+widget below it: a build returns an empty widget. The listeners of a scope run
+when its disposal mutation starts, so the widget builds again at the next
+frame. A widget below it that rebuilds by itself in that frame, such as an
+animation, is removed first, because the framework builds an ancestor before
+its descendants. A callback below it that runs before that frame and reads
+the scope still throws. The failure of a disposal, the rollback failures of a canceled
 `initialize`, and the failure of an `initialize` that the widget no longer
 shows go to `FlutterError.reportError`.
+
+`ScopeBoundary` borrows a caller-owned scope
+([R-UC-AR-UI-007](requirements.md#r-uc-ar-ui-007)). At the mount it takes a
+hold of the disposal of the scope
+([holds of a disposal](../runtime/lifecycle/spec.md#scope-declaration-and-initialization)),
+and at the unmount it closes the hold. The hold carries the `debugLabel` of the
+widget, else the name of its route, else `ScopeBoundary`, so `describe` and
+the slow report of a waiting disposal name the boundaries that it waits for.
+The widget closes the hold in `State.dispose`, not in `deactivate`, so a move
+with a `GlobalKey` keeps it. A route that another route covers stays mounted,
+so its boundary keeps the disposal waiting until the route is removed. A host that disposes the scope then
+moves the scope to `disposeRequested` at once, and the disposal starts when the
+last boundary of the scope unmounts. In that time the lookups answer and no
+activation starts, so a route that exits reads live values until Flutter
+removes it after its exit transition. The widget publishes its scope through
+an inner `ScopeProvider.listenable` above everything that its builder
+returns, so the change of a listenable above does not reach the widgets below
+it. Its snapshot has the phase and the node states and no failure, because the
+widget calls no `initialize`. The rules of `ScopeBuilder` on transitions and on
+the phases `disposing` and `disposed` apply to it. A boundary that mounts after
+the request takes no hold.
+
+The code that removes the routes below a boundary MUST NOT wait for the
+`dispose` future of the scope: the disposal waits for those routes, so the two
+would wait for each other. A test that disposes such a scope removes the
+widgets first, or pumps the frames that remove them, before it awaits the
+disposal. A call with `ignoreHolds` while a boundary is mounted leaves the
+boundary with an empty subtree, as for `ScopeBuilder`.
 
 A node can exist while it is inactive. A widget that reads a key whose
 publisher can be withdrawn SHOULD read it with `watchMaybeDi`, or with
@@ -328,7 +369,8 @@ does not depend on fpdart or on `fp_di_fpdart`.
 Four lifecycles meet in the adapter. `ScopeProvider` owns only its
 subscription ([R-UC-AR-UI-005](requirements.md#r-uc-ar-ui-005)). A
 `ScopeBuilder` also owns the scope that it created, from its mount to its
-unmount.
+unmount, and a `ScopeBoundary` holds the disposal of its scope while it is
+mounted.
 
 | Lifecycle | Owner | What the adapter reads |
 |---|---|---|
@@ -420,6 +462,13 @@ the lifecycle of a scope with these rules:
    scope, or MUST republish the scope with `ScopeProvider.fixed` and close
    before the scope is disposed. The content of a snack bar or a banner MUST
    NOT read a scope from its own context.
+6. A host that disposes a scope outside the widget tree, such as a session at
+   logout, while routes of a `Navigator` read that scope, SHOULD put each such
+   route below a `ScopeBoundary` of the scope. The host MAY then change the
+   listenable and call `dispose` in one turn: each boundary keeps its scope
+   readable and delays the disposal until its route unmounts. The removal of
+   the routes MUST NOT wait for the `dispose` future. A host that needs a
+   bound on that wait calls `dispose(ignoreHolds: true)` after a time limit.
 
 [`navigator_scope.dart`](../../packages/fp_di_flutter/example/navigator_scope.dart)
 shows rules 1 and 2 with `ScopeBuilder`: a session scope above a nested
@@ -660,10 +709,10 @@ fpdart.
 ### <a id="v-t-ar-ui-013"></a>V-T-AR-UI-013 — `[test]` Scope of a subtree
 
 - **Layer:** Flutter widget
-- **Target:** `ScopeBuilder` and `ScopeBuilder.value`
+- **Target:** `ScopeBuilder`
 - **Files:** `packages/fp_di_flutter/test/scope_builder_test.dart`
 - **Fixtures:** App scopes with a name key, and a child module whose member reads it. A member whose `create` waits for a `Completer`, a member whose `create` throws, and a member whose release throws. A `ValueNotifier<Scope>` above the widget for the replacement, and a disposal of the old parent in the same turn for the logout. A widget whose `State.dispose` disposes a child of the scope of the `ScopeBuilder`, which notifies inside the call, and withdraws the name. A build counter, and a builder that reads a key, so a build after the disposal throws.
-- **Pass:** The builder reads `initializing`, then `initialized`, and a lookup below reads the key of the parent from the first build. A throwing `create` gives an `ActivationException` in the snapshot while the phase is `declared`. An unmount during `initialize` disposes the scope and reports one `ActivationCanceledException` with one rollback failure; without a failed release, nothing is reported. An unmount after `initialize` reports the `DisposeException` of a failed release. A replacement above calls `create` again, disposes the old child, and shows the value of the new one; a rebuild with the same scope above calls no `create`. A child scope that initializes and leaves calls no builder. The transitions from `State.dispose` give no exception, and the withdrawal shows after the frames. A disposal of the scope by its owner, and a rebuild from above after it, call no builder. A logout that changes the listenable above and disposes the old parent in one turn, with the child initialized or still initializing, gives no exception, a new child of the new parent, and a snapshot without an error. `ScopeBuilder.value` stays in `declared` until the caller initializes, follows a rebuild with another scope, and disposes no scope. `create` without a provider throws a `FlutterError`.
+- **Pass:** The builder reads `initializing`, then `initialized`, and a lookup below reads the key of the parent from the first build. A throwing `create` gives an `ActivationException` in the snapshot while the phase is `declared`. An unmount during `initialize` disposes the scope and reports one `ActivationCanceledException` with one rollback failure; without a failed release, nothing is reported. An unmount after `initialize` reports the `DisposeException` of a failed release. A replacement above calls `create` again, disposes the old child, and shows the value of the new one; a rebuild with the same scope above calls no `create`. A child scope that initializes and leaves calls no builder. The transitions from `State.dispose` give no exception, and the withdrawal shows after the frames. A disposal of the scope by its owner, and a rebuild from above after it, call no builder. A logout that changes the listenable above and disposes the old parent in one turn, with the child initialized or still initializing, gives no exception, a new child of the new parent, and a snapshot without an error. `create` without a provider throws a `FlutterError`.
 - **Evidence:** present
 
 `ScopeBuilder` is not a step of the random histories of
@@ -675,6 +724,15 @@ have the focused tests above. No public call of the core changes the phase or
 a node state of a scope inside the call, except a disposal. A transition from
 `State.dispose` therefore cannot show that the widget calls no `setState`
 inside a transition; the build at a later frame is a defense.
+
+### <a id="v-t-ar-ui-014"></a>V-T-AR-UI-014 — `[test]` Holds of a borrowed scope
+
+- **Layer:** Flutter widget
+- **Target:** `ScopeBoundary`
+- **Files:** `packages/fp_di_flutter/test/scope_boundary_test.dart`
+- **Fixtures:** An app scope and a session scope with a member that logs its release, a `ValueNotifier<Scope>` above a `MaterialApp`, two pushed routes that read a session key with `context.di` below a `ScopeBoundary`, one with a `debugLabel` and one in a named route, a boundary that mounts after the request, a widget below a boundary that rebuilds on each frame and reads a session key, a boundary under a `GlobalKey` that moves to another parent, a route covered by a pushed route, and a second session scope for the rebuild.
+- **Pass:** After the change of the value and the request in one turn, and the pop of both routes, the reads in the middle of each exit transition return the session value and `takeException` is null; each builder reads `disposeRequested`; the release log stays empty until the second route unmounts, and the `dispose` future completes after it. A boundary that mounts after the request does not delay the disposal. A disposal with `ignoreHolds` and a mounted boundary calls no builder after `disposing`, removes the subtree at the next frame, and an animation below it that ticks in that frame gives no error. A rebuild with the second scope moves the hold. The move with the `GlobalKey` keeps the hold open. The covered route keeps the disposal waiting until it is removed. `describe` of the waiting scope lists the `debugLabel` and the route name. No `initialize` and no `dispose` call comes from the widget.
+- **Evidence:** missing — not implemented, see [G-AR-UI-001](gap.md#g-ar-ui-001)
 
 ### <a id="v-l-ar-ui-001"></a>V-L-AR-UI-001 — `[lint]` Adapter imports
 

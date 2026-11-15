@@ -81,7 +81,9 @@ not successful recovery.
 | Reconcile / FinishTransaction | Include internally produced binding changes; report failure or reach stable targets | `reconcile` |
 | DisposeScope | Mark subtree disposing; permanently dispose nodes and release bindings | `disposeScope` |
 | LazyForce / LazySettle | First force starts one shared acquisition; settlement publishes to waiting callers; failure is not cached | `Lazy.force`, `Lazy._acquire` |
-| RequestDispose | Cancels the episode token at the host request, before the disposal mutation; marks commit forbidden | `ComponentNode.dispose`, `Scope.dispose` |
+| RequestDispose | Cancels the episode token at the host request, before the disposal mutation; marks commit forbidden; closes the `Lazy` holders to new creations; queues the disposal mutation when no hold of the subtree is open | `ComponentNode.dispose`, `Scope.dispose` |
+| OpenHold / CloseHold | Opens a hold of a scope whose disposal was not requested; closes it, and queues a waiting disposal when the last hold of its subtree closes | `Scope.disposeHold`, `DisposeHold.close` |
+| IgnoreHolds | Queues the disposal at once, whatever holds are open | `Scope.dispose(ignoreHolds: true)` |
 | CancelledSettle | Activation with a forbidden commit rolls back once acquisitions settle; queued setup for a disposed owner never starts | `activate`, `_RuntimeMutationQueue.run` |
 | LazyRelease | Mark the holder released, await in-flight acquisition, release an acquired lease, then continue left in the composition | `Lazy._release`, `runCleanups` |
 
@@ -121,13 +123,16 @@ Names below designate planned model operators; they are not new runtime requirem
 | `NoStepAfterCancel` | After the token of a region is canceled, no new primitive or composition step starts in that region or its descendants | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoCancelLivelock` | For each withdrawal request, each node is canceled at most once before that withdrawal finishes | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `CaughtFailureIsolated` | A caught region failure does not cancel the parent token; a fallback in the parent can commit. A failure of the fallback step itself may cancel the parent token | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
-| `CleanupBeforeNextSetup` | A setup requested after a disposal starts only after that disposal's rollback and release attempts finish | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
+| `CleanupBeforeNextSetup` | A setup that enters the queue after a disposal mutation starts only after that disposal's rollback and release attempts finish; a setup of another scope MAY run while a disposal waits for holds outside the queue | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `AcquireOnlyOnUse`, `SingleFlight`, `AtMostOneSuccess` | A memoized resource is acquired only after a get, with at most one acquisition in flight and one success | [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `NoAcquireAfterRelease` | A released holder never starts an acquisition | [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `DependentFirst` (Lazy) | Left-composed dependencies are released only after the holder has no live or in-flight lease | [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003), [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `RecipientsExact` (Integration) | A late dispose failure of a canceled activation reaches the caller of that activation (`initialize`, or `Scope.errors` for an automatic activation or a withdrawal); dispose callers receive only the dispose failures of the disposal itself | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoLostDisposeFailure` (Integration) | Every release that ran and failed reaches one recipient | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002) |
-| `CallersAgree` | All callers of one disposal receive the same result | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002) |
+| `CallersAgree` | All callers of one disposal receive the same result, also the callers that waited for holds and the waiting callers of a descendant | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002), [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `NoDisposalWhileHeld` | The disposal mutation of a scope does not start while a hold of the scope or of a descendant is open, unless a call ignored the holds. A deactivation that the withdrawal of a publisher of an ancestor causes is not part of that disposal and may run | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `NoCreationAfterRequest` | No `Lazy` creation starts after the disposal of its owner was requested | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `HeldDisposalProgress` | A requested disposal finishes its release attempts when every hold of its subtree closes or a call ignores the holds, under the assumption that one of the two comes | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `DisposalAfterRollback` | A disposal mutation never overlaps the mutation of the activation that it canceled | [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003), [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoReactivateBeforeWithdrawal` | A reader that a withdrawal canceled activates again only after the publisher's release and the end of the withdrawal | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `DependentsFirst`, `ValuesAlive` (Teardown) | A node of a disposed scope starts its release only after every dependent outside its read cycle finished, so its release runs while the values it read are alive | [R-UC-RT-LC-021](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-021), [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003) |
@@ -148,7 +153,8 @@ callbacks eventually settle and continuously enabled runtime actions receive
 weak fairness. Restrict the precedence graph to an acyclic required-publisher
 structure with no oscillating optional feedback. Under those assumptions check
 that reconciliation eventually becomes quiescent and requested disposal eventually
-finishes release attempts. The fairness assumptions do not prove Dart callbacks
+finishes release attempts, once every hold of its subtree closes or a call
+ignores the holds. The fairness assumptions do not prove Dart callbacks
 terminate. [Lamport's safety/liveness/fairness definitions](https://lamport.azurewebsites.net/tla/safety-liveness.pdf)
 provide the terminology.
 

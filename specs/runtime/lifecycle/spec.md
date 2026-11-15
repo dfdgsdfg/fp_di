@@ -321,7 +321,9 @@ holder's release is the single owner of a later acquisition: it marks the holder
 released, awaits any in-flight acquisition, then releases an acquired lease. Its
 position in the composition therefore keeps dependent-first and reverse-order
 cleanup. Acquisition happens outside the activation transaction, so its failure
-belongs to the `force()` caller rather than to activation. The type
+belongs to the `force()` caller rather than to activation. The request of the
+disposal of the owner closes the holder to new creations, before its release
+([holds of a disposal](#scope-declaration-and-initialization)). The type
 distinguishes constructed values (`A`), unowned factories (`A Function()`), and
 memoized resources (`Lazy<A>`); lookup never acquires implicitly.
 
@@ -1102,6 +1104,115 @@ shares a disposal in progress, cancels anything, or marks the scope: the
 disposal in progress can be the mutation the call runs in, so sharing it
 would wait for itself.
 
+**Holds of a disposal.** A consumer outside the runtime, such as a page of a
+widget tree, takes a hold of a scope with `Scope.disposeHold(debugLabel:)` and
+closes it with `DisposeHold.close()` when it leaves
+([R-UC-RT-LC-034](requirements.md#r-uc-rt-lc-034)). The hold delays the
+disposal and never prevents it:
+
+- An accepted `dispose` call moves the scope and its descendants to
+  `disposeRequested` at once and cancels the activations in flight, as before.
+  It also closes the `Lazy` holders of their nodes to new creations, so a
+  later `force()` fails with `DisposedLazyException`. A creation in flight
+  continues, and the release awaits it.
+- While a hold of the scope or of a descendant is open, the runtime MUST NOT
+  queue the disposal mutation. The lookups answer, and no node of those scopes
+  starts an activation, because the runtime starts no activation for a scope
+  whose disposal was requested. Work that a committed value runs continues
+  until its release.
+- A hold delays the disposal mutation of its scope only. It does not stop a
+  deactivation that the withdrawal of a publisher of an ancestor causes: the
+  reader deactivates before the publisher releases, as **Withdrawal** states,
+  and a lookup of its key then answers as for an inactive node. A consumer
+  that must keep such a value alive holds the scope of its publisher too.
+- When the last hold closes, the runtime queues the disposal mutation, and the
+  disposal runs as **Disposal** states. A `close` inside a running mutation,
+  a listener, or a dispose function queues the disposal after that mutation,
+  so `close` never fails with `ReentrantMutationError`.
+- The wait is outside the mutation queue, so the mutations of the other scopes
+  of the root run during it.
+- `dispose(ignoreHolds: true)` queues the disposal at once. A call that waits
+  then completes with that disposal. A caller that limits the wait uses
+  `dispose().timeout(limit, onTimeout: () => dispose(ignoreHolds: true))`.
+  `Future.timeout` gives `onTimeout` no argument, so the callback reads
+  `openHolds` itself when it wants the holders before it ignores them.
+- A call that ignores at least one open hold reports an
+  `IgnoredHoldsException` to `Scope.errors`, after the transition that starts
+  the disposal. The exception lists the `HoldState` of each ignored hold, so
+  each forced disposal leaves a record, whatever code set the time limit.
+  `Scope.errors` therefore carries the failures and the forced steps that no
+  call can return; a call with no open hold reports nothing.
+- The request of an ancestor joins the holds of its descendants. Its disposal
+  waits for every hold of the subtree, and a waiting call of a descendant
+  completes with the disposal that releases the nodes of that descendant.
+- `disposeHold` throws `DisposedScopeError` once the disposal of the scope or
+  of an ancestor is requested. `close` does nothing after the first call or
+  after the disposal started.
+- A waiting disposal is visible. `Scope.openHolds` returns a `HoldState` for
+  each open hold of the scope and of its descendants: `debugLabel`, the
+  `scope` of the hold, `elapsed` since it opened, and `debugStackTrace`, the
+  stack trace of the `disposeHold` call. The runtime records that trace only
+  inside an `assert`, so a release build pays nothing and reads null. A hold
+  without a label is then still found by the line that opened it. `describe`
+  lists the label of each open hold, with `hold` for a hold without a label.
+  A root created with `onSlowMutation` reports a wait longer than
+  `slowMutationThreshold`, and again after each further threshold, as a
+  `SlowMutation` with the operation `Scope.dispose (waiting for holds)`, no
+  queued mutation, and the `HoldState` of each open hold in `holds`.
+
+The holds keep laws. Write `holds(s)` for the open holds of scope `s` and of
+its descendants, and `trace(s)` for the order in which a disposal of `s`
+releases the nodes:
+
+```text
+close order   every order of the closes of holds(s) gives the same trace(s),
+              and each waiting dispose call completes once with one result
+delay         trace(s) with holds = trace(s) without holds,
+              when no other event runs during the wait
+absorption    dispose(ignoreHolds: true) starts the disposal for any holds(s)
+union         holds(parent) ⊇ holds(child), and the request of the parent
+              waits for holds(parent)
+shrinking     after the request, holds(s) only shrinks
+```
+
+The set of open holds is a registry where each holder adds and removes only
+its own entry, and `close` is idempotent, so the closes commute: the paper
+names such a registry as a commutative key (p. 29). A hold moves only the
+start of the disposal, so the order that the pairs of the members give, and
+the laws of [Shape Algebra](#shape-algebra) on it, do not change. Shrinking
+makes the wait finite when each hold closes; that progress is an obligation of
+the holders, not a law. A hold does not keep the value of a withdrawn
+publisher, so it is not a lease: the delay law has its condition for that
+reason.
+
+The code that closes a hold MUST NOT wait for the `dispose` future of the same
+scope. A host that awaits `dispose()` and only then removes the pages that
+hold the scope waits forever. A test that disposes a scope while a widget that
+holds it is still mounted waits the same way.
+
+The hold is not a lease. A dispose function of a member owns a value, and the
+runtime releases it in one order. A hold owns no value and no order: it only
+moves the start of the disposal mutation, and a call with `ignoreHolds` does
+not wait for it. The name `force` is not used for that argument, because
+`Lazy.force` already uses the word for the first creation of a value.
+
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Page as Consumer
+    participant Scope
+    participant Queue as Mutation queue
+    Page->>Scope: disposeHold()
+    Host->>Scope: dispose()
+    Scope-->>Scope: disposeRequested, cancel activations in flight
+    Note over Scope: lookups answer, no activation starts
+    Page->>Scope: get (live value)
+    Page->>Scope: close()
+    Scope->>Queue: queue the disposal mutation
+    Queue-->>Scope: release the nodes along their reads
+    Scope-->>Host: dispose() completes
+```
+
 ### Key names
 
 Dart erases an extension type to its representation type at run time. The
@@ -1336,9 +1447,12 @@ Child scopes own local nodes and inherit parent lookup. Scope disposal
 permanently disposes descendants. A component is one node; a scope can
 own many nodes: the members that it declared.
 
-The Flutter adapter publishes a scope and owns none.
+The Flutter adapter owns no scope that a caller supplies. A `ScopeBuilder`
+owns the scope that it creates, and a `ScopeBoundary` holds the disposal of a
+caller-owned scope while it is mounted.
 [Flutter Integration](../../architecture/spec.md#flutter-integration) owns
-the publication of a scope to a widget tree and its replacement. Because a
+the publication of a scope to a widget tree, its replacement, and the holds of
+the widgets. Because a
 node can be dormant, callers MUST
 handle publisher absence when withdrawal is possible.
 
@@ -1361,7 +1475,7 @@ forever.
 | `ComponentNode.activationException` | The `ActivationException` of the last activation while the state is `activationFailed`, and null in every other state. Its cause is the error that the activation threw, with the stack trace of that error. For a thrown error that is neither a `DiError` nor a `DiException`, the result is the object that `Scope.errors` reported. For a thrown `DiError` or `DiException`, the result is another object with the same cause. |
 | `Scope.findNode(key:)` | The node that publishes the key for the scope, or null. When `get` returns a value, the result is the node that published it. Otherwise the result is the nearest node whose component publishes the key, from the scope to the root. A scope without nodes and a member that was disposed alone do not count. Without `key`, the key is `DiKey<T>()`. It throws `DisposedScopeError` for a disposed scope. |
 | `Scope.isDisposed` | True from a `dispose` call that the runtime accepts for the scope or an ancestor, before the disposal runs. It does not become false again, and the read does not throw. |
-| `Scope.describe()` | A text with one entry for each node of the scope and its descendants, in creation order, indented by scope depth. A scope that is not initialized marks its title `(not initialized)` and lists each declared component that has no node with the state `declared`. While `initialize` runs, the nodes exist, so each entry states the state of its node. |
+| `Scope.describe()` | A text with one entry for each node of the scope and its descendants, in creation order, indented by scope depth. A scope that is not initialized marks its title `(not initialized)` and lists each declared component that has no node with the state `declared`. While `initialize` runs, the nodes exist, so each entry states the state of its node. A scope whose disposal waits for holds marks its title with the number and the labels of its open holds, such as `(disposal waits for 2 holds: route /chat, hold)`. |
 | `Scope.state`, `Scope.addListener` | The immutable state of the scope, and a function that the runtime calls at each transition. See [State of the runtime](#state-of-the-runtime). |
 
 The label of a node is its `debugLabel`, otherwise its published key,
@@ -1503,8 +1617,9 @@ so a release that does not return holds the queue until it returns. A root `Scop
 threshold while it runs. A `SlowMutation` names the operation, the elapsed
 time, the labels of the activations in flight, those among them whose token is
 canceled, the owners whose dispose functions run (`disposing`, with
-`<label> activation rollback` for a rollback), and the number of queued
-mutations. The report changes no state and
+`<label> activation rollback` for a rollback), the number of queued
+mutations, and, for a disposal that waits outside the queue, the `HoldState`
+of each open hold (`holds`). The report changes no state and
 does not shorten the mutation. Its timer runs in the zone of the caller of the
 mutation, outside the mutation, so the listener MAY request a mutation,
 which queues. Without `onSlowMutation`, the runtime starts no timer.
@@ -1557,7 +1672,7 @@ others in a read:
 | Declared, `declared` | The scope has a module and no node. An `initialize` call MAY run. | Answer | false |
 | Initializing, `initializing` | The `initialize` mutation runs, and the runtime accepted no `dispose` call. The scope has one node for each declared component. | Answer | false |
 | Initialized, `initialized` | `initialize` completed. | Answer | false |
-| DisposeRequested, `disposeRequested` | The runtime accepted a `dispose` call for the scope or an ancestor. The activations in flight are canceled. A new `initialize` call is rejected. An `initialize` in flight ends in this phase, with its rollback or with success. | Answer | true |
+| DisposeRequested, `disposeRequested` | The runtime accepted a `dispose` call for the scope or an ancestor. The activations in flight are canceled. A new `initialize` call is rejected. An `initialize` in flight ends in this phase, with its rollback or with success. The phase lasts while a hold of the scope or of a descendant is open, unless a call has `ignoreHolds`. | Answer | true |
 | Disposing, `disposing` | The disposal mutation releases the nodes. | Throw `DisposedScopeError` | true |
 | Disposed, `disposed` | The disposal ended. | Throw `DisposedScopeError` | true |
 
@@ -1993,6 +2108,14 @@ joining caller of `Disposal.tla`. The models do not state these two cases
 for a listener. V-T-RT-LC-031 and V-T-RT-LC-032 own the evidence for the
 [state of the runtime](#state-of-the-runtime).
 
+The holds of a disposal add a wait before the disposal mutation enters the
+queue. `Disposal.tla` MUST model it: a hold that opens before the request and
+closes later, a hold of a descendant, a call with `ignoreHolds`, and callers
+that join the waiting disposal. The
+[formal verification specification](../../verification/formal/spec.md) owns
+the properties of the holds. Until the model covers them,
+[G-RT-LC-015](gap.md#g-rt-lc-015) records the difference.
+
 ## Verification
 
 [Test methodology](../../verification/test/spec.md) owns fixtures and execution policy.
@@ -2351,6 +2474,24 @@ conforms.
 - **Fixtures:** one test-only fault for each self-check, the deliberate defects, and the self-check mute, set through a library under `src/`.
 - **Pass:** the core suite and the random histories pass with every self-check active; each fault makes its scenario throw an `AssertionError` that names the self-check; `dart run` of each example, which runs without assertions, completes with its documented output. The runtime reads `RuntimeFaults.defect` only inside `RuntimeFaults.injects`, and `RuntimeFaults.selfChecksMuted` only inside an `assert`.
 - **Evidence:** present
+
+### <a id="v-t-rt-lc-041"></a>V-T-RT-LC-041 — `[test]` Holds of a disposal
+
+- **Layer:** Dart unit
+- **Target:** `Scope.disposeHold`, `DisposeHold.close`, `Scope.dispose`, and `Scope.dispose(ignoreHolds: true)`
+- **Files:** `packages/fp_di/test/dispose_hold_test.dart`
+- **Fixtures:** A parent scope with members that log their release and a `Lazy` member, a member that waits for a key of a scope that initializes later, a member that reads a key of the root, a child scope, another scope of the same root, `Completer`-gated holds with and without a `debugLabel`, a listener that closes a hold, a hold that never closes, and a root with a short `slowMutationThreshold` and a recording `onSlowMutation`.
+- **Pass:** After the request, `isDisposed` is true, `get` returns the values, the waiting member stays `waiting` after its key arrives, `force()` fails with `DisposedLazyException`, and the `initialize` of the other scope completes. The release log stays empty until the last of the three holds closes, then follows the order of R-UC-RT-LC-021, and each waiting `dispose()` future completes once. A hold that a listener closes queues the disposal after that transition with no `ReentrantMutationError`. A parent disposed with `ignoreHolds` releases the nodes of a waiting child, and the waiting call of the child completes. A call with `ignoreHolds` releases with a hold open, and the waiting call completes. `disposeHold` after the request throws `DisposedScopeError`; a second `close` and a late `close` change nothing. When the node of the root that the reader reads is disposed alone during the wait, the reader deactivates before it releases and the other nodes stay active. An `initialize` of the held scope is rejected. `openHolds` returns one `HoldState` for each open hold of the scope and of the child, with its label, its scope, and an `elapsed` that grows between two reads; its `debugStackTrace` names the test line of the `disposeHold` call with assertions and is null in the run without them. `describe` names each open hold, with `hold` for the one without a label, and the slow report of the wait has the operation `Scope.dispose (waiting for holds)` and the same `HoldState` values in `holds`. A call with `ignoreHolds` while two holds are open adds one `IgnoredHoldsException` with both to `Scope.errors`; a call with no open hold adds nothing.
+- **Evidence:** missing — not implemented, see [G-RT-LC-015](gap.md#g-rt-lc-015)
+
+### <a id="v-t-rt-lc-042"></a>V-T-RT-LC-042 — `[test]` Laws of the holds
+
+- **Layer:** Unit, property-based
+- **Target:** the laws of the holds in [holds of a disposal](#scope-declaration-and-initialization)
+- **Files:** [`laws_test.dart`](../../../packages/fp_di/test/laws_test.dart)
+- **Fixtures:** `kiri_check` generators of scope trees of up to four scopes with members that log their release, holds of those scopes with and without labels, a disposed scope of the tree, and permutations of the closes
+- **Pass:** for each generated case, the release trace with holds equals the trace without holds; each waiting `dispose()` future completes once with the same result; a disposal with `ignoreHolds` releases with holds open; the holds of a child delay the disposal of its parent; `disposeHold` after the request throws. A failing case is shrunk and printed by `kiri_check`.
+- **Evidence:** missing — not implemented, see [G-RT-LC-015](gap.md#g-rt-lc-015)
 
 ### <a id="v-l-rt-lc-001"></a>V-L-RT-LC-001 — `[lint]` Static analysis
 

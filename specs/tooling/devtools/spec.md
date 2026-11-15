@@ -8,7 +8,7 @@ depends_on: ["specs/runtime/lifecycle/spec.md", "specs/architecture/spec.md"]
 
 # DevTools Extension Specification
 
-[Requirements](requirements.md) · [Decision log](log.md)
+[Requirements](requirements.md) · [Decision log](log.md) · [Known gaps](gap.md)
 
 Architecture: [Project architecture](../../architecture/spec.md). Observation
 contract: [Runtime lifecycle, Observation](../../runtime/lifecycle/spec.md#observation).
@@ -90,7 +90,7 @@ so a node query names the root and the node.
 | Service extension | Arguments | Answer |
 |---|---|---|
 | `ext.fp_di.roots` | none | `roots`: for each live root, `id`, `label`, `revision` |
-| `ext.fp_di.state` | `root`, optional `values` | `scope`: a tree; each scope has `id`, `phase`, `module`, `children`, and `nodes`; each node has `id`, `label`, `key`, `phase`, `missing`, `failure`, `commits`, the `origin` of its component, and `value` when `values` is true |
+| `ext.fp_di.state` | `root`, optional `values` | `scope`: a tree; each scope has `id`, `phase`, `module`, `children`, `holds` (the labels of its open holds of a disposal), and `nodes`; each node has `id`, `label`, `key`, `phase`, `missing`, `failure`, `commits`, the `origin` of its component, and `value` when `values` is true |
 | `ext.fp_di.node` | `root`, `node`, optional `values` | `reads`: for each key, `kind`, `resolves`, and the `publisher` id; `readers`: the ids of the nodes that read this node; `failure`: `cause`, `stackTrace`; `cause`: the steps of the search for an unavailable key |
 | `ext.fp_di.shape` | `scope` | `shape`: the `ShapeGraph` JSON of the scope, with the modules of its ancestors |
 | `ext.fp_di.listen` | `enabled`, optional `values` | `listening`: the new setting |
@@ -252,6 +252,15 @@ to the workspace.
 - **Fixtures:** the fake client serves the answers and events that [`dump_devtools_fixtures.dart`](../../../packages/fp_di/test/support/dump_devtools_fixtures.dart) recorded from the inspector, read from `packages/fp_di/test/support/devtools_fixtures/`, so the app and the protocol cannot drift; an answer with another `version`; no connected app
 - **Pass:** each view shows the recorded data; a key opens its publisher; the filter and the search narrow the nodes; the two messages appear
 - **Evidence:** present
+
+### <a id="v-t-tl-dt-006"></a>V-T-TL-DT-006 — `[test]` Holds in the state answer
+
+- **Layer:** Unit, Dart VM
+- **Target:** the `holds` of a scope in the `state` answer of [Queries](#queries)
+- **Files:** [`devtools_inspector_test.dart`](../../../packages/fp_di/test/devtools_inspector_test.dart)
+- **Fixtures:** a root with a child scope, two holds of the child, one with a `debugLabel`, and a disposal of the child that waits for them
+- **Pass:** the child lists the label and `hold`; the root lists none; after both holds close and the disposal ends, the child is gone from the tree
+- **Evidence:** missing — not implemented; see [G-TL-DT-002](gap.md#g-tl-dt-002)
 
 ### <a id="v-l-tl-dt-001"></a>V-L-TL-DT-001 — `[lint]` Packaging and the core boundary
 
