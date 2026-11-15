@@ -67,7 +67,9 @@ final class Component<A> {
     this._debugLabel, {
     this.isEffect = false,
     this.contributesTo,
-  });
+  }) : invalidReason = isEffect
+           ? null
+           : _invalidReason<A>(contributesTo ?? key, contributesTo != null);
 
   final Dependency<A> _dependency;
   final String? _debugLabel;
@@ -84,6 +86,16 @@ final class Component<A> {
   ///
   /// A contribution publishes no plain key.
   final DiSetKey<Object?>? contributesTo;
+
+  /// Why the declaration does not fit, or `null` when it fits.
+  ///
+  /// The constructors never throw. `Scope.run` fails with an
+  /// [InvalidComponentFailure] for a component that has a reason. There are
+  /// two reasons. The type argument is `void`, `dynamic`, or `Null`, so no
+  /// other component can read the value: use [Component.effect]. Or the type
+  /// of the key is not the type argument, which Dart accepts when it infers
+  /// the type argument from the dependency.
+  final String? invalidReason;
 
   /// Whether the component publishes [key]: it is neither an effect nor a
   /// contribution.
@@ -124,6 +136,29 @@ final class Component<A> {
 
   /// The debug label of the component, or `null`.
   String? get debugLabel => _debugLabel;
+}
+
+Type _typeOf<X>() => X;
+
+/// The type arguments whose default key no component can read.
+final Set<Type> _publishesNothing = {
+  _typeOf<void>(),
+  _typeOf<dynamic>(),
+  _typeOf<Null>(),
+};
+
+String? _invalidReason<A>(DiKeyBase key, bool contribution) {
+  if (!contribution && _publishesNothing.contains(A)) {
+    return 'Component<$A> has no value that another component can read. '
+        'Use Component.effect(dependency: ...) for a component that only '
+        'has effects, or state the type argument: Component<T>(...)';
+  }
+  if (key.type != A) {
+    return 'the key has the type ${key.type}, but the type argument of the '
+        'component is $A. State the type argument: '
+        'Component<${key.type}>(...)';
+  }
+  return null;
 }
 
 /// Runs the steps of [component] in [context] and gives its value.
@@ -191,6 +226,115 @@ extension ComponentsOps on Iterable<Component<Object?>> {
       if (j != index && other.hasKey && other.key == key) return true;
     }
     return false;
+  }
+
+  /// The components that require a key of [keys], directly or through another
+  /// component of the result, in the order of the group.
+  ///
+  /// A variant of an application can have no publisher for a key, for example
+  /// a service of one platform. `Scope.run` reports an [UndeclaredKeyFailure]
+  /// for a component that requires such a key, and then for each component
+  /// that requires the key of a removed component. This operation names all of
+  /// those components, and [withoutRequiring] removes them.
+  ///
+  /// A component is in the result when its `requires` holds a key of [keys],
+  /// or the key that another component of the result publishes. An optional
+  /// read and a collection read do not put a component in the result: the
+  /// first gets `None`, and the second gets a collection without the removed
+  /// contribution. A component that publishes a key of [keys] is not in the
+  /// result for that reason, and each component that requires that key is.
+  /// The reads of an effect component count.
+  ///
+  /// [ancestorKeys] holds the keys that an ancestor scope also publishes. A
+  /// component of the result that publishes such a key does not take the
+  /// readers of that key with it, because they read the value of the
+  /// ancestor. [ancestorKeys] does not take a key out of [keys].
+  ///
+  /// The operation does not fail: a key that no component requires changes
+  /// nothing. The time is near-linear in the components and their required
+  /// keys, in every order of the group.
+  List<Component<Object?>> requiring({
+    required Iterable<DiKeyBase> keys,
+    Iterable<DiKeyBase> ancestorKeys = const <DiKeyBase>[],
+  }) {
+    final group = toList();
+    final selected = _requiringFlags(group, keys, ancestorKeys);
+    return [
+      for (var i = 0; i < group.length; i++)
+        if (selected[i]) group[i],
+    ];
+  }
+
+  /// The components that [requiring] does not return for the same arguments.
+  ///
+  /// No component of the result requires a key of [keys]. Each key in
+  /// `requires` of the result is in `requires` of the group or in
+  /// [ancestorKeys], so the removal adds no required key that the caller did
+  /// not name.
+  ///
+  /// For the components of a child scope, pass the keys that the parent lost
+  /// and the keys that the parent still publishes:
+  ///
+  /// ```dart
+  /// final removed = all.requiring(keys: absent);
+  /// final session = sessionComponents.withoutRequiring(
+  ///   keys: {...absent, ...removed.publishes},
+  ///   ancestorKeys: all.withoutRequiring(keys: absent).publishes,
+  /// );
+  /// ```
+  List<Component<Object?>> withoutRequiring({
+    required Iterable<DiKeyBase> keys,
+    Iterable<DiKeyBase> ancestorKeys = const <DiKeyBase>[],
+  }) {
+    final group = toList();
+    final selected = _requiringFlags(group, keys, ancestorKeys);
+    return [
+      for (var i = 0; i < group.length; i++)
+        if (!selected[i]) group[i],
+    ];
+  }
+
+  /// A list in which [component] replaces the one component that publishes
+  /// [key]. The replacement keeps the place of the replaced component.
+  ///
+  /// The result is a `Left` when [component] does not publish [key]
+  /// ([InvalidComponentFailure]), when no component publishes [key]
+  /// ([UnmatchedOverrideFailure]), and when more than one component publishes
+  /// [key] ([DuplicateKeyFailure]). An effect component and a contribution
+  /// publish no key, so no key selects them.
+  Exit<DiFailure, List<Component<Object?>>> replacing({
+    required DiKey<Object?> key,
+    required Component<Object?> component,
+  }) {
+    if (!component.hasKey || component.key != key) {
+      return Left(
+        Fail<DiFailure>(
+          InvalidComponentFailure(component.label, 'does not publish $key'),
+          StackTrace.current,
+        ),
+      );
+    }
+    final group = toList();
+    final matches = [
+      for (var i = 0; i < group.length; i++)
+        if (group[i].hasKey && group[i].key == key) i,
+    ];
+    if (matches.length != 1) {
+      return Left(
+        Fail<DiFailure>(
+          matches.isEmpty
+              ? UnmatchedOverrideFailure(key, owner: component.label)
+              : DuplicateKeyFailure(key, [
+                  for (final i in matches) group[i].label,
+                ]),
+          StackTrace.current,
+        ),
+      );
+    }
+    return Right([
+      for (var i = 0; i < group.length; i++)
+        if (i == matches.single) component else group[i],
+    ]);
   }
 
   /// A list in which each component of [overrides] replaces the component
@@ -267,4 +411,42 @@ extension ComponentsOps on Iterable<Component<Object?>> {
           component,
     ]);
   }
+}
+
+/// For each position of [group], whether the component requires a key of
+/// [keys], or the key of another selected component that [ancestorKeys] does
+/// not hold.
+///
+/// An index gives the components that require each key, and the search reads
+/// each absent key one time.
+List<bool> _requiringFlags(
+  List<Component<Object?>> group,
+  Iterable<DiKeyBase> keys,
+  Iterable<DiKeyBase> ancestorKeys,
+) {
+  final readers = <DiKeyBase, List<int>>{};
+  for (var i = 0; i < group.length; i++) {
+    for (final key in group[i].requires) {
+      (readers[key] ??= <int>[]).add(i);
+    }
+  }
+  final ancestors = Set<DiKeyBase>.of(ancestorKeys);
+  final absent = <DiKeyBase>{};
+  final pending = <DiKeyBase>[];
+  for (final key in keys) {
+    if (absent.add(key)) pending.add(key);
+  }
+  final selected = List<bool>.filled(group.length, false);
+  while (pending.isNotEmpty) {
+    final key = pending.removeLast();
+    for (final i in readers[key] ?? const <int>[]) {
+      if (selected[i]) continue;
+      selected[i] = true;
+      if (!group[i].hasKey) continue;
+      final published = group[i].key;
+      if (ancestors.contains(published)) continue;
+      if (absent.add(published)) pending.add(published);
+    }
+  }
+  return selected;
 }

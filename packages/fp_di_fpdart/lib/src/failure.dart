@@ -1,5 +1,6 @@
 import 'core/phases.dart';
 import 'core/snapshots.dart' show NodeState;
+import 'hold.dart';
 import 'key.dart';
 
 /// One dispose function that failed.
@@ -276,4 +277,84 @@ final class DisposedLazyFailure extends DiFailure {
   @override
   String get message =>
       'Lazy.force ran after its owning component was disposed';
+}
+
+/// A disposal ignored open holds.
+///
+/// The root reports this failure to `errors` after the transition that starts
+/// the disposal, so each disposal that did not wait leaves a record, whatever
+/// code set the time limit.
+final class IgnoredHoldsFailure extends DiFailure {
+  /// Creates the report of a disposal that ignored [holds].
+  IgnoredHoldsFailure(Iterable<HoldState> holds)
+    : holds = List.unmodifiable(holds);
+
+  /// The open holds that the disposal ignored.
+  final List<HoldState> holds;
+
+  @override
+  String get message =>
+      'a disposal ignored ${holds.length} open '
+      '${holds.length == 1 ? 'hold' : 'holds'}: '
+      '${holds.map((hold) => hold.name).join(', ')}';
+}
+
+/// A component publishes or reads a key that has no name, and its type is a
+/// core value type.
+///
+/// An extension type over `int` erases to `int` at run time, so a key of the
+/// type of an extension type needs a name to stay distinct. Give the key a
+/// name, or give the extension type a key of its own.
+final class UnnamedKeyFailure extends DiFailure {
+  /// Creates the failure for [key], which the component with the label
+  /// [owner] publishes or reads.
+  const UnnamedKeyFailure(this.key, {required this.owner});
+
+  /// The key without a name.
+  final DiKey<Object?> key;
+
+  /// The label of the component that publishes or reads [key].
+  final String owner;
+
+  @override
+  String get message =>
+      '$owner uses $key, which has no name, and ${key.type} is a core value '
+      'type. Give the key a name, such as DiKey<${key.type}>(name: \'port\').';
+}
+
+/// A component publishes a key of the type `Future` or `FutureOr`.
+///
+/// No lookup can name such a type. The inference of a return type gives it
+/// when the type argument of the component is missing.
+final class UnreachableKeyFailure extends DiFailure {
+  /// Creates the failure for [key].
+  const UnreachableKeyFailure(this.key);
+
+  /// The key that nobody can read.
+  final DiKey<Object?> key;
+
+  @override
+  String get message =>
+      '$key names a type that no read can produce. State the type argument '
+      'of the component.';
+}
+
+/// A component does not fit its declaration.
+///
+/// Three cases give this failure. The type argument of the component is `void`,
+/// `dynamic`, or `Null`, so no other component can read the value. The type of
+/// the key is not the type argument. Or `ComponentsOps.replacing` got a
+/// component that does not publish the key that it replaces.
+final class InvalidComponentFailure extends DiFailure {
+  /// Creates the failure of the component with the label [owner].
+  const InvalidComponentFailure(this.owner, this.reason);
+
+  /// The label of the component.
+  final String owner;
+
+  /// What does not fit.
+  final String reason;
+
+  @override
+  String get message => '$owner is not valid: $reason';
 }

@@ -246,6 +246,7 @@ void main() {
       final started = <String>[];
       final gate = Completer<void>();
       Component<T> slow<T>(String name, T value) => Component<T>(
+        key: DiKey<T>(name: name),
         dependency: Dependency<T>(
           create: () => value,
           dispose: (_) async {
@@ -386,6 +387,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<int>(
+            key: intKey,
             dependency: Dependency<int>(
               create: () async {
                 log.add('create');
@@ -421,6 +423,7 @@ void main() {
         final scope = Scope(
           components: [
             Component<int>(
+              key: intKey,
               dependency:
                   Dependency<int>(
                     create: () => 1,

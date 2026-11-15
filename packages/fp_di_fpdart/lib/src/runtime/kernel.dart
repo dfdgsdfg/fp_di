@@ -156,8 +156,10 @@ extension RuntimeKernel on Runtime {
     final gate = Completer<void>();
     _queueTail.set(gate.future);
     _open.update((open) => open + 1);
+    _queued.update((queued) => queued + 1);
     // The closure runs in the zone of the caller, so each wait below resumes
     // there. The caller's zone is never a running mutation of this runtime.
+    final callerZone = Zone.current;
     return () async {
       try {
         // One asynchronous hop in either branch: the action never starts
@@ -167,12 +169,17 @@ extension RuntimeKernel on Runtime {
       } on Object {
         // Each mutation reports through its own result. The queue stays live.
       }
+      _queued.update((queued) => queued - 1);
       final marker = _Mutation();
+      // The timer runs in the zone of the caller, outside the mutation, so a
+      // listener of a slow report can request a mutation, which queues.
+      final slow = _watchSlow(operation, callerZone);
       try {
         return await Zone.current
             .fork(zoneValues: {_zoneKey: marker})
             .run<Future<Exit<DiFailure, A>>>(action);
       } finally {
+        slow?.cancel();
         marker.running.set(false);
         _open.update((open) => open - 1);
         gate.complete();

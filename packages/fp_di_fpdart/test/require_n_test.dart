@@ -244,17 +244,16 @@ void main() {
     test('a key without an argument is the key of its type', () async {
       final di = Scope(
         components: [
-          Component<BigInt>.value(value: BigInt.one),
-          Component<Uri>.value(value: Uri.parse('a:b')),
+          Component<List<int>>.value(value: [1]),
+          Component<Set<String>>.value(value: {'a'}),
           Component<String>.effect(
-            dependency: Dependency.require2<BigInt, Uri>().mapN<String>(
-              (a, b) => '$a $b',
-            ),
+            dependency: Dependency.require2<List<int>, Set<String>>()
+                .mapN<String>((a, b) => '$a $b'),
           ),
         ],
       );
       rightOf(await di.run());
-      expect(rightOf(di.nodes.last.value), '1 a:b');
+      expect(rightOf(di.nodes.last.value), '[1] {a}');
       rightOf(await di.dispose());
     });
 

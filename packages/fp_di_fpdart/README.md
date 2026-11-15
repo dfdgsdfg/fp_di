@@ -51,7 +51,7 @@ track `R` in a type. The package states the reads as a set of keys instead.
 The package has no layer composition operators, such as `>>>` or `++`. The
 scope derives the wiring from the graph of the keys.
 
-The package has no hold and no inspector yet.
+The package has no inspector yet.
 
 ## Structure
 
@@ -166,10 +166,12 @@ exit.match((cause) => print(cause.prettyPrint()), (scope) {});
 | `disposed` | the runtime removed the node |
 
 `run` checks the components before it creates anything. The check accumulates:
-the cause holds every duplicate key and then every undeclared key, each in
-declaration order, joined with `Both`. A key counts as declared when another
-component of the scope or any ancestor declares it. The ancestor can be
-`declared` still. A failed check changes nothing.
+the cause holds the problems of each declaration, then every duplicate key,
+and then every undeclared key, each group in declaration order, joined with
+`Both`. The problems of a declaration are the checks of [Key checks](#key-checks).
+A key counts as declared when another component of the scope or any ancestor
+declares it. The ancestor can be `declared` still. A failed check changes
+nothing.
 
 Then `run` creates one node for each component. A node starts when the nodes
 of the same scope that publish its keys have settled. Independent nodes start
@@ -208,6 +210,77 @@ and a call after the end is `Right`. `dispose` does not reconcile.
 other, in the order of the calls. A call from inside one of them, such as a
 dispose function that calls `run`, is a `ReentrantMutationFailure`. A callback
 that outlives the operation can start one.
+
+## Holds
+
+A consumer from outside the runtime, such as a page of a widget tree, can read
+a scope after a caller requested its disposal. A hold keeps the disposal back
+until the consumer leaves.
+
+```dart
+switch (scope.disposeHold(debugLabel: 'upload')) {
+  case Right(value: final hold):
+    try {
+      // Work that reads the scope.
+    } finally {
+      hold.close();
+    }
+  case Left(value: final failure):
+    // The scope is disposing. Skip the work.
+}
+```
+
+- `disposeHold` is a `Left` with a `DisposedScopeFailure` when the scope or an
+  ancestor accepted a disposal. The call is valid inside a lifecycle
+  operation.
+- `DisposeHold.close()` never throws. A second call does nothing, and a call
+  after the disposal started changes nothing. The last `close` of a subtree
+  queues the waiting disposal. A `close` inside a lifecycle operation, such as
+  a listener, queues the disposal after that operation.
+- `openHolds` lists the open holds of the scope and of its descendants as
+  `HoldState` values: `debugLabel`, `scopePath` (such as `child scope 1.2`),
+  `elapsed`, and `debugStackTrace`, which the runtime records only inside an
+  `assert`.
+
+A `dispose` call that meets an open hold in its subtree accepts the disposal at
+once, and the scope is `disposeRequested`. The disposal then waits outside the
+queue of the lifecycle operations. In that time the lookups answer, no
+node starts an activation, `Lazy.force` is a `DisposedLazyFailure`, and `run`
+is a `DisposedScopeFailure`. A hold does not stop a node that must release
+because an ancestor withdrew a publisher. `describe` ends the heading of a
+waiting scope with `(disposal waits for 2 holds: page, hold)`.
+
+A call of a descendant joins the disposal of an ancestor, and the holds of the
+whole subtree count. Do not wait for the result of `dispose` before you close
+the holds of the scope: the disposal waits for them.
+
+`dispose(ignoreHolds: true)` queues the disposal at once, also when an earlier
+call waits. The earlier call completes with the result of this disposal. The
+root reports an `IgnoredHoldsFailure(holds)` to `errors` after the transition
+that starts the disposal, when the call ignored an open hold. A caller that
+bounds the wait uses `timeout`, as `example/drain_scope.dart` shows.
+
+## Slow operations
+
+`Scope(onSlowMutation: listener, slowMutationThreshold: duration)` reports an
+operation that runs longer than the threshold. The default threshold is two
+seconds. The listener gets a `SlowMutation` at the threshold, and again after
+each further threshold, until the operation ends. Without a listener, the
+runtime starts no timer.
+
+| Field | Meaning |
+|---|---|
+| `operation` | `run`, `Scope.dispose`, `ComponentNode.dispose`, or `Scope.dispose (waiting for holds)` |
+| `elapsed` | how long the operation has run |
+| `running` | the labels of the activations in flight |
+| `ignoringCancellation` | the labels of the activations whose token is canceled and whose step did not return |
+| `disposing` | the owners whose dispose functions run, such as `<label> activation rollback` |
+| `queued` | the operations that wait behind this one |
+| `holds` | the open holds of a disposal that waits for holds |
+
+The timer runs outside the operation, so the listener can request an
+operation, which queues. A listener that throws leaves a `ListenerFailure` in
+`errors`.
 
 ## Observation
 
@@ -415,7 +488,7 @@ the list operations:
 final app = [...coreComponents, ...featureComponents];
 ```
 
-The extension `ComponentsOps` on `Iterable<Component<Object?>>` has five
+The extension `ComponentsOps` on `Iterable<Component<Object?>>` has these
 members:
 
 | Member | Meaning |
@@ -425,6 +498,12 @@ members:
 | `requires` | the required keys that no other component of the list publishes; a component does not satisfy its own requirement |
 | `reads` | every key and collection key that a component reads, without the keys that another component publishes; a collection key stays |
 | `overriddenBy(overrides)` | an `Exit` with a list in which each override replaces the one component that publishes its key, in place |
+| `replacing(key:, component:)` | an `Exit` with a list in which `component` replaces the one component that publishes `key`, in place |
+| `requiring(keys:, ancestorKeys:)` | the components that require a key of `keys`, directly or through another component of the result |
+| `withoutRequiring(keys:, ancestorKeys:)` | the components that `requiring` does not return |
+
+`where` and the list operations select and join components. `without(key)` has
+no member: `where` removes a component by its key.
 
 `overriddenBy` rejects instead of appending. The cause accumulates every
 problem in the order of the overrides, joined with `Both`:
@@ -434,6 +513,55 @@ problem in the order of the overrides, joined with `Both`:
 - A key that more than one component of the list publishes is a
   `DuplicateKeyFailure`.
 - Two overrides with the same key are a `DuplicateKeyFailure`.
+
+`requiring` names the components that a variant cannot start, because they
+require a key that the variant does not publish. A component is in the result
+when its `requires` holds a key of `keys`, or the key that another component of
+the result publishes. The reads of an effect count. An optional read and a
+collection read do not put a component in the result. A component that
+publishes a key of `keys` is not in the result for that reason, and each
+component that requires that key is. `ancestorKeys` holds the keys that an
+ancestor scope also publishes: a component of the result that publishes such a
+key does not take its readers with it. `ancestorKeys` does not take a key out
+of `keys`. The operations never fail, and their time is near-linear in the
+components and their required keys.
+
+```dart
+final removed = all.requiring(keys: absent);
+final session = sessionComponents.withoutRequiring(
+  keys: {...absent, ...removed.publishes},
+  ancestorKeys: all.withoutRequiring(keys: absent).publishes,
+);
+```
+
+`replacing` is an `Exit`. It is an `InvalidComponentFailure` when the
+component does not publish the key, an `UnmatchedOverrideFailure` when no
+component publishes the key, and a `DuplicateKeyFailure` when more than one
+does.
+
+## Key checks
+
+The constructors of a component never throw. A declaration that does not fit is
+a value that `run` reports with the other checks, in the cause of the `Left`.
+
+| Failure | Meaning |
+|---|---|
+| `UnnamedKeyFailure(key, owner)` | a published key or a read key has no name, and its type is a core value type: `bool`, `int`, `double`, `num`, `String`, `BigInt`, `DateTime`, `Duration`, `Uri`, `Symbol`, `Object`, or the nullable form of one |
+| `UnreachableKeyFailure(key)` | a published key has the type `Future<X>` or `FutureOr<X>`; no read can produce such a type |
+| `InvalidComponentFailure(owner, reason)` | the type argument is `void`, `dynamic`, or `Null`, or the type of the key is not the type argument |
+
+An extension type over `int` erases to `int` at run time, so a key of such a
+type needs a name: `DiKey<int>(name: 'port')`, or an extension type with a
+key of its own. An effect, a contribution, and a collection key are not
+checked, because they have no plain key or they always have a name.
+
+fp_di raises the check of the `Future` key when a component publishes, and it
+raises the other checks at construction. This package raises all of them in
+`run`, before any node exists. A list of components that Dart types as
+`List<Component<Object?>>` makes Dart infer `Object?` for a component without a
+type argument. Then the type of the key is not the type argument, and `run`
+fails with an `InvalidComponentFailure`. State the type argument of each
+component.
 
 ## Effects
 
@@ -464,6 +592,10 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 | `InactiveNodeFailure` | `value` of a node that is not active, and `whenActive` of a removed node |
 | `ListenerFailure` | a listener threw |
 | `UnsettledFailure` | the reconciliation did not settle |
+| `IgnoredHoldsFailure` | a disposal ignored open holds; the root reports it to `errors` |
+| `UnnamedKeyFailure` | a key without a name has a core value type |
+| `UnreachableKeyFailure` | a published key has a `Future` or `FutureOr` type |
+| `InvalidComponentFailure` | a component does not fit its type argument |
 
 A `DisposeFailure(owner, error)` is not a `DiFailure`. A dispose function that
 threw is a defect, so a `Die` holds the `DisposeFailure`.
@@ -503,8 +635,7 @@ child reads.
 ## Examples
 
 Each file in `example/` runs with `dart run`. Most files port an example of
-`fp_di`. The package has no hold yet, so some examples of `fp_di` have no
-port.
+`fp_di`. Only the example of the shape export has no port.
 
 ```sh
 dart run packages/fp_di_fpdart/example/checkout.dart
@@ -522,7 +653,7 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 | [`rollback.dart`](example/rollback.dart) | A failed run rolls back in reverse, and the retry is a second `run`; a failed program inside `use` disposes the scope |
 | [`reactive.dart`](example/reactive.dart) | A nearer publisher and a withdrawn publisher reach only the readers; a listener traces the nodes with `changedSince` |
 | [`session_scope.dart`](example/session_scope.dart) | A login child scope, and a logout that disposes it |
-| [`drain_scope.dart`](example/drain_scope.dart) | A logout flushes the database after the readers of the database release |
+| [`drain_scope.dart`](example/drain_scope.dart) | A logout flushes the database after the readers of the database release; an upload holds the scope, and a time limit ends the wait with `ignoreHolds` |
 | [`environments.dart`](example/environments.dart) | Platform, flavor, test fakes, and a two-stage boot with plain lists |
 | [`factory.dart`](example/factory.dart) | A new value for each call, from the nearest database |
 | [`cached_factory.dart`](example/cached_factory.dart) | One value for each id, released with the scope |
@@ -538,3 +669,20 @@ These examples of `fp_di` need a feature that this package does not have.
 | Example of `fp_di` | Reason |
 |---|---|
 | `shape_export.dart` | The package has no inspector and no shape export |
+
+## Known differences
+
+The package does not reproduce these behaviors of `fp_di`.
+
+- The cost of `run` is quadratic in the number of components. Each transition
+  copies the maps of the runtime. A scope of 2000 components runs in about two
+  seconds, and a scope of 4000 components runs in six to ten seconds. `fp_di`
+  runs the same scopes in less than one second.
+- A slow report names the operation `run`, where `fp_di` names it
+  `initialize`.
+- The rollback of the creation of a `Lazy` value does not appear in
+  `SlowMutation.disposing`.
+- A slow listener that throws leaves a `ListenerFailure` in `errors`. `fp_di`
+  leaves the error to the zone of the timer.
+- A `Component` constructor never throws. The checks of `fp_di` that throw at
+  construction are failures of `run` here.

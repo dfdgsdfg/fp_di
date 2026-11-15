@@ -312,6 +312,25 @@ List<ScopeId> subtree(RuntimeState s, ScopeId id) {
   return result;
 }
 
+/// The path of the scope [id], as `describeScope` names it: `scope` for the
+/// root, and `child scope 1.2` for the second child of the first child.
+///
+/// A scope has the index of its position among the children of its parent,
+/// counted from 1.
+String scopePath(RuntimeState s, ScopeId id) {
+  final indexes = <int>[];
+  var at = id;
+  var parent = scopeRecord(s, at).parent.toNullable();
+  while (parent != null) {
+    indexes.add(scopeRecord(s, parent).children.indexOf(at) + 1);
+    at = parent;
+    parent = scopeRecord(s, at).parent.toNullable();
+  }
+  return indexes.isEmpty
+      ? 'scope'
+      : 'child scope ${indexes.reversed.join('.')}';
+}
+
 /// The first key of the node [n] that its scope binds already, or `None`.
 ///
 /// A commit of the node fails when its scope binds one of its keys.
@@ -326,7 +345,8 @@ Option<DiKey<Object?>> conflictingPublication(RuntimeState s, NodeId n) {
 
 /// The check that runs before the initialization changes any state.
 ///
-/// The cause holds every problem, joined with `&`: the duplicate keys first,
+/// The cause holds every problem, joined with `&`: the problems of each
+/// declaration first, in the order of the components, then the duplicate keys,
 /// and then the undeclared keys. Each group follows the order of the
 /// declaration. The cause is empty when the components pass.
 ///
@@ -352,6 +372,7 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
     }
   }
   final problems = <Cause<DiFailure>>[
+    for (final member in members) ..._declarationProblems(member),
     for (final MapEntry(:key, value: labels) in owners.entries)
       if (labels.length > 1)
         Fail<DiFailure>(DuplicateKeyFailure(key, labels), StackTrace.current),
@@ -377,6 +398,33 @@ Cause<DiFailure> preCheck(RuntimeState s, ScopeId id) {
     const Empty<DiFailure>(),
     (all, next) => all & next,
   );
+}
+
+/// The problems of one declaration: a component that does not fit its type
+/// argument, a published key or a read key without a name of a core value
+/// type, and a published key that no read can produce.
+///
+/// An effect and a contribution publish no key, so no key check applies to
+/// them. A collection key always has a name.
+List<Cause<DiFailure>> _declarationProblems(Component<Object?> member) {
+  final label = member.label;
+  final found = <DiFailure>[];
+  final reason = member.invalidReason;
+  if (reason != null) found.add(InvalidComponentFailure(label, reason));
+  if (member.hasKey) {
+    if (member.key.needsName) {
+      found.add(UnnamedKeyFailure(member.key, owner: label));
+    }
+    if (member.key.isUnreachable) {
+      found.add(UnreachableKeyFailure(member.key));
+    }
+  }
+  for (final read in {...member.requires, ...member.optional}) {
+    if (read.needsName) found.add(UnnamedKeyFailure(read, owner: label));
+  }
+  return [
+    for (final failure in found) Fail<DiFailure>(failure, StackTrace.current),
+  ];
 }
 
 /// The node [root] and its transitive dependents that are active.

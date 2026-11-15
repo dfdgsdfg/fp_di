@@ -134,7 +134,11 @@ void main() {
     final failure = await failureOfRun(
       Scope(
         components: [
-          effect('hook', <String>[], reads: Dependency.require<int>()),
+          effect(
+            'hook',
+            <String>[],
+            reads: Dependency.require<int>(key: intKey),
+          ),
         ],
       ),
     );

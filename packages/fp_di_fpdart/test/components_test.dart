@@ -44,6 +44,7 @@ void main() {
   });
 
   test('a scope keeps an unmodifiable copy of the list', () {
+    // from: module_test.dart: keeps its components in order and is immutable
     final list = <Component<Object?>>[number(1, key: intKey)];
     final scope = Scope(components: list);
     list.add(number(2, key: const DiKey<int>(name: 'other')));

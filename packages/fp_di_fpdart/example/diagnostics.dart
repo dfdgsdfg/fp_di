@@ -73,6 +73,12 @@ String describe(DiFailure failure) => switch (failure) {
   DisposedLazyFailure() => 'lazy value after the disposal of its owner',
   UnsettledFailure(:final labels, :final passes) =>
     'unsettled: ${labels.join(', ')} after $passes passes',
+  IgnoredHoldsFailure(:final holds) => 'ignored ${holds.length} open holds',
+  UnnamedKeyFailure(:final key, :final owner) =>
+    'unnamed key: $owner uses $key',
+  UnreachableKeyFailure(:final key) => 'unreachable key: $key',
+  InvalidComponentFailure(:final owner, :final reason) =>
+    'invalid component: $owner, $reason',
 };
 
 /// Runs [scope] and prints the cause of the failure, if any.
@@ -92,7 +98,8 @@ Future<void> main() async {
   print('1. the check accumulates');
   // Two components publish `Database`, and two components read `Auth`, which
   // no component publishes. One run reports all three problems in one cause:
-  // every duplicate key first, then every undeclared key.
+  // every duplicate key first, then every undeclared key. The problems of each
+  // single declaration, such as a key without a name, come before both.
   await tryRun(
     'a broken list',
     Scope(

@@ -61,6 +61,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<int>(
+            key: intKey,
             dependency: Dependency<int>(create: () => throw StateError('x')),
           ),
         ],
@@ -165,6 +166,7 @@ void main() {
             final child = scope.kid(
               components: [
                 Component<String>(
+                  key: textKey,
                   dependency: Dependency.require<int>(
                     key: intKey,
                   ).map<String>((v) => 'child $v'),
@@ -174,7 +176,7 @@ void main() {
             final run = await child.run();
             return run
                 .mapLeft((cause) => cause.only)
-                .flatMap((_) => child.get<String>());
+                .flatMap((_) => child.get<String>(key: textKey));
           }),
         )
         .run();

@@ -9,26 +9,30 @@
 // - session: the live parts of one login, such as a socket and a composer. A
 //   logout drops them at once. Nothing waits for them.
 //
-// Two guarantees come from the graph:
+// The guarantees come from three places:
 //
 // 1. The dispose function of the database flushes before it closes. The
 //    runtime awaits it, and the values that the database reads stay open.
 // 2. A component that reads the database releases before it. The composer of
 //    the session saves its last draft in its own dispose function, and the
 //    database is still open then, also across scopes.
+// 3. Work outside the graph, here an upload that a logout does not cancel,
+//    holds the scope of the database with `disposeHold`. The disposal of
+//    that scope waits for the hold. The session scope has no hold, so it
+//    goes at once.
 //
-// This package has no hold. The fp_di version has a third guarantee: work
-// outside the graph holds a scope with `disposeHold`, and a logout bounds the
-// wait with a time limit. This example drops that part. Here a disposal never
-// waits for work that the graph does not know.
+// A logout bounds the wait: after a time limit it disposes the database with
+// `ignoreHolds`, and `Scope.errors` reports the holds that it ignored.
 //
 // Differences from the fp_di version:
 //
 // - The dispose of a parent scope disposes the child scopes first. The
 //   logout of Bob disposes only the database scope, and the session scope
 //   still goes first.
-// - `run()` and `dispose()` return an `Exit`. The example handles each one
-//   with `match` or `switch`.
+// - `run()` and `dispose()` return an `Exit`, and `disposeHold` returns an
+//   `Either`. The example handles each one with `match` or `switch`.
+// - `Scope.errors` gives a `Cause`. The report of the ignored holds is an
+//   `IgnoredHoldsFailure` in that cause.
 //
 // Run: dart run packages/fp_di_fpdart/example/drain_scope.dart
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
@@ -145,6 +149,34 @@ final sessionComponents = <Component<Object?>>[
   ),
 ];
 
+// --- Work outside the graph ------------------------------------------------
+
+/// An upload that a logout does not cancel. It writes its result to the
+/// database when it ends, so it holds the scope of the database until then.
+Future<void> upload(Scope dbScope, Duration takes) async {
+  // Guarantee 3: the hold delays the disposal of the database scope.
+  switch (dbScope.disposeHold(debugLabel: 'upload')) {
+    case Left(value: final failure):
+      print('  upload refused: $failure');
+    case Right(value: final hold):
+      try {
+        final db = dbScope.getOption<SessionDb>();
+        await Future<void>.delayed(takes);
+        db.match(
+          () => print('  upload found no database'),
+          (db) => db
+              .write('upload done')
+              .match(
+                (error) => print('  upload lost: $error'),
+                (_) => print('  upload wrote its result'),
+              ),
+        );
+      } finally {
+        hold.close();
+      }
+  }
+}
+
 // --- Login and logout ------------------------------------------------------
 
 final class Login {
@@ -188,10 +220,19 @@ Future<void> close(Scope scope) async {
   stopped.match((cause) => print(cause.prettyPrint()), (_) {});
 }
 
-/// Drops the session at once, and then lets the database finish its flush.
-Future<void> logout(Login login) async {
+/// Drops the session at once, and gives the database [limit] to finish.
+Future<void> logout(Login login, {required Duration limit}) async {
+  // The live parts go first. Nothing holds them.
   await close(login.session);
-  await close(login.db);
+  // The database waits for its holds, but not longer than the limit.
+  final stopped = await login.db.dispose().timeout(
+    limit,
+    onTimeout: () {
+      print('  the wait ended after $limit: ${login.db.openHolds}');
+      return login.db.dispose(ignoreHolds: true);
+    },
+  );
+  stopped.match((cause) => print(cause.prettyPrint()), (_) {});
 }
 
 /// Writes a draft through the composer of a session.
@@ -210,27 +251,35 @@ Future<void> main() async {
     case Right():
       break;
   }
+  final errors = app.errors.listen(
+    (cause) => print('  reported: ${cause.failures.join(', ')}'),
+  );
 
-  print('login alice');
+  print('login alice, an upload that ends in time');
   if (await login(app, 'alice') case Some(value: final alice)) {
     final db = alice.db.getOption<SessionDb>();
     draft(alice, 'hello');
-    print('logout alice: the session goes first, then the database');
-    await logout(alice);
+    final aliceUpload = upload(alice.db, const Duration(milliseconds: 50));
+    print('logout alice');
+    await logout(alice, limit: const Duration(seconds: 1));
+    await aliceUpload;
     print('  rows of alice: ${db.map((db) => db.stored)}');
   }
 
-  print('login bob');
+  print('login bob, an upload that does not end in time');
   if (await login(app, 'bob') case Some(value: final bob)) {
     final db = bob.db.getOption<SessionDb>();
     draft(bob, 'see you');
-    print('logout bob: dispose only the database scope');
-    // The database scope disposes its child scope first.
-    await close(bob.db);
-    print('  session phase: ${bob.session.phase.name}');
+    final bobUpload = upload(bob.db, const Duration(milliseconds: 300));
+    print('logout bob');
+    await logout(bob, limit: const Duration(milliseconds: 100));
+    // The upload ends after the database closed, so its write fails. The
+    // limit chose to lose it.
+    await bobUpload;
     print('  rows of bob: ${db.map((db) => db.stored)}');
   }
 
   print('shutdown');
   await close(app);
+  await errors.cancel();
 }

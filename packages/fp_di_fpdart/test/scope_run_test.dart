@@ -43,6 +43,7 @@ void main() {
         final scope = Scope(
           components: [
             Component<int>(
+              key: intKey,
               dependency: Dependency<int>(
                 create: () async {
                   await gate.future;
@@ -76,6 +77,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<int>(
+            key: intKey,
             dependency: Dependency<int>(
               create: () => ++attempts == 1 ? throw 'x' : attempts,
             ),
@@ -87,7 +89,7 @@ void main() {
       expect(scope.nodes, isEmpty);
       rightOf(await scope.run());
       expect(scope.phase, ScopePhase.initialized);
-      expect(rightOf(scope.get<int>()), 2);
+      expect(rightOf(scope.get<int>(key: intKey)), 2);
     });
 
     test('get answers before run, and is a Left after dispose', () async {
@@ -124,9 +126,12 @@ void main() {
     });
 
     test('get reads a published null', () async {
-      final scope = Scope(components: [Component<int?>.value(value: null)]);
+      const key = DiKey<int?>(name: 'maybe');
+      final scope = Scope(
+        components: [Component<int?>.value(value: null, key: key)],
+      );
       rightOf(await scope.run());
-      expect(rightOf(scope.get<int?>()), isNull);
+      expect(rightOf(scope.get<int?>(key: key)), isNull);
     });
   });
 
@@ -177,6 +182,7 @@ void main() {
         Completer<void> mine,
         Completer<void> theirs,
       ) => Component<T>(
+        key: DiKey<T>(name: '$value'),
         dependency: Dependency<T>(
           create: () async {
             mine.complete();
@@ -192,8 +198,8 @@ void main() {
         ],
       );
       rightOf(await scope.run().timeout(const Duration(seconds: 2)));
-      expect(rightOf(scope.get<int>()), 1);
-      expect(rightOf(scope.get<String>()), 'b');
+      expect(rightOf(scope.get<int>(key: const DiKey(name: '1'))), 1);
+      expect(rightOf(scope.get<String>(key: const DiKey(name: 'b'))), 'b');
     });
 
     test('a node starts when its own publishers committed', () async {
@@ -342,6 +348,7 @@ void main() {
               failDispose: 'd rollback',
             ),
             Component<double>(
+              key: const DiKey<double>(name: 'c'),
               debugLabel: 'c',
               dependency: Dependency.require<int>(
                 key: intKey,
@@ -616,7 +623,12 @@ void main() {
             log,
             key: textKey,
           ),
-          loggedReading<double>('u2', Dependency.require<BigInt>(), 1.0, log),
+          loggedReading<double>(
+            'u2',
+            Dependency.require<BigInt>(key: const DiKey<BigInt>(name: 'big')),
+            1.0,
+            log,
+          ),
         ],
       );
       final cause = await causeOfRun(scope);

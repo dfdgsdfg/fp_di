@@ -12,9 +12,18 @@ extension RuntimeDisposal on Runtime {
   /// follow descending node id. The task does not reconcile: a reader of a
   /// disposed node lives in the same scope or in a descendant, so it dies with
   /// the node.
-  Task<Cause<DiFailure>> disposeScope(ScopeId id) => Task(() async {
+  ///
+  /// The holds in [ignored] are the open holds that the call ignored. The task
+  /// reports them to `errors` after the transition that starts the disposal.
+  Task<Cause<DiFailure>> disposeScope(
+    ScopeId id, {
+    List<HoldState> ignored = const [],
+  }) => Task(() async {
     final tree = subtree(state, id);
     apply((s) => markDisposing(s, tree));
+    if (ignored.isNotEmpty) {
+      report(Fail<DiFailure>(IgnoredHoldsFailure(ignored), StackTrace.current));
+    }
     final included = tree.toSet();
     final owned = [
       for (final node in liveNodes(state))
@@ -29,15 +38,19 @@ extension RuntimeDisposal on Runtime {
   });
 
   /// The nearest scope, from [id] to the root, that accepted a disposal.
-  Option<Disposal> disposalOwner(ScopeId id) {
+  Option<ScopeId> disposalOwnerId(ScopeId id) {
     ScopeId? at = id;
     while (at != null) {
-      final found = _scopeDisposals.now[at];
-      if (found != null) return Some(found);
+      if (_scopeDisposals.now.containsKey(at)) return Some(at);
       at = scopeRecord(state, at).parent.toNullable();
     }
     return const None();
   }
+
+  /// The disposal of the nearest scope, from [id] to the root, that accepted
+  /// a disposal.
+  Option<Disposal> disposalOwner(ScopeId id) =>
+      disposalOwnerId(id).map((owner) => _scopeDisposals.now[owner]!);
 
   /// Disposes the scope [id], as `Scope.dispose` does.
   ///
@@ -66,8 +79,17 @@ extension RuntimeDisposal on Runtime {
       );
     }
     final joined = owner.toNullable();
-    if (joined != null) return joined.result;
+    if (joined != null) {
+      // A call that ignores the holds ends the wait of the disposal that it
+      // joins.
+      final at = disposalOwnerId(id).toNullable();
+      if (ignoreHolds && at != null) unpark(at, holdStatesOf(at));
+      return joined.result;
+    }
 
+    // The call runs outside a lifecycle operation, so its zone can queue the
+    // disposal when a hold closes inside one.
+    final callerZone = Zone.current;
     final changed = write((s) => requestScopeDisposal(s, id));
     final included = subtree(state, id).toSet();
     for (final node in liveNodes(state)) {
@@ -78,42 +100,48 @@ extension RuntimeDisposal on Runtime {
     final completer = Completer<Exit<DiFailure, Unit>>();
     final disposal = Disposal(completer.future);
     _scopeDisposals.update((all) => {...all, id: disposal});
-    // The one decision point: queue the disposal now, or park it. A later
-    // phase parks it while a hold of the subtree is open.
-    _queueDisposal(id, disposal, completer);
+    // The one decision point: queue the disposal now, or park it while a hold
+    // of the subtree is open. A call with `ignoreHolds` never parks.
+    if (ignoreHolds || subtreeHolds(id) == 0) {
+      _queueNow(
+        id,
+        disposal,
+        completer,
+        ignoreHolds ? holdStatesOf(id) : const [],
+        callerZone,
+      );
+    } else {
+      park(id, disposal, completer, callerZone);
+    }
     // The disposal is recorded before the listeners run, so a `dispose` call
     // from a listener joins it.
     if (changed) transition();
     return disposal.result;
   }
 
-  /// Queues the disposal mutation of the scope [id].
-  void _queueDisposal(
+  /// Queues the disposal mutation of the scope [id], and gives its result.
+  ///
+  /// The holds in [ignored] are the open holds that the call ignored.
+  Future<Exit<DiFailure, Unit>> _queueDisposal(
     ScopeId id,
-    Disposal disposal,
-    Completer<Exit<DiFailure, Unit>> completer,
-  ) {
-    mutate<Unit>('Scope.dispose', () async {
-      // A scope that an ancestor disposed shares the result of the ancestor.
-      if (scopeRecord(state, id).disposed) {
-        final parent = scopeRecord(state, id).parent.toNullable();
-        final Option<Disposal> ancestor = parent == null
-            ? const None()
-            : disposalOwner(parent);
-        return ancestor.match(
-          () async => const Right<Cause<DiFailure>, Unit>(unit),
-          (shared) => shared.result,
-        );
-      }
-      final failures = await disposeScope(id).run();
-      return failures.isEmpty
-          ? const Right<Cause<DiFailure>, Unit>(unit)
-          : Left<Cause<DiFailure>, Unit>(failures);
-    }).then((exit) {
-      completer.complete(exit);
-      disposal.finished.set(true);
-    });
-  }
+    List<HoldState> ignored,
+  ) => mutate<Unit>('Scope.dispose', () async {
+    // A scope that an ancestor disposed shares the result of the ancestor.
+    if (scopeRecord(state, id).disposed) {
+      final parent = scopeRecord(state, id).parent.toNullable();
+      final Option<Disposal> ancestor = parent == null
+          ? const None()
+          : disposalOwner(parent);
+      return ancestor.match(
+        () async => const Right<Cause<DiFailure>, Unit>(unit),
+        (shared) => shared.result,
+      );
+    }
+    final failures = await disposeScope(id, ignored: ignored).run();
+    return failures.isEmpty
+        ? const Right<Cause<DiFailure>, Unit>(unit)
+        : Left<Cause<DiFailure>, Unit>(failures);
+  });
 
   /// Disposes the node [n], as `ComponentNode.dispose` does.
   ///

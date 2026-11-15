@@ -6,9 +6,11 @@ import 'cause.dart';
 import 'component.dart';
 import 'core/core.dart';
 import 'failure.dart';
+import 'hold.dart';
 import 'key.dart';
 import 'node.dart';
 import 'runtime/runtime.dart';
+import 'slow_mutation.dart';
 
 export 'core/ids.dart' show NodeId;
 export 'core/phases.dart' show NodePhase, ScopePhase;
@@ -42,8 +44,23 @@ final class Scope {
   ///
   /// The scope keeps a copy of the list. The scope owns a new runtime, which
   /// its children share.
-  factory Scope({required List<Component<Object?>> components}) {
-    final runtime = Runtime.create();
+  ///
+  /// A lifecycle operation of the runtime that runs longer than
+  /// [slowMutationThreshold] gives a [SlowMutation] to [onSlowMutation], and
+  /// again after each further threshold, until the operation ends. A disposal
+  /// that waits for holds reports in the same way. Without [onSlowMutation]
+  /// the runtime starts no timer. The listener runs outside the operation, so
+  /// it can request an operation, which queues. A listener that throws leaves
+  /// a [ListenerFailure] in [errors].
+  factory Scope({
+    required List<Component<Object?>> components,
+    SlowMutationListener? onSlowMutation,
+    Duration slowMutationThreshold = const Duration(seconds: 2),
+  }) {
+    final runtime = Runtime.create(
+      onSlowMutation: onSlowMutation,
+      slowMutationThreshold: slowMutationThreshold,
+    );
     late final ScopeId id;
     runtime.write((state) {
       final (next, created) = declareScope(state, const None(), components);
@@ -153,7 +170,9 @@ final class Scope {
   /// a `Left` when the scope is disposing or disposed.
   Either<DiFailure, String> describe() {
     if (_gone) return Left(const DisposedScopeFailure('describe'));
-    return Right(describeScope(_runtime.state, _id));
+    return Right(
+      describeScope(_runtime.state, _id, waiting: _runtime.waitingLabels()),
+    );
   }
 
   /// The failures that no caller receives, for the whole tree of scopes.
@@ -253,9 +272,42 @@ final class Scope {
   /// `Right`. A call inside a lifecycle operation gives a
   /// [ReentrantMutationFailure].
   ///
-  /// The argument [ignoreHolds] is reserved for the holds of a later version.
+  /// The disposal waits while a hold of this scope or of a descendant is open
+  /// ([disposeHold]). The phase is `disposeRequested` in that time: the
+  /// lookups answer, no node starts an activation, and `Lazy.force` fails with
+  /// a [DisposedLazyFailure]. A wait does not block the queue of the other
+  /// lifecycle operations. The disposal starts when the last hold closes.
+  ///
+  /// With [ignoreHolds], the disposal starts at once, also when an earlier
+  /// call waits. That call then shares the result of this disposal. The root
+  /// reports an [IgnoredHoldsFailure] to [errors] after the transition that
+  /// starts the disposal, when the call ignored an open hold. Do not wait for
+  /// the result before you close the holds of this scope: the disposal waits
+  /// for them.
   Future<Exit<DiFailure, Unit>> dispose({bool ignoreHolds = false}) =>
       _runtime.disposeScopeCall(_id, ignoreHolds: ignoreHolds);
+
+  /// Delays the disposal of this scope until the returned hold closes.
+  ///
+  /// A consumer that reads this scope from outside the runtime, such as a page
+  /// of a widget tree, takes a hold and closes it when it leaves. A [dispose]
+  /// call then marks the scope disposed at once and cancels its activations,
+  /// but it releases the nodes only after every hold of this scope and of its
+  /// descendants closed, or after a call with `ignoreHolds`.
+  ///
+  /// The result is a `Left` with a [DisposedScopeFailure] when this scope or
+  /// an ancestor accepted a disposal. The call is valid inside a lifecycle
+  /// operation. [debugLabel] names the holder in [openHolds], in [describe],
+  /// and in the reports of a slow wait and of a disposal that ignored the
+  /// hold.
+  Either<DiFailure, DisposeHold> disposeHold({String? debugLabel}) =>
+      _runtime.disposeHold(_id, debugLabel);
+
+  /// The open holds of the disposal of this scope and of its descendants.
+  ///
+  /// The read answers in every phase and changes no state.
+  List<HoldState> get openHolds =>
+      List.unmodifiable(_runtime.holdStatesOf(_id));
 
   /// Runs [program] against the scope and always disposes the scope.
   ///

@@ -95,6 +95,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<String>(
+            key: const DiKey<String>(name: 'text'),
             dependency: Dependency<int>.of(
               1,
             ).map<String>((v) => 'v$v', dispose: (v) => log.add('dispose $v')),
@@ -140,6 +141,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<int>(
+            key: const DiKey<int>(name: 'broken'),
             debugLabel: 'broken',
             dependency: Dependency<int>.of(1).ap(
               Dependency<int Function(int)>.of((_) => throw StateError('x')),
@@ -280,7 +282,12 @@ void main() {
       // The same fold drives the validation of a scope: every required key
       // that the fold reports is undeclared in a scope without publishers.
       final scope = Scope(
-        components: [Component<String>(dependency: dependency)],
+        components: [
+          Component<String>(
+            key: const DiKey<String>(name: 'out'),
+            dependency: dependency,
+          ),
+        ],
       );
       final cause = await causeOfRun(scope);
       expect({

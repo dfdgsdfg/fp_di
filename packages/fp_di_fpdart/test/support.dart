@@ -28,7 +28,8 @@ Component<T> logged<T>(
   DiKey<T>? key,
   Object? failDispose,
 }) => Component<T>(
-  key: key,
+  // A key of a core value type needs a name.
+  key: key ?? (DiKey<T>().needsName ? DiKey<T>(name: name) : null),
   debugLabel: name,
   dependency: Dependency<T>(
     create: () {
@@ -51,7 +52,7 @@ Component<T> loggedReading<T>(
   DiKey<T>? key,
   Object? failDispose,
 }) => Component<T>(
-  key: key,
+  key: key ?? (DiKey<T>().needsName ? DiKey<T>(name: name) : null),
   debugLabel: name,
   dependency: read.map<T>(
     (_) {

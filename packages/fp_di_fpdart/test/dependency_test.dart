@@ -129,6 +129,7 @@ void main() {
       final scope = Scope(
         components: [
           Component<int>(
+            key: intKey,
             dependency: (d(1), d(2), d(3), d(4), d(5), d(6), d(7), d(8)).zip
                 .mapN<int>(
                   (a, b, c, e, f, g, h, i) => a + b + c + e + f + g + h + i,
@@ -137,7 +138,7 @@ void main() {
         ],
       );
       rightOf(await scope.run());
-      expect(rightOf(scope.get<int>()), 36);
+      expect(rightOf(scope.get<int>(key: intKey)), 36);
     });
   });
 
@@ -146,7 +147,10 @@ void main() {
       var created = 0;
       final scope = Scope(
         components: [
-          Component<int>(dependency: Dependency<int>(create: () => ++created)),
+          Component<int>(
+            key: intKey,
+            dependency: Dependency<int>(create: () => ++created),
+          ),
         ],
       );
       expect(created, 0);
@@ -157,11 +161,16 @@ void main() {
     test('create, task, and taskEither publish their values', () async {
       final scope = Scope(
         components: [
-          Component<int>(dependency: Dependency<int>(create: () async => 1)),
+          Component<int>(
+            key: intKey,
+            dependency: Dependency<int>(create: () async => 1),
+          ),
           Component<String>(
+            key: textKey,
             dependency: Dependency.task<String>(Task(() async => 'two')),
           ),
           Component<bool>(
+            key: flagKey,
             dependency: Dependency.taskEither<String, bool>(
               TaskEither.right(true),
             ),
@@ -169,15 +178,16 @@ void main() {
         ],
       );
       rightOf(await scope.run());
-      expect(rightOf(scope.get<int>()), 1);
-      expect(rightOf(scope.get<String>()), 'two');
-      expect(rightOf(scope.get<bool>()), isTrue);
+      expect(rightOf(scope.get<int>(key: intKey)), 1);
+      expect(rightOf(scope.get<String>(key: textKey)), 'two');
+      expect(rightOf(scope.get<bool>(key: flagKey)), isTrue);
     });
 
     test('mapTask and mapTaskEither run after the earlier step', () async {
       final scope = Scope(
         components: [
           Component<int>(
+            key: intKey,
             dependency: Dependency<int>.of(2)
                 .mapTask<int>((v) => Task(() async => v * 3))
                 .mapTaskEither<String, int>((v) => TaskEither.right(v + 1)),
@@ -185,7 +195,7 @@ void main() {
         ],
       );
       rightOf(await scope.run());
-      expect(rightOf(scope.get<int>()), 7);
+      expect(rightOf(scope.get<int>(key: intKey)), 7);
     });
 
     test('a throw from create becomes an ActivationFailure', () async {
@@ -194,6 +204,7 @@ void main() {
         Scope(
           components: [
             Component<int>(
+              key: intKey,
               debugLabel: 'broken',
               dependency: Dependency<int>(create: () => throw error),
             ),
@@ -230,7 +241,9 @@ void main() {
                 }
               }, dispose: (_) => log.add('never'));
       final cause = await causeOfRun(
-        Scope(components: [Component<int>(dependency: dependency)]),
+        Scope(
+          components: [Component<int>(key: intKey, dependency: dependency)],
+        ),
       );
       // The failure, then the rollback: Then(Fail, Die).
       expect(cause, isA<Then<DiFailure>>());
@@ -245,7 +258,7 @@ void main() {
       expect(cause.defects, hasLength(1));
       final defect = cause.defects.single as DisposeFailure;
       expect(defect.error, isA<StateError>());
-      expect(defect.owner, 'DiKey<int>');
+      expect(defect.owner, 'DiKey<int>(int)');
     });
 
     test('a Left from mapTaskEither is the error, not wrapped', () async {
@@ -261,7 +274,9 @@ void main() {
                 dispose: (_) => log.add('never'),
               );
       final cause = await causeOfRun(
-        Scope(components: [Component<int>(dependency: dependency)]),
+        Scope(
+          components: [Component<int>(key: intKey, dependency: dependency)],
+        ),
       );
       expect(cause, isA<Fail<DiFailure>>());
       expect((cause.only as ActivationFailure).error, 'invalid');
@@ -275,6 +290,7 @@ void main() {
         Scope(
           components: [
             Component<int>(
+              key: intKey,
               dependency: Dependency.taskEither<int, int>(TaskEither.left(7)),
             ),
           ],
@@ -295,10 +311,10 @@ void main() {
                 )
                 .map<int>((v) => v + 1, dispose: (_) => log.add('third'));
         final scope = Scope(
-          components: [Component<int>(dependency: dependency)],
+          components: [Component<int>(key: intKey, dependency: dependency)],
         );
         rightOf(await scope.run());
-        expect(rightOf(scope.get<int>()), 3);
+        expect(rightOf(scope.get<int>(key: intKey)), 3);
         rightOf(await scope.dispose());
         expect(log, ['third', 'second', 'first']);
       },
@@ -306,7 +322,9 @@ void main() {
 
     test('Dependency.of owns nothing', () async {
       final scope = Scope(
-        components: [Component<int>(dependency: Dependency<int>.of(4))],
+        components: [
+          Component<int>(key: intKey, dependency: Dependency<int>.of(4)),
+        ],
       );
       rightOf(await scope.run());
       rightOf(await scope.dispose());
@@ -347,13 +365,15 @@ void main() {
         final disposed = <Object>[];
         final components = <Component<Object?>>[
           Component<int>(
+            key: intKey,
             dependency: Dependency<int>(
               create: () => 1,
               dispose: (int value) => disposed.add(value),
             ),
           ),
           Component<String>(
-            dependency: Dependency.require<int>().map<String>(
+            key: textKey,
+            dependency: Dependency.require<int>(key: intKey).map<String>(
               (v) => 'v$v',
               dispose: (String value) => disposed.add(value),
             ),

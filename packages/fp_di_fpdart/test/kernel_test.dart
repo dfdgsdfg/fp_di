@@ -310,6 +310,7 @@ void main() {
         components: [
           number(a, 1),
           Component<int>(
+            key: const DiKey<int>(name: 'named'),
             debugLabel: 'named',
             dependency: Dependency<int>.of(2),
           ),

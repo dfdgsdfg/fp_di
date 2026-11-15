@@ -20,10 +20,13 @@ import '../core/core.dart';
 import '../dependency.dart';
 import '../failure.dart';
 import '../finalizers.dart';
+import '../hold.dart';
 import '../key.dart';
+import '../slow_mutation.dart';
 
 part 'activation.dart';
 part 'disposal.dart';
+part 'holds.dart';
 part 'initialize.dart';
 part 'kernel.dart';
 part 'reconcile.dart';
@@ -82,6 +85,50 @@ final class Disposal {
   final IORef<bool> finished;
 }
 
+/// One open hold of a disposal, as the runtime keeps it.
+final class HoldEntry {
+  /// Creates a hold with the [debugLabel]. The clock of the hold starts now.
+  HoldEntry(this.debugLabel, this.debugStackTrace)
+    : _clock = Stopwatch()..start();
+
+  /// The label that the holder gave, or `null`.
+  final String? debugLabel;
+
+  /// The stack trace of the `disposeHold` call. The runtime records it inside
+  /// an `assert` only.
+  final StackTrace? debugStackTrace;
+
+  final Stopwatch _clock;
+
+  /// The state of the hold in the scope with the path [scopePath].
+  HoldState stateIn(String scopePath) => HoldState(
+    debugLabel: debugLabel,
+    scopePath: scopePath,
+    elapsed: _clock.elapsed,
+    debugStackTrace: debugStackTrace,
+  );
+}
+
+/// A disposal that waits for holds, outside the queue of the lifecycle
+/// operations.
+final class Parked {
+  /// Creates the record of a parked disposal.
+  Parked(this.disposal, this.completer, this.callerZone, this.timer);
+
+  /// The disposal that the callers share.
+  final Disposal disposal;
+
+  /// The completer of the result of [disposal].
+  final Completer<Exit<DiFailure, Unit>> completer;
+
+  /// The zone of the call that accepted the disposal. It is never a running
+  /// mutation, so the disposal can queue from there.
+  final Zone callerZone;
+
+  /// The timer of the slow report, or `null` without a listener.
+  final Timer? timer;
+}
+
 /// The marker of a running mutation. A zone carries it.
 final class _Mutation {
   _Mutation() : running = IORef.create<bool>(true).run();
@@ -108,7 +155,7 @@ extension _Cell<A> on IORef<A> {
 
 /// The runtime of one root scope. The children of the root share it.
 final class Runtime {
-  Runtime._()
+  Runtime._(this._onSlow, this._threshold)
     : _state = IORef.create<RuntimeState>(RuntimeState.empty).run(),
       _queueTail = IORef.create<Future<void>>(Future<void>.value()).run(),
       _open = IORef.create<int>(0).run(),
@@ -126,10 +173,27 @@ final class Runtime {
       ).run(),
       _scopeDisposals = IORef.create<Map<ScopeId, Disposal>>(const {}).run(),
       _nodeDisposals = IORef.create<Map<NodeId, Disposal>>(const {}).run(),
+      _holds = IORef.create<Map<ScopeId, List<HoldEntry>>>(const {}).run(),
+      _parked = IORef.create<Map<ScopeId, Parked>>(const {}).run(),
+      _releasing = IORef.create<List<String>>(const []).run(),
+      _queued = IORef.create<int>(0).run(),
       _errors = StreamController<Cause<DiFailure>>.broadcast(sync: true);
 
   /// Creates the runtime of a new root.
-  factory Runtime.create() => Runtime._();
+  ///
+  /// The runtime reports to [onSlowMutation] each time an operation runs
+  /// another [slowMutationThreshold] longer. Without a listener the runtime
+  /// starts no timer.
+  factory Runtime.create({
+    SlowMutationListener? onSlowMutation,
+    Duration slowMutationThreshold = const Duration(seconds: 2),
+  }) => Runtime._(onSlowMutation, slowMutationThreshold);
+
+  /// The listener of the slow reports, or `null`.
+  final SlowMutationListener? _onSlow;
+
+  /// The time that an operation runs between two slow reports.
+  final Duration _threshold;
 
   /// The state of the runtime. It is the only source of truth for the rules of
   /// the core.
@@ -187,6 +251,18 @@ final class Runtime {
 
   /// The disposal that a node accepted. Every caller shares it.
   final IORef<Map<NodeId, Disposal>> _nodeDisposals;
+
+  /// The open holds of each scope, in the order of the calls.
+  final IORef<Map<ScopeId, List<HoldEntry>>> _holds;
+
+  /// The disposals that wait for holds, by the scope that accepted them.
+  final IORef<Map<ScopeId, Parked>> _parked;
+
+  /// The owners whose dispose functions run now, in the order they started.
+  final IORef<List<String>> _releasing;
+
+  /// The number of operations that wait for an earlier operation to end.
+  final IORef<int> _queued;
 
   /// The stream of the failures that no caller receives. The controller is the
   /// only effect cell that is not an `IORef`: a stream cannot be a value.

@@ -14,8 +14,16 @@ import 'snapshots.dart';
 /// component once: the entry of its node, or `declared` when it has no live
 /// node. A child scope is indented below its parent, with its path.
 ///
+/// A scope that [waiting] names has a disposal that waits for holds. Its
+/// heading ends with `(disposal waits for 1 hold: label)`, or with the count
+/// and the labels of several holds.
+///
 /// The format is for people and can change. Do not parse it.
-String describeScope(RuntimeState s, ScopeId id) {
+String describeScope(
+  RuntimeState s,
+  ScopeId id, {
+  Map<ScopeId, List<String>> waiting = const {},
+}) {
   final lines = <String>[];
 
   String labeled(String label, Object? key) =>
@@ -25,7 +33,13 @@ String describeScope(RuntimeState s, ScopeId id) {
     final record = scopeRecord(s, at);
     final indent = '  ' * depth;
     final title = path.isEmpty ? 'scope' : '${indent}child scope $path';
-    lines.add(record.initialized ? title : '$title (not initialized)');
+    var heading = record.initialized ? title : '$title (not initialized)';
+    final holds = waiting[at];
+    if (holds != null) {
+      final count = holds.length == 1 ? '1 hold' : '${holds.length} holds';
+      heading = '$heading (disposal waits for $count: ${holds.join(', ')})';
+    }
+    lines.add(heading);
 
     String entryOf(NodeId n) {
       final state = nodeState(s, n);

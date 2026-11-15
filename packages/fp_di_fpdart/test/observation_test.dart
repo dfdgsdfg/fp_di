@@ -67,7 +67,12 @@ void main() {
         ],
       );
       final sibling = root.kid(
-        components: [Component<bool>.value(value: true)],
+        components: [
+          Component<bool>.value(
+            key: const DiKey<bool>(name: 'flag'),
+            value: true,
+          ),
+        ],
       );
       rightOf(await sibling.run());
       final states = <ScopeState>[];
@@ -293,7 +298,14 @@ void main() {
       final before = root.state;
       // The child leaves, and a new scope adds a node.
       rightOf(await child.dispose());
-      final other = root.kid(components: [Component<bool>.value(value: true)]);
+      final other = root.kid(
+        components: [
+          Component<bool>.value(
+            key: const DiKey<bool>(name: 'flag'),
+            value: true,
+          ),
+        ],
+      );
       rightOf(await other.run());
       final pairs = root.state.changedSince(before);
       expect(pairs.map((p) => (p.$1?.phase, p.$2?.phase)), [

@@ -51,6 +51,25 @@ final class DiKey<T> implements DiKeyBase {
   @override
   int get hashCode => Object.hash(T, name);
 
+  /// Whether the key has no name and its type is a core value type, such as
+  /// `int` or `String?`.
+  ///
+  /// An extension type over a core value type erases to that type at run
+  /// time, so two such keys without a name are equal. A scope refuses a
+  /// component that publishes or reads such a key: `run` fails with an
+  /// [UnnamedKeyFailure].
+  bool get needsName => name == null && _coreValueTypes.contains(type);
+
+  /// Whether the key names a type that no lookup can produce.
+  ///
+  /// `FutureOr<X>` and `Future<X>` arise from the inference of a return type,
+  /// never from a deliberate binding. A scope refuses a component that
+  /// publishes such a key: `run` fails with an [UnreachableKeyFailure].
+  bool get isUnreachable {
+    final text = type.toString();
+    return text.startsWith('FutureOr<') || text.startsWith('Future<');
+  }
+
   @override
   String toString() => name == null ? 'DiKey<$T>' : 'DiKey<$T>($name)';
 }
@@ -189,3 +208,32 @@ final class ContributionKey extends DiKey<Object?> {
   @override
   String toString() => 'contribution to $set';
 }
+
+Type _typeOf<T>() => T;
+
+/// The types that a key needs a name for: the core value types and their
+/// nullable forms.
+final Set<Type> _coreValueTypes = {
+  _typeOf<bool>(),
+  _typeOf<bool?>(),
+  _typeOf<int>(),
+  _typeOf<int?>(),
+  _typeOf<double>(),
+  _typeOf<double?>(),
+  _typeOf<num>(),
+  _typeOf<num?>(),
+  _typeOf<String>(),
+  _typeOf<String?>(),
+  _typeOf<BigInt>(),
+  _typeOf<BigInt?>(),
+  _typeOf<DateTime>(),
+  _typeOf<DateTime?>(),
+  _typeOf<Duration>(),
+  _typeOf<Duration?>(),
+  _typeOf<Uri>(),
+  _typeOf<Uri?>(),
+  _typeOf<Symbol>(),
+  _typeOf<Symbol?>(),
+  _typeOf<Object>(),
+  _typeOf<Object?>(),
+};

@@ -140,7 +140,10 @@ extension RuntimeActivation on Runtime {
     // first dispose function runs.
     final reason = activation.token.reason;
     activation.token.cancel(CancelReason.failure);
-    final rollback = await owned.now.release().run();
+    final rollback = await releaseFor(
+      '${labelOf(state, n)} activation rollback',
+      owned.now,
+    ).run();
     void end({
       required Option<Cause<DiFailure>> failure,
       required Set<NodeId> awaiting,
@@ -372,7 +375,10 @@ extension RuntimeActivation on Runtime {
         for (final dependent in dependentsOf(state, n)) {
           failures += await deactivate(dependent, permanent: false).run();
         }
-        final own = await nodeRecord(state, n).finalizers.release().run();
+        final own = await releaseFor(
+          labelOf(state, n),
+          nodeRecord(state, n).finalizers,
+        ).run();
         apply(
           (s) =>
               endRelease(s, n, ownFailed: !own.isEmpty, permanent: permanent),
