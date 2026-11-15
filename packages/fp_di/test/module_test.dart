@@ -713,6 +713,59 @@ void main() {
   });
 
   group('scope dispose', () {
+    test('does not retry a failed activation of another scope', () async {
+      const base = DiKey<int>(name: 'base');
+      var attempts = 0;
+      final root = Scope(
+        module: Module(components: [Component<int>.value(value: 1, key: base)]),
+      );
+      final reports = <DiException>[];
+      root.errors.listen(reports.add);
+      final reader = root.child(
+        module: Module(
+          components: [
+            Component<int>(
+              key: const DiKey<int>(name: 'reader'),
+              dependency: Dependency.require<int>(key: base).map((value) {
+                attempts++;
+                throw StateError('reader fails');
+              }),
+            ),
+          ],
+        ),
+      );
+      // The reader waits, and the root wakes it: an automatic activation
+      // that fails and leaves the node failed, with its requirement met.
+      await reader.initialize();
+      await root.initialize();
+      expect(attempts, 1);
+      expect(reader.nodes.single.state.phase, NodePhase.activationFailed);
+
+      final sibling = root.child(
+        module: Module(
+          components: [
+            Component<int>.value(
+              value: 2,
+              key: const DiKey<int>(name: 'other'),
+            ),
+          ],
+        ),
+      );
+      // The closing reconciliation of `initialize` retries the failed
+      // reader once, as every reconciliation does.
+      await sibling.initialize();
+      final before = attempts;
+      final reported = reports.length;
+      await sibling.dispose();
+
+      // A lookup reads only ancestors, so no node outside the sibling read
+      // its bindings, and the disposal does not reconcile.
+      expect(attempts, before, reason: 'the disposal retried the reader');
+      expect(reader.nodes.single.state.phase, NodePhase.activationFailed);
+      expect(reports, hasLength(reported));
+      await root.dispose();
+    });
+
     test('releases in reverse declaration order', () async {
       final log = <String>[];
       final di = Scope(

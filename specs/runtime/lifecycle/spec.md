@@ -1024,7 +1024,7 @@ sequenceDiagram
   par members that do not read each other
     Runtime->>Member: deactivate permanently, each after the nodes that read it
   end
-  Runtime->>Runtime: reconcile once
+  Runtime->>Runtime: remove the bindings of the scope and its descendants, without a reconciliation
   Runtime-->>App: completion or DisposeException
 ```
 
@@ -1092,7 +1092,13 @@ descendants that are not disposed yet, inside one mutation, in
 the teardown order of **Concurrent teardown** (R-UC-RT-LC-021). The runtime MUST skip a member that its own node
 already disposed. It MUST NOT deactivate that member again. Dependents in other
 scopes deactivate before their publishers, as for any withdrawal. The runtime
-MUST then reconcile once and aggregate dispose failures in one `DisposeException`.
+MUST aggregate dispose failures in one `DisposeException`. The disposal MUST NOT
+reconcile. A lookup goes from a scope to its ancestors only, so only a node of
+the scope or of a descendant reads a binding of the scope, and the disposal
+releases those nodes. No other node has a changed target. A reconciliation
+would only retry the failed activations of other scopes, and the disposal of a
+scope does not retry them. The disposal of one member reconciles, because a
+reader of its key can then resolve the key in an ancestor.
 A second disposal MUST NOT release anything again. While the disposal runs,
 until its whole mutation finishes, including after the scope is marked
 disposed, a second call MUST complete with its result, including its
@@ -2203,7 +2209,7 @@ conforms.
 - **Target:** `Module`, `Scope(module: module)`, `Scope.child`, `Scope.initialize`, `Scope.dispose`
 - **Files:** `packages/fp_di/test/module_test.dart`
 - **Fixtures:** `Dependency` members with a shared log, a member that throws, members whose release throws, a duplicate key, a seeded shuffle of 2000 members with random acyclic dependencies.
-- **Pass:** Reverse chains of 4 and 300 levels are active after one `initialize`. A member that needs an absent key waits while its sibling runs. A throwing member leaves no binding and no live dormant member, the log shows reverse cleanup, and a retry repeats the same schedule. A forward-referenced member that throws fails `initialize` with no node left, in either member order, and `Scope.errors` stays empty. A node of a child scope initialized first, which wakes in the closing reconciliation, is dormant again after a cycle member throws there. A descendant node that fails when woken reaches `Scope.errors` while `initialize` succeeds. Rollback dispose failures appear on the `ActivationException`. A second `initialize` throws a `StateError`, and a disposed scope throws `DisposedScopeError`. Disposal logs reverse order and aggregates failures, and a second disposal logs nothing. A member that initializes another scope raises `ReentrantMutationError`. The 2000-member `initialize` and disposal each finish within 1 s.
+- **Pass:** Reverse chains of 4 and 300 levels are active after one `initialize`. A member that needs an absent key waits while its sibling runs. A throwing member leaves no binding and no live dormant member, the log shows reverse cleanup, and a retry repeats the same schedule. A forward-referenced member that throws fails `initialize` with no node left, in either member order, and `Scope.errors` stays empty. A node of a child scope initialized first, which wakes in the closing reconciliation, is dormant again after a cycle member throws there. A descendant node that fails when woken reaches `Scope.errors` while `initialize` succeeds. Rollback dispose failures appear on the `ActivationException`. A second `initialize` throws a `StateError`, and a disposed scope throws `DisposedScopeError`. Disposal logs reverse order and aggregates failures, and a second disposal logs nothing. The disposal of a sibling scope leaves the number of attempts of a failed reader with a met requirement unchanged, and reports nothing. A member that initializes another scope raises `ReentrantMutationError`. The 2000-member `initialize` and disposal each finish within 1 s.
 - **Evidence:** present
 
 ### <a id="v-t-rt-lc-014"></a>V-T-RT-LC-014 — `[test]` Concurrent module activation

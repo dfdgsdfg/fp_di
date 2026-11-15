@@ -756,3 +756,10 @@ tags: [runtime, lifecycle, decisions]
 - Alternatives: A boundary that mounts after the request and builds nothing from its mount needs no listener, but a route pushed during the wait would show nothing although its lookups answer.
 - References: [state of the runtime](spec.md#state-of-the-runtime), [R-UC-RT-LC-034](requirements.md#r-uc-rt-lc-034).
 
+## [2026-11-16] decision | Dispose a scope without a reconciliation
+
+- Context: The spec stated that `Scope.dispose` reconciles once at its end, and R-UC-RT-LC-009 repeated it. The runtime has never done so, and the model `Cancellation.tla` states that a dispose transaction does not reconcile. A lookup goes from a scope to its ancestors only, so every reader of a binding of the disposed scope is in the disposed subtree. A check after each scope disposal in the core suite and in the random histories of ten seeds found no stale active node and no dormant node that could activate outside the subtree. It found failed activations of other scopes, which a reconciliation retries.
+- Decision: The disposal of a scope does not reconcile. The spec states the reason, and a test checks that the disposal of a sibling scope does not retry a failed activation. The disposal of one member still reconciles.
+- Consequences: The contract matches the runtime and the model, and the published behavior does not change. A failed activation is retried at the next reconciliation of an `initialize` or of the disposal of a member, not at the disposal of an unrelated scope.
+- References: [disposal](spec.md#scope-declaration-and-initialization), [R-UC-RT-LC-009](requirements.md#r-uc-rt-lc-009), [Cancellation.tla](../../../verification/tla/cancellation/Cancellation.tla).
+
