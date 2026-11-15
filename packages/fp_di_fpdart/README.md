@@ -67,7 +67,9 @@ final quote = Dependency.require<Api>()
 `mapTaskEither` throws a `DependencyLeft` with the `Left` inside the step, so
 the completed steps are disposed in reverse order and nothing is published.
 `mapTask` runs a `Task`, and `Dependency.maybe<T>().toOption()` reads an
-optional key as an `Option`.
+optional key as an `Option`. `lazy.toTaskEither()` runs `Lazy.force` as a
+`TaskEither<DiFailure, A>`: the first run creates the value, and a failure
+is not cached.
 
 There is no `flatMap`. fp_di reads the keys of every `Dependency` before it
 runs, to check and schedule the graph, so a step cannot choose its reads from a

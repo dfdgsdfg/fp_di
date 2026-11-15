@@ -537,6 +537,7 @@ See the publisher's [version list](https://pub.dev/packages/fpdart/versions).
 | `Dependency.map` with an async effect | `mapTaskEither` (a `Left` fails the setup), `mapTaskEitherAsData` (a `Left` is the value), `mapTask` |
 | `Dependency.maybe` | `toOption()`: `Dependency<Option<A>>` |
 | `CancellationToken.whenCanceled` | `canceledTask`: `Task<Unit>` |
+| `Lazy.force` | `toTaskEither()`: a lazy `TaskEither<DiFailure, A>`; a failure is not cached |
 
 The package MUST NOT add lifecycle behavior: each form calls one public core
 operation and converts its result or its error. `DiFailure` keeps the
@@ -604,7 +605,7 @@ fpdart.
 - **Target:** `fp_di_fpdart` and its example
 - **Files:** [`fp_di_fpdart_test.dart`](../../packages/fp_di_fpdart/test/fp_di_fpdart_test.dart), with the example [`checkout.dart`](../../packages/fp_di_fpdart/example/checkout.dart)
 - **Fixtures:** `dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test` with fpdart from the workspace lock file; small scopes of `int` and `String` members with recorded and failing dispose functions; a parent and a dormant child. The example builds a checkout with configuration validation that keeps every problem, a State cart store, a ReaderTaskEither workflow, and an optional analytics read.
-- **Pass:** Assert lazy execution, repeated-run behavior, `use` disposal on a Right, a use Left, a setup failure, a dispose failure, and a throwing use; active vs dormant nodes; Left-as-data versus Left-as-setup-failure with rollback; retained errors, stacks, and rollback failures; unchanged dependency shape; and optional null policy.
+- **Pass:** Assert lazy execution, repeated-run behavior, `use` disposal on a Right, a use Left, a setup failure, a dispose failure, and a throwing use; active vs dormant nodes; Left-as-data versus Left-as-setup-failure with rollback; retained errors, stacks, and rollback failures; unchanged dependency shape; optional null policy; and a `Lazy` task that creates nothing until it runs, does not cache a failure, keeps a value, and is a `Left` after the disposal.
 - **Evidence:** present
 
 ### <a id="v-l-ar-di-003"></a>V-L-AR-DI-003 — `[lint]` Paper adoption claims

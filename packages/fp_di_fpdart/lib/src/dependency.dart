@@ -61,6 +61,20 @@ extension OptionalDependencyFpdart<A extends Object> on Dependency<A?> {
   Dependency<Option<A>> toOption() => map(Option.fromNullable);
 }
 
+/// A [Lazy] as an fpdart value.
+extension LazyFpdart<A> on Lazy<A> {
+  /// [Lazy.force] as a lazy task. Building the task creates nothing; the
+  /// first run creates the value, and a later run returns the same value.
+  ///
+  /// A failure of the creation is a `Left` with the original error: read
+  /// [DiFailure.cause] for the error that the creation threw. A failure is
+  /// not cached, so a later run tries again, as [Lazy.force] does. After the
+  /// disposal of the owner is requested, a run is a `Left` with a
+  /// `DisposedLazyException`.
+  TaskEither<DiFailure, A> toTaskEither() =>
+      TaskEither<DiFailure, A>.tryCatch(force, DiFailure.new);
+}
+
 /// A [CancellationToken] as an fpdart value.
 extension CancellationTokenFpdart on CancellationToken {
   /// A task that completes when the token is canceled, for an API that takes

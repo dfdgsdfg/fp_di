@@ -356,6 +356,48 @@ void main() {
     });
   });
 
+  test('toTaskEither forces a Lazy as a task', () async {
+    var creations = 0;
+    var fail = true;
+    final key = DiKey<Lazy<int>>(name: 'lazy');
+    final scope = await Scope(
+      module: Module(
+        components: [
+          Component<Lazy<int>>(
+            key: key,
+            dependency: Dependency<int>(
+              create: () {
+                creations++;
+                if (fail) throw StateError('not yet');
+                return 42;
+              },
+            ).lazy(),
+          ),
+        ],
+      ),
+    ).initialize();
+
+    final lazy = scope.get(key: key);
+    final task = lazy.toTaskEither();
+    expect(creations, 0, reason: 'building the task creates nothing');
+
+    final failed = await task.run();
+    expect(failed.getLeft().toNullable()?.cause, isA<StateError>());
+    expect(lazy.isCreated, isFalse);
+
+    fail = false;
+    expect((await task.run()).getRight().toNullable(), 42);
+    expect((await task.run()).getRight().toNullable(), 42);
+    expect(creations, 2, reason: 'a failure is not cached; a value is');
+
+    await scope.dispose();
+    final disposed = await task.run();
+    expect(
+      disposed.getLeft().toNullable()?.error,
+      isA<DisposedLazyException>(),
+    );
+  });
+
   test('canceledTask completes when the token is canceled', () async {
     final controller = CancellationController();
     var done = false;
