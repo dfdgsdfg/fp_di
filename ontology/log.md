@@ -318,3 +318,10 @@ Current definitions live in YAML. Authoring guidance lives in [AGENTS.md](AGENTS
 - Decision: `workspace.yml` declares `fp_di_devtools` as a component of the architecture domain, with an edge to `flutter_sdk` and no edge to `fp_di_core`. The inspector stays inside `fp_di_core` and adds no node.
 - Consequences: The workspace has a fourth package that is not published. The protocol, and not a Dart dependency, joins the app and the core, so the app cannot import a runtime type.
 - References: [workspace.yml](workspace.yml), [DevTools extension](../specs/tooling/devtools/spec.md), [architecture spec](../specs/architecture/spec.md).
+
+## [2026-11-15] decision | List the words of ScopeBuilder in the Flutter vocabulary
+
+- Context: `fp_di_flutter` adds `ScopeBuilder`, `ScopeSnapshot`, and `ScopeWidgetBuilder`. The entry of 2026-11-11 removed `builder` from `flutter_words` when `ComponentScope` went. The definition of the `fp_di_flutter` component said that the package owns no scope.
+- Decision: `flutter_words` lists `builder`, `snapshot`, and `widget`, with the meaning that `FutureBuilder`, `AsyncSnapshot`, and `AsyncWidgetBuilder` give them. The definition of `fp_di_flutter` states that the package owns no scope that a caller supplies, and that a `ScopeBuilder` owns the scope that it creates while it is mounted.
+- Consequences: The vocabulary check accepts the three identifiers. `loading` stays out of the vocabulary: the builder of the caller decides what a pending scope shows.
+- References: [vocabulary.yml](vocabulary.yml), [workspace.yml](workspace.yml), [architecture log](../specs/architecture/log.md).

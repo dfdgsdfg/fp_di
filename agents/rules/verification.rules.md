@@ -48,7 +48,7 @@ scope coordination, especially:
 - component shape derivation, activation, rollback, cleanup, or dependency
   withdrawal in `packages/fp_di/lib/src/`;
 - `Scope` child scope, binding, and disposal behavior;
-- Flutter `ScopeProvider` mounting, unmounting, scope replacement, and
+- Flutter `ScopeProvider` and `ScopeBuilder` mounting, unmounting, scope replacement, and
   context lookup;
 - tests that exercise ordering, concurrency, publisher identity, or failure
   aggregation.
@@ -133,6 +133,7 @@ until the documented gap closes. Run the scenarios of the model that owns the ch
 | collection membership, `contributionKeysOf`, or `plainReads` | `Reconcile*` |
 | `zipPar`, branch journals, or `branchFailures` | `Cancel*`, `Teardown*`, `Lazy*`; no model covers the branches, so V-T-RT-LC-024 carries their evidence |
 | `ScopeProvider`, its inherited widgets, or the reads of `DiBuildContext` | No model covers the adapter, so V-T-AR-UI-011 and V-T-AR-UI-012 carry its evidence: `flutter test packages/fp_di_flutter/test` |
+| `ScopeBuilder` | No model covers it, so V-T-AR-UI-013 carries its evidence: `flutter test packages/fp_di_flutter/test/scope_builder_test.dart` |
 | the inspector in `runtime_inspector.dart` or the extension app `fp_di_devtools` | No model covers the inspector; it only reads. V-T-TL-DT-001 to V-T-TL-DT-005 carry its evidence: `dart run agents/scripts/test_core.dart packages/fp_di/test/devtools_inspector_test.dart` and `flutter test packages/fp_di_devtools/test` |
 
 ## Interpret results

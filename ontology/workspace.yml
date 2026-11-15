@@ -23,8 +23,9 @@ nodes:
   fp_di_flutter:
     kind: component
     definition: >-
-      Flutter adapter package that publishes a caller-owned scope to the widget tree and reads it from a
-      BuildContext, over the public runtime API. It owns no scope.
+      Flutter adapter package that publishes a scope to the widget tree and reads it from a BuildContext,
+      over the public runtime API. It owns no scope that a caller supplies; a ScopeBuilder owns the scope
+      that it creates while it is mounted.
     domain: architecture
     bindings:
       - type: package

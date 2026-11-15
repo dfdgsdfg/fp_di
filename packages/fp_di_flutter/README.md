@@ -23,8 +23,8 @@ Each file in [`example/`](https://github.com/dfdgsdfg/fp_di/tree/main/packages/f
 | [`session_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/session_scope.dart) | A session scope that a login creates and a logout disposes, with one provider at the root and a holder of the current scope |
 | [`watch.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/watch.dart) | The difference between `di`, which reads once, and `watchDi`, which rebuilds when the key changes |
 | [`node_state.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/node_state.dart) | Loading, error, and data from the state of a node, with `watchMaybeDiNode` |
-| [`page_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/page_scope.dart) | A scope that the `State` of one page creates, initializes, and disposes, with a `FutureBuilder` for its loading and error states |
-| [`navigator_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/navigator_scope.dart) | A scope that a route owns: a session scope above a nested `Navigator`, and a page scope in a pushed route, each alive until its route leaves |
+| [`page_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/page_scope.dart) | A scope that a `ScopeBuilder` of one page creates, initializes, and disposes, with its loading and error states from the snapshot |
+| [`navigator_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/navigator_scope.dart) | A scope that a route owns: a session scope above a nested `Navigator`, and a page scope in a pushed route, each in a `ScopeBuilder` and alive until its route leaves |
 | [`popup_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/popup_scope.dart) | A dialog, a modal bottom sheet, and a snack bar of a route that has a scope: which scope each one reads |
 
 The package has no platform folders, so `flutter run` does not start an
@@ -100,7 +100,7 @@ state and decides what to show. Two states exist:
 
 | State | Where it is | Read it with |
 |---|---|---|
-| A call of `initialize` runs or failed | The future of that call | A `FutureBuilder` in the code that called `initialize` |
+| A call of `initialize` runs or failed | The future of that call | The snapshot of a `ScopeBuilder` that called `initialize`, or a `FutureBuilder` in the code that called it |
 | A node waits, activates, or failed after `initialize` | The node | `context.watchMaybeDiNode<T>()` |
 
 `watchMaybeDiNode` gives the node that publishes `T` and rebuilds the widget
@@ -126,14 +126,44 @@ holds it. It goes to the caller of `initialize` alone.
 
 ## A scope for one widget subtree
 
-The package has no widget that creates, initializes, or disposes a scope. The
-code that calls `initialize` gets its failure and decides what the user sees
-while the call runs, so that code belongs to the host.
+`ScopeBuilder` owns the scope of one widget subtree. It calls `create` with
+the scope of the closest `ScopeProvider`, calls `initialize` on the result,
+publishes it, and disposes it when it is unmounted. Its builder receives a
+`ScopeSnapshot` and decides what the user sees:
 
-For a value that one page owns, create a child scope in the code that owns the
-page, and call `initialize` and `dispose` there. Publish the child scope with
-`ScopeProvider` below the provider of its parent. A widget below reads the
-child scope, and the child scope reads the keys of its parent. See
+```dart
+ScopeBuilder(
+  create: (parent) => parent.child(module: editorModule),
+  builder: (context, snapshot, child) => switch (snapshot) {
+    ScopeSnapshot(:final error?) => Text('the drafts did not open: $error'),
+    ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+    _ => const Text('opening the drafts'),
+  },
+  child: const Editor(),
+)
+```
+
+- `create` runs once for each scope above. When the host replaces the scope
+  above, the widget calls `create` again, publishes the new scope, and
+  disposes the old one. A rebuild with another `create` makes no new scope;
+  give the widget another `key` for that.
+- `snapshot.error` holds the failure of `initialize`. The failure rolls the
+  scope back to `declared`, so `snapshot.phase` does not show it.
+- The widget builds again after each transition that changes the phase or a
+  node state of the scope, also after `initialize`: a node that waits for a
+  key of an ancestor shows in `snapshot.nodeStates`. A child scope that
+  starts or leaves does not build it again. The phase `initialized` does not
+  mean that each node is active, so read such a key with `watchMaybeDi` or
+  `watchMaybeDiNode`.
+- Everything that the builder returns is below the scope, from the first
+  build. A lookup there reads the keys of the ancestors at once.
+- The widget calls no builder while the scope is disposed. It reports the
+  failure of a disposal, and the rollback failures of an `initialize` that the
+  unmount canceled, to `FlutterError.reportError`.
+
+`ScopeBuilder.value(scope: scope, builder: ...)` builds from the state of a
+scope that the caller owns. It calls no `initialize` and no `dispose`, so its
+snapshot has no error. See
 [`page_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/page_scope.dart).
 
 ## A scope for one route
@@ -144,11 +174,9 @@ transition. Two rules follow:
 
 - A route that needs a scope publishes that scope with a `ScopeProvider` of
   its own, or it is a route of a `Navigator` that is below the provider.
-- A scope that a route owns belongs to a `State` of that route. The `State`
-  creates the scope, calls `initialize`, publishes the scope with
-  `ScopeProvider.fixed`, and calls `dispose` in `State.dispose`. Flutter calls
-  `State.dispose` after the exit transition, so the exiting route reads its
-  scope until it leaves.
+- A scope that a route owns belongs to a `ScopeBuilder` in that route.
+  Flutter calls `State.dispose` of the `ScopeBuilder` after the exit
+  transition, so the exiting route reads its scope until it leaves.
 
 [`navigator_scope.dart`](https://github.com/dfdgsdfg/fp_di/blob/main/packages/fp_di_flutter/example/navigator_scope.dart) shows both rules. Its
 session scope is above a nested `Navigator`, so each route of the session

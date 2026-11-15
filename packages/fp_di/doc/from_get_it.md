@@ -458,4 +458,5 @@ explains the rules for routes and dialogs.
    in widgets. Code that runs during startup moves into components, so it
    runs in the order of its reads.
 6. **Replace scopes.** Each `pushNewScope` becomes a child scope that the code
-   which pushed it creates, initializes, and disposes.
+   which pushed it creates, initializes, and disposes. In Flutter, a
+   `ScopeBuilder` of `fp_di_flutter` does that for one widget subtree.

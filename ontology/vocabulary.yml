@@ -41,15 +41,19 @@ nodes:
       from a BuildContext.
     identifiers:
       - build
+      - builder
       - child
       - context
       - fixed
       - listen
       - listenable
       - provider
+      - snapshot
       - watch
+      - widget
     evidence:
       - packages/fp_di_flutter/lib/src/di_extensions.dart
+      - packages/fp_di_flutter/lib/src/scope_builder.dart
       - packages/fp_di_flutter/lib/src/scope_provider.dart
   fpdart_words:
     kind: vocabulary

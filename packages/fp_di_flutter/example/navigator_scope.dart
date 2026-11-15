@@ -5,20 +5,17 @@
 // therefore publishes the scope itself, or it lives below a `Navigator` that
 // is below the provider.
 //
-// The package has no widget that creates a scope, so `ScopeHost` is part of
-// this example. Its `State` creates a child of the ambient scope, calls
-// `initialize`, publishes the scope with `ScopeProvider.fixed`, and disposes
-// the scope in `State.dispose`.
+// `ScopeBuilder` creates a child of the ambient scope, calls `initialize`,
+// publishes the scope, and disposes the scope when it leaves the tree.
 //
-// Flutter calls `State.dispose` only after the exit transition of the route
-// ends. Every read of an exiting route still gets a value, and no widget
-// reads a disposed scope.
+// Flutter calls `State.dispose` of the `ScopeBuilder` only after the exit
+// transition of the route ends. An exiting route still reads its scope, and
+// no widget reads a disposed scope.
 //
-// `SessionShell` hosts the session scope and holds a nested `Navigator`. The
-// routes of the session are below that `Navigator`, so they read the session
-// scope. The editor route hosts its own scope, a child of the session scope.
-import 'dart:async';
-
+// `SessionShell` publishes the session scope and holds a nested `Navigator`.
+// The routes of the session are below that `Navigator`, so they read the
+// session scope. The editor route publishes its own scope, a child of the
+// session scope.
 import 'package:flutter/material.dart';
 import 'package:fp_di/fp_di.dart';
 import 'package:fp_di_flutter/fp_di_flutter.dart';
@@ -93,82 +90,6 @@ Future<void> main() async {
   runApp(NavigatorScopeApp(scope: app));
 }
 
-// --- The host of a scope ---------------------------------------------------
-
-/// Creates a child of the ambient scope and publishes it to [child].
-final class ScopeHost extends StatefulWidget {
-  const ScopeHost({required this.module, required this.child, super.key});
-
-  final Module module;
-  final Widget child;
-
-  @override
-  State<ScopeHost> createState() => _ScopeHostState();
-}
-
-final class _ScopeHostState extends State<ScopeHost> {
-  Scope? _parent;
-  Scope? _scope;
-  Future<Scope>? _ready;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final parent = ScopeProvider.of(context, listenToScope: true);
-    if (identical(parent, _parent)) return;
-    _parent = parent;
-    _close();
-    final scope = parent.child(module: widget.module);
-    _scope = scope;
-    // `ignore` keeps a failure that nothing listens to from becoming an
-    // uncaught error. The FutureBuilder still receives the failure.
-    _ready = scope.initialize()..ignore();
-  }
-
-  /// Disposes the scope. A disposal during `initialize` cancels it.
-  void _close() {
-    final scope = _scope;
-    if (scope == null) return;
-    _scope = null;
-    unawaited(
-      scope.dispose().catchError((Object error, StackTrace stackTrace) {
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            context: ErrorDescription('while disposing a hosted scope'),
-          ),
-        );
-      }),
-    );
-  }
-
-  @override
-  void dispose() {
-    _close();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Scope>(
-      future: _ready,
-      builder: (context, snapshot) {
-        // A FutureBuilder keeps the data of its last future while a new one
-        // runs, so check the connection state first.
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Text('opening');
-        }
-        if (snapshot.hasError) return Text('failed: ${snapshot.error}');
-        return ScopeProvider.fixed(
-          scope: snapshot.requireData,
-          child: widget.child,
-        );
-      },
-    );
-  }
-}
-
 // --- Widgets ---------------------------------------------------------------
 
 final class NavigatorScopeApp extends StatelessWidget {
@@ -213,32 +134,35 @@ final class LoginPage extends StatelessWidget {
   }
 }
 
-/// Hosts the session scope above a nested `Navigator`.
-final class SessionShell extends StatefulWidget {
+/// Publishes the session scope above a nested `Navigator`.
+final class SessionShell extends StatelessWidget {
   const SessionShell({required this.userId, super.key});
 
   final String userId;
 
   @override
-  State<SessionShell> createState() => _SessionShellState();
-}
-
-final class _SessionShellState extends State<SessionShell> {
-  // One module object for the life of the shell. A rebuild does not make
-  // another one.
-  late final Module _module = sessionModule(widget.userId);
-
-  @override
   Widget build(BuildContext context) {
-    return ScopeHost(
-      module: _module,
-      // Each route of this `Navigator` is below the host of the session scope.
+    return ScopeBuilder(
+      // `create` runs again only when the scope above is replaced, so a
+      // rebuild of the shell does not make another module.
+      create: (parent) => parent.child(module: sessionModule(userId)),
+      builder: _build,
+      // Each route of this `Navigator` is below the session scope.
       child: Navigator(
         onGenerateRoute: (_) =>
             MaterialPageRoute<void>(builder: (_) => const HomePage()),
       ),
     );
   }
+}
+
+/// The loading state, the error state, and the ready state of a scope.
+Widget _build(BuildContext context, ScopeSnapshot snapshot, Widget? child) {
+  return switch (snapshot) {
+    ScopeSnapshot(:final error?) => Text('failed: $error'),
+    ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+    _ => const Text('opening'),
+  };
 }
 
 final class HomePage extends StatelessWidget {
@@ -257,8 +181,9 @@ final class HomePage extends StatelessWidget {
               // The nested `Navigator` keeps the route below the session scope.
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => ScopeHost(
-                    module: editorModule,
+                  builder: (_) => ScopeBuilder(
+                    create: (parent) => parent.child(module: editorModule),
+                    builder: _build,
                     child: const EditorPage(),
                   ),
                 ),

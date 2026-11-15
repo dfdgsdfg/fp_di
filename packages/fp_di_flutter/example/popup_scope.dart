@@ -11,8 +11,9 @@
 //   also in the `Scaffold` of a route below, and in the `Scaffold` of the
 //   next route after this route leaves.
 //
-// `CartShell` hosts the cart scope above a nested `Navigator`, as
-// `navigator_scope.dart` does for a session. The cart page then opens:
+// `CartShell` publishes the cart scope above a nested `Navigator` with a
+// `ScopeBuilder`, as `navigator_scope.dart` does for a session. The cart page
+// then opens:
 //
 // - a dialog on the nested `Navigator` with `useRootNavigator: false`. The
 //   dialog is below the cart scope and reads it.
@@ -23,8 +24,6 @@
 //   and reads the cart scope.
 // - a snack bar. Its content takes values, not reads: the messenger also
 //   builds it in the `Scaffold` of the home page, which reads the app scope.
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:fp_di/fp_di.dart';
 import 'package:fp_di_flutter/fp_di_flutter.dart';
@@ -90,78 +89,6 @@ Future<void> main() async {
   runApp(PopupScopeApp(scope: app));
 }
 
-// --- The host of a scope ---------------------------------------------------
-
-/// Creates a child of the ambient scope and publishes it to [child]. See
-/// `navigator_scope.dart` for the rules that this `State` follows.
-final class ScopeHost extends StatefulWidget {
-  const ScopeHost({required this.module, required this.child, super.key});
-
-  final Module module;
-  final Widget child;
-
-  @override
-  State<ScopeHost> createState() => _ScopeHostState();
-}
-
-final class _ScopeHostState extends State<ScopeHost> {
-  Scope? _parent;
-  Scope? _scope;
-  Future<Scope>? _ready;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final parent = ScopeProvider.of(context, listenToScope: true);
-    if (identical(parent, _parent)) return;
-    _parent = parent;
-    _close();
-    final scope = parent.child(module: widget.module);
-    _scope = scope;
-    _ready = scope.initialize()..ignore();
-  }
-
-  void _close() {
-    final scope = _scope;
-    if (scope == null) return;
-    _scope = null;
-    unawaited(
-      scope.dispose().catchError((Object error, StackTrace stackTrace) {
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            context: ErrorDescription('while disposing a hosted scope'),
-          ),
-        );
-      }),
-    );
-  }
-
-  @override
-  void dispose() {
-    _close();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Scope>(
-      future: _ready,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Text('opening');
-        }
-        if (snapshot.hasError) return Text('failed: ${snapshot.error}');
-        return ScopeProvider.fixed(
-          scope: snapshot.requireData,
-          child: widget.child,
-        );
-      },
-    );
-  }
-}
-
 // --- Widgets ---------------------------------------------------------------
 
 final class PopupScopeApp extends StatelessWidget {
@@ -204,14 +131,19 @@ final class HomePage extends StatelessWidget {
   }
 }
 
-/// Hosts the cart scope above a nested `Navigator`.
+/// Publishes the cart scope above a nested `Navigator`.
 final class CartShell extends StatelessWidget {
   const CartShell({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ScopeHost(
-      module: cartModule,
+    return ScopeBuilder(
+      create: (parent) => parent.child(module: cartModule),
+      builder: (context, snapshot, child) => switch (snapshot) {
+        ScopeSnapshot(:final error?) => Text('failed: $error'),
+        ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+        _ => const Text('opening'),
+      },
       child: Navigator(
         onGenerateRoute: (_) =>
             MaterialPageRoute<void>(builder: (_) => const CartPage()),

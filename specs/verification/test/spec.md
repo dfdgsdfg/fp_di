@@ -58,6 +58,7 @@ or a formal refinement of the Dart implementation.
 | Flutter widget | lookup/watch behavior, component mount/unmount, late activation, error rendering, sibling isolation, and context swap | [`fp_di_flutter_test.dart`](../../../packages/fp_di_flutter/test/fp_di_flutter_test.dart) and [`scope_regression_test.dart`](../../../packages/fp_di_flutter/test/scope_regression_test.dart) |
 | Flutter random history | seeded step sequences over frames, route transitions, replacements of the published scope, and transitions of the runtime; four checks after each step, and one harness defect for each check | [`adapter_history_test.dart`](../../../packages/fp_di_flutter/test/adapter_history_test.dart) |
 | Flutter frame phase | a replacement of the scope from `State.dispose`, from a build inside a frame, and from a build outside a frame; the frame of a transition with and without a watched key | [`scope_replacement_phase_test.dart`](../../../packages/fp_di_flutter/test/scope_replacement_phase_test.dart) |
+| Flutter scope of a subtree | `ScopeBuilder`: phases, the failure of `initialize`, a replacement above, a transition from `State.dispose`, the disposal of its scope, the reports of a canceled rollback and a failed release, and the value constructor | [`scope_builder_test.dart`](../../../packages/fp_di_flutter/test/scope_builder_test.dart) |
 | Static analysis | analyzer diagnostics at workspace/package boundary | [`analysis_options.yaml`](../../../analysis_options.yaml) |
 
 ## Runtime Behavior and Dynamic View

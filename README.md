@@ -34,7 +34,8 @@ The workspace has four packages:
 - [`fp_di`](packages/fp_di): the Dart runtime. It has no dependencies and does
   not import Flutter.
 - [`fp_di_flutter`](packages/fp_di_flutter): publishes a caller-owned scope to
-  the widget tree, with `BuildContext` reads.
+  the widget tree, owns the scope of one subtree with `ScopeBuilder`, and
+  reads with `BuildContext`.
 - [`fp_di_fpdart`](packages/fp_di_fpdart): the scope lifecycle, lookups, and
   `Dependency` steps as fpdart types. It is experimental.
 - [`fp_di_devtools`](packages/fp_di_devtools): a DevTools extension that shows

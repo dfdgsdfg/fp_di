@@ -73,7 +73,8 @@ split, shared responsibilities, paper adoption, and fpdart interoperability.
 - `packages/fp_di/` owns the Dart-only component algebra, keys, context,
   transactional activation, cleanup, dependency tracking, and runtime errors.
 - `packages/fp_di_flutter/` owns `BuildContext` lookup, the publication of a
-  caller-owned scope to the widget tree, and Flutter-facing integration. It MAY depend on
+  scope to the widget tree, the scope of one widget subtree (`ScopeBuilder`),
+  and Flutter-facing integration. It MAY depend on
   `fp_di`; the core package MUST NOT depend on Flutter.
 - `specs/runtime/lifecycle/` is the canonical lifecycle topic:
   [`requirements.md`](specs/runtime/lifecycle/requirements.md),
@@ -117,8 +118,9 @@ split, shared responsibilities, paper adoption, and fpdart interoperability.
 - `initialize` may activate independent members concurrently, while each member
   commits on its own. Scope teardown releases dependents before their
   publishers, and nodes that do not read each other release concurrently.
-- The Flutter package owns no scope. A supplied `Scope` remains
-  caller-owned.
+- The Flutter package owns no scope that a caller supplies. A supplied
+  `Scope` remains caller-owned. A `ScopeBuilder` owns only the scope that it
+  creates, from its mount to its unmount.
 
 The lifecycle spec owns the full contract and diagrams. Link to it instead of
 copying the contract into package or folder guidance.

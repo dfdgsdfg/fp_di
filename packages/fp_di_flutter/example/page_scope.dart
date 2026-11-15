@@ -1,10 +1,10 @@
 // A scope that lives as long as one page.
 //
-// The package has no widget that creates a scope. The `State` of the page
-// owns the scope here: it creates a child of the ambient scope, calls
-// `initialize`, and calls `dispose` when the page goes away. The future of
-// `initialize` is the loading state and the error state of the page, so an
-// ordinary `FutureBuilder` shows them.
+// `ScopeBuilder` creates a child of the ambient scope, calls `initialize`,
+// publishes the scope, and disposes the scope when the page goes away. Its
+// snapshot is the loading state and the error state of the page. Flutter
+// calls `State.dispose` of the `ScopeBuilder` after the exit transition of a
+// route, so an exiting route still reads its scope.
 //
 // The child scope reads `Account` from the app scope. Only the widgets below
 // the page read `DraftStore`.
@@ -12,8 +12,6 @@
 // A member can become inactive after `initialize`, when a key of the parent
 // is withdrawn. This example does not handle that case; `node_state.dart`
 // shows how a widget follows the state of a node.
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:fp_di/fp_di.dart';
 import 'package:fp_di_flutter/fp_di_flutter.dart';
@@ -108,76 +106,21 @@ final class _DocumentsPageState extends State<DocumentsPage> {
 }
 
 /// Owns the scope of the editor.
-final class EditorPage extends StatefulWidget {
+final class EditorPage extends StatelessWidget {
   const EditorPage({super.key});
 
   @override
-  State<EditorPage> createState() => _EditorPageState();
-}
-
-final class _EditorPageState extends State<EditorPage> {
-  Scope? _parent;
-  Scope? _scope;
-  Future<Scope>? _ready;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // A listening lookup. When the host replaces the ambient scope, this
-    // method runs again, and the page scope starts again below the new one.
-    final parent = ScopeProvider.of(context, listenToScope: true);
-    if (identical(parent, _parent)) return;
-    _parent = parent;
-    _close();
-    final scope = parent.child(module: editorModule);
-    _scope = scope;
-    // `ignore` keeps a failure that nothing listens to from becoming an
-    // uncaught error. The FutureBuilder still receives the failure.
-    _ready = scope.initialize()..ignore();
-  }
-
-  /// Disposes the page scope. A disposal during `initialize` cancels it.
-  void _close() {
-    final scope = _scope;
-    if (scope == null) return;
-    _scope = null;
-    unawaited(
-      scope.dispose().catchError((Object error, StackTrace stackTrace) {
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            context: ErrorDescription('while disposing the editor scope'),
-          ),
-        );
-      }),
-    );
-  }
-
-  @override
-  void dispose() {
-    _close();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Scope>(
-      future: _ready,
-      builder: (context, snapshot) {
-        // A FutureBuilder keeps the data of its last future while a new one
-        // runs, so check the connection state first.
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Text('opening the drafts');
-        }
-        if (snapshot.hasError) {
-          return Text('the drafts did not open: ${snapshot.error}');
-        }
-        return ScopeProvider.fixed(
-          scope: snapshot.requireData,
-          child: const Editor(),
-        );
+    // `create` runs again when the host replaces the ambient scope, and the
+    // page scope starts again below the new one.
+    return ScopeBuilder(
+      create: (parent) => parent.child(module: editorModule),
+      builder: (context, snapshot, child) => switch (snapshot) {
+        ScopeSnapshot(:final error?) => Text('the drafts did not open: $error'),
+        ScopeSnapshot(phase: ScopePhase.initialized) => child!,
+        _ => const Text('opening the drafts'),
       },
+      child: const Editor(),
     );
   }
 }
