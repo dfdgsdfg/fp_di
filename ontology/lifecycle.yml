@@ -220,7 +220,7 @@ nodes:
   disposal_hold:
     kind: concept
     term: Hold
-    identifiers: [hold, holds, open, ignore, ignored]
+    identifiers: [hold, holds, open, close, ignore, ignored]
     definition: >-
       A claim of a consumer outside the runtime that delays the disposal mutation of a scope until the
       consumer closes it. It owns no value and no release order, and a disposal that ignores the holds
