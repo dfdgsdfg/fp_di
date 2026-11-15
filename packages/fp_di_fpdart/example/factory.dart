@@ -20,6 +20,7 @@
 //
 // Run: dart run packages/fp_di_fpdart/example/factory.dart
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
+import 'package:fpdart/fpdart.dart';
 
 final class Database {
   const Database(this.name);
@@ -114,19 +115,35 @@ void inspect(String label, Scope scope) {
   });
 }
 
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
-
 Future<void> main() async {
   final app = Scope(components: [database('main')]);
-  // A nearer scope that publishes another database.
-  final replica = childOf(app, [database('replica')]);
-  final onReplica = childOf(replica, featureComponents);
-  final onMain = childOf(app, featureComponents);
+  // A nearer scope that publishes another database. `child` is a `Left` only
+  // for a scope that is disposing or disposed.
+  final scopes = app
+      .child(components: [database('replica')])
+      .flatMap(
+        (replica) => replica
+            .child(components: featureComponents)
+            .flatMap(
+              (onReplica) => app
+                  .child(components: featureComponents)
+                  .map((onMain) => (replica, onReplica, onMain)),
+            ),
+      );
+  switch (scopes) {
+    case Left(value: final failure):
+      print('child failed: $failure');
+    case Right(value: (final replica, final onReplica, final onMain)):
+      await demo(app, replica, onReplica, onMain);
+  }
+}
 
+Future<void> demo(
+  Scope app,
+  Scope replica,
+  Scope onReplica,
+  Scope onMain,
+) async {
   print('run');
   if (await start('app', app) &&
       await start('replica', replica) &&

@@ -4,18 +4,12 @@ import 'dart:async';
 import 'package:fpdart/fpdart.dart';
 
 import 'cause.dart';
-import 'environment.dart';
 import 'failure.dart';
-
-/// What a component made: the values that it publishes and the dispose
-/// functions of the values that it owns.
-typedef Built = (Environment out, Finalizers finalizers);
 
 /// An immutable stack of the dispose functions of the values that an owner
 /// holds.
 ///
-/// A release runs the newest entry first, one entry after the other. An entry
-/// can be a group: the group releases its members at the same time. A
+/// A release runs the newest entry first, one entry after the other. A
 /// release never throws. A dispose function that throws becomes a `Die` in
 /// the resulting `Cause`.
 final class Finalizers {
@@ -47,20 +41,6 @@ final class Finalizers {
   /// A stack with the entries of [next] on top.
   Finalizers then(Finalizers next) =>
       next.isEmpty ? this : Finalizers._([..._entries, ...next._entries]);
-
-  /// A stack with a group of [members] on top.
-  ///
-  /// The release of the group releases the stacks of all members at the same
-  /// time.
-  Finalizers pushGroup(List<Finalizers> members) {
-    final present = [
-      for (final member in members)
-        if (!member.isEmpty) member,
-    ];
-    return present.isEmpty
-        ? this
-        : Finalizers._([..._entries, _Group(present)]);
-  }
 
   /// A task that releases the stack and gives the cause of every failure.
   ///
@@ -95,19 +75,4 @@ final class _Single extends _Entry {
         (error, stackTrace) =>
             Die<DiFailure>(DisposeFailure(owner, error), stackTrace),
       ).match((defect) => defect, (_) => const Empty<DiFailure>());
-}
-
-final class _Group extends _Entry {
-  const _Group(this.members);
-
-  final List<Finalizers> members;
-
-  @override
-  Task<Cause<DiFailure>> release() =>
-      Task.traverseList(members, (member) => member.release()).map(
-        (causes) => causes.fold(
-          const Empty<DiFailure>(),
-          (left, right) => left & right,
-        ),
-      );
 }

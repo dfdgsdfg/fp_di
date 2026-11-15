@@ -154,12 +154,17 @@ List<Component<Object?>> sessionComponents(String userId) => [
 
 /// Logs in: runs a child scope of [app] with the session components.
 Future<Option<Scope>> login(Scope app, String userId) async {
-  final session = childOf(app, sessionComponents(userId));
-  final started = await session.run();
-  return started.match((cause) {
-    print('  login failed:\n${cause.prettyPrint()}');
-    return const None();
-  }, Some.new);
+  switch (app.child(components: sessionComponents(userId))) {
+    case Left(value: final failure):
+      print('  login failed: $failure');
+      return const None();
+    case Right(value: final session):
+      final started = await session.run();
+      return started.match((cause) {
+        print('  login failed:\n${cause.prettyPrint()}');
+        return const None();
+      }, Some.new);
+  }
 }
 
 /// Prints how far a scope reads and what it hides.
@@ -181,12 +186,6 @@ Future<void> close(Scope scope) async {
   final stopped = await scope.dispose();
   stopped.match((cause) => print(cause.prettyPrint()), (_) {});
 }
-
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   print('bootstrap');

@@ -86,7 +86,75 @@ final class Scope {
 
   /// The state of the scope, with the states of its nodes and of its
   /// children.
-  ScopeState get state => scopeState(_runtime.state, _id);
+  ///
+  /// The runtime keeps the object of what a transition does not change. Two
+  /// reads with no transition between them give the same object. A node whose
+  /// state did not change keeps its `NodeState`, and a scope whose phase,
+  /// nodes, and children did not change keeps its `ScopeState`. So
+  /// `identical` on two reads tells that nothing in the scope and its
+  /// descendants changed, and `changedSince` lists what changed.
+  ScopeState get state => _runtime.scopeStateOf(_id);
+
+  /// The states of this scope, as a stream.
+  ///
+  /// Each access gives a new single-subscription stream. A subscription
+  /// registers a listener of this scope when it starts, and removes the
+  /// listener when it ends. The stream does not emit the state at the time of
+  /// the subscription. After each round of listener calls it reads [state],
+  /// and emits the value when it is not the object of the last event. A round
+  /// that changed nothing in this scope and its descendants emits nothing.
+  /// A subscriber gets an event in a microtask after the round, so a listener
+  /// that a subscriber starts runs after the round has ended. The value is the
+  /// state that the round read: a later transition has its own event.
+  ///
+  /// The stream emits the state with the phase `disposed` and then closes,
+  /// when the scope is disposed. The stream of a scope that is disposing or
+  /// disposed is empty and closed.
+  Stream<ScopeState> get states {
+    late final StreamController<ScopeState> controller;
+    late ScopeState last;
+    late final void Function() listener;
+    listener = () {
+      final next = state;
+      if (identical(next, last)) return;
+      last = next;
+      controller.add(next);
+      if (next.phase == ScopePhase.disposed) {
+        _runtime.removeListener(_id, listener);
+        unawaited(controller.close());
+      }
+    };
+    controller = StreamController<ScopeState>(
+      onListen: () {
+        last = state;
+        if (_gone) {
+          unawaited(controller.close());
+          return;
+        }
+        _runtime.addListener(_id, listener);
+      },
+      onCancel: () => _runtime.removeListener(_id, listener),
+    );
+    return controller.stream;
+  }
+
+  /// A text that lists each node of this scope and of its descendants, for
+  /// diagnostics.
+  ///
+  /// Each node entry states its label, its state (`active`, `activating`,
+  /// `deactivating`, `waiting`, `activation failed`, `dispose failed`,
+  /// `inactive`), and the required keys that do not resolve. A scope that is
+  /// not initialized has `(not initialized)` in its heading, and lists each
+  /// component once: the entry of its node, or the state `declared` when the
+  /// component has no live node. A child scope is indented below its parent,
+  /// with its path. The read changes no state.
+  ///
+  /// The format is for people and can change. Do not parse it. The result is
+  /// a `Left` when the scope is disposing or disposed.
+  Either<DiFailure, String> describe() {
+    if (_gone) return Left(const DisposedScopeFailure('describe'));
+    return Right(describeScope(_runtime.state, _id));
+  }
 
   /// The failures that no caller receives, for the whole tree of scopes.
   ///
@@ -294,7 +362,7 @@ final class Scope {
     if (_gone) return Left(const DisposedScopeFailure('get'));
     final s = _runtime.state;
     return resolve(s, _id, read).match(
-      () => Left(UnavailableKeyFailure(read)),
+      () => Left(unavailableKey(s, _id, read)),
       (publisher) =>
           Right(nodeRecord(s, publisher.node).value.toNullable() as T),
     );
@@ -308,9 +376,10 @@ final class Scope {
   /// The task is lazy: each run reads the scope again. The task gives the
   /// value now when a publisher resolves. It fails with a
   /// [DisposedScopeFailure] when the scope accepted a disposal, and with an
-  /// [UnavailableKeyFailure] when no scope from this scope to the root can
-  /// still publish the key. Otherwise it waits for the next change. A failed
-  /// run of a scope does not end the wait.
+  /// [UnavailableKeyFailure], which holds the failed nodes, when an automatic
+  /// activation failed behind the key, and when no scope from this scope to
+  /// the root can still publish the key. Otherwise it waits for the next
+  /// change. A failed `run` of a scope does not end the wait.
   TaskEither<DiFailure, T> getWhenAvailable<T>({DiKey<T>? key}) {
     final read = key ?? DiKey<T>();
     Option<Either<DiFailure, T>> check() {
@@ -328,8 +397,10 @@ final class Scope {
       if (disposalRequested(s, _id)) {
         return Some(Left(const DisposedScopeFailure('getWhenAvailable')));
       }
-      if (!canPublish(s, _id, read)) {
-        return Some(Left(UnavailableKeyFailure(read)));
+      final unavailable = unavailableKey(s, _id, read);
+      if (unavailable.failedNodeStates.isNotEmpty ||
+          !canPublish(s, _id, read)) {
+        return Some(Left(unavailable));
       }
       return const None();
     }

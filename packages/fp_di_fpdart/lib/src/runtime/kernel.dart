@@ -180,6 +180,22 @@ extension RuntimeKernel on Runtime {
     }();
   }
 
+  /// The state of the scope [id], which shares its objects with the states
+  /// that earlier reads returned.
+  ScopeState scopeStateOf(ScopeId id) {
+    final (value, next) = scopeStateShared(state, id, _snapshots.now);
+    _snapshots.set(next);
+    return value;
+  }
+
+  /// The state of the node [n], which is the object that `scopeStateOf` gives
+  /// for the scope of the node.
+  NodeState nodeStateOf(NodeId n) {
+    final (value, next) = nodeStateShared(state, n, _snapshots.now);
+    _snapshots.set(next);
+    return value;
+  }
+
   /// Cancels the activation with [ticket], when it runs. The first reason
   /// stays.
   void cancel(int ticket, CancelReason reason) {

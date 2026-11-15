@@ -1,4 +1,5 @@
 import 'core/phases.dart';
+import 'core/snapshots.dart' show NodeState;
 import 'key.dart';
 
 /// One dispose function that failed.
@@ -135,16 +136,41 @@ final class ActivationFailure extends DiFailure {
   String get message => '$owner failed to activate: $error';
 }
 
-/// The scope and its ancestors do not publish the key.
+/// The scope and its ancestors have no value for the key.
+///
+/// The failure of `get` explains why. No node publishes the key, or a node
+/// waits, or an activation failed. [failedNodeStates] lists the failed nodes
+/// behind the key.
 final class UnavailableKeyFailure extends DiFailure {
   /// Creates the failure for [key].
-  const UnavailableKeyFailure(this.key);
+  ///
+  /// [message] replaces the default message. [failedNodeStates] lists the
+  /// failed nodes behind [key].
+  const UnavailableKeyFailure(
+    this.key, {
+    String? message,
+    this.failedNodeStates = const [],
+  }) : _message = message;
 
   /// The key that no active scope publishes.
   final DiKey<Object?> key;
 
+  /// The state of each failed node behind [key], each one time.
+  ///
+  /// Each value has the phase `activationFailed`. Its `activationFailure`
+  /// holds the cause of the failure, and its `label` and `key` name the node.
+  /// The list starts with the node of [key] when that node failed. Otherwise
+  /// the node of [key] waits, and the list holds the failed nodes that a
+  /// depth-first search finds behind its `missing` keys.
+  ///
+  /// The list is empty when no activation failure explains the lookup: no
+  /// node publishes the key, or the nodes behind it only wait.
+  final List<NodeState> failedNodeStates;
+
+  final String? _message;
+
   @override
-  String get message => '$key is not available';
+  String get message => _message ?? '$key is not available';
 }
 
 /// An operation is not valid in the current phase of the scope.

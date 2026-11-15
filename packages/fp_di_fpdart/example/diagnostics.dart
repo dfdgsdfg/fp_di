@@ -20,6 +20,7 @@
 //
 // Run: dart run packages/fp_di_fpdart/example/diagnostics.dart
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
+import 'package:fpdart/fpdart.dart';
 
 class Database {}
 
@@ -85,12 +86,6 @@ Future<void> tryRun(String label, Scope scope) async {
     }
   }, (_) => print('  $label runs, phase ${scope.phase.name}'));
 }
-
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   print('1. the check accumulates');
@@ -172,17 +167,29 @@ Future<void> main() async {
   );
 
   // A child can run before its parent. Its node waits for the key of the
-  // parent, and the run of the parent wakes the node.
+  // parent, and the run of the parent wakes the node. `child` is a `Left` only
+  // for a scope that is disposing or disposed.
   final late = Scope(components: [database]);
-  final feature = childOf(late, [repository]);
-  await tryRun('a child before its parent', feature);
-  final waiting = feature.nodes.single;
-  print('  the child waits: ${waiting.state.phase.name}, ${waiting.missing}');
-  await tryRun('the parent', late);
-  print('  the child woke: ${waiting.state.phase.name}');
+  final feature = late.child(components: [repository]);
+  switch (feature) {
+    case Left(value: final failure):
+      print('  child failed: $failure');
+    case Right(value: final child):
+      await tryRun('a child before its parent', child);
+      final waiting = child.nodes.single;
+      print(
+        '  the child waits: ${waiting.state.phase.name}, ${waiting.missing}',
+      );
+      await tryRun('the parent', late);
+      print('  the child woke: ${waiting.state.phase.name}');
+  }
 
   print('5. the phase after the end');
-  for (final scope in [app, late, feature]) {
+  for (final scope in [
+    app,
+    late,
+    ...feature.match((_) => <Scope>[], (scope) => [scope]),
+  ]) {
     final stopped = await scope.dispose();
     stopped.match(
       (cause) => print(indent(cause.prettyPrint())),

@@ -10,8 +10,6 @@
 //
 // Differences from the fp_di version:
 //
-// - `scope.state` has no `changedSince`, so the trace compares the node
-//   states of two values of the state itself.
 // - `run()` returns an `Exit`, `child` and `node` return an `Either`, and
 //   `Dependency.option` gives an `Option`.
 //
@@ -19,25 +17,18 @@
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
 import 'package:fpdart/fpdart.dart';
 
-/// The node states of [state] and of its children, by id.
-Map<NodeId, NodeState> nodesOf(ScopeState state) => {
-  for (final node in state.nodeStates) node.id: node,
-  for (final child in state.childStates) ...nodesOf(child),
-};
-
 /// Returns a listener that prints each component that activates or
 /// deactivates. It compares `scope.state` with the value of its last call.
 void Function() trace(Scope scope) {
-  var last = nodesOf(scope.state);
+  var last = scope.state;
   return () {
-    final now = nodesOf(scope.state);
-    for (final MapEntry(key: id, value: later) in now.entries) {
-      final earlier = last[id];
-      if (later.commits > (earlier?.commits ?? 0)) print('  + ${later.label}');
-    }
-    for (final MapEntry(key: id, value: earlier) in last.entries) {
-      final later = now[id];
-      if (earlier.phase == NodePhase.deactivating &&
+    final now = scope.state;
+    for (final (earlier, later) in now.changedSince(last)) {
+      if (later != null && later.commits > (earlier?.commits ?? 0)) {
+        print('  + ${later.label}');
+      }
+      if (earlier != null &&
+          earlier.phase == NodePhase.deactivating &&
           later?.phase != NodePhase.deactivating) {
         print('  - ${earlier.label}');
       }
@@ -97,12 +88,6 @@ final clock = Component<StartedAt>(
   dependency: Dependency<StartedAt>(create: () => StartedAt(DateTime.now())),
 );
 
-/// A child scope. `child` is a `Left` only for a scope that is disposing or
-/// disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
-
 Future<void> main() async {
   final app = Scope(
     components: [
@@ -111,13 +96,29 @@ Future<void> main() async {
     ],
   );
   app.addListener(trace(app));
-  // Declared up front, run later: a dark theme and analytics.
-  final override = childOf(app, [
-    value(Theme.key, Theme('dark')),
-    Component<Analytics>.value(value: const Analytics('beta')),
-  ]);
-  final screen = childOf(override, [greeter, clock]);
+  // Declared up front, run later: a dark theme and analytics. `child` is a
+  // `Left` only for a scope that is disposing or disposed.
+  final scopes = app
+      .child(
+        components: [
+          value(Theme.key, Theme('dark')),
+          Component<Analytics>.value(value: const Analytics('beta')),
+        ],
+      )
+      .flatMap(
+        (override) => override
+            .child(components: [greeter, clock])
+            .map((screen) => (override, screen)),
+      );
+  switch (scopes) {
+    case Left(value: final failure):
+      print('child failed: $failure');
+    case Right(value: (final override, final screen)):
+      await demo(app, override, screen);
+  }
+}
 
+Future<void> demo(Scope app, Scope override, Scope screen) async {
   print('run');
   await app.run();
   await screen.run();
@@ -126,10 +127,12 @@ Future<void> main() async {
   await override.run();
 
   print('the dark theme is withdrawn');
-  final dark = override.node<Theme>(key: Theme.key);
-  await dark.match((failure) => throw StateError('$failure'), (node) {
-    return node.dispose();
-  });
+  await override
+      .node<Theme>(key: Theme.key)
+      .match(
+        (failure) async => print('  no node: $failure'),
+        (node) => node.dispose(),
+      );
 
   print('dispose');
   await app.dispose();

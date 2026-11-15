@@ -2,6 +2,7 @@
 //
 // The pure core of the runtime: an immutable state, its queries, and its
 // transitions. The core holds no mutable cell and runs no program.
+export 'describe.dart';
 export 'ids.dart';
 export 'phases.dart';
 export 'queries.dart';

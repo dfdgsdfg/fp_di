@@ -114,6 +114,7 @@ final class Runtime {
     : _state = IORef.create<RuntimeState>(RuntimeState.empty).run(),
       _queueTail = IORef.create<Future<void>>(Future<void>.value()).run(),
       _open = IORef.create<int>(0).run(),
+      _snapshots = IORef.create<Snapshots>(Snapshots.empty).run(),
       _listeners = IORef.create<List<Listener>>(const []).run(),
       _rounds = IORef.create<List<Option<ScopeId>>>(const []).run(),
       _inRound = IORef.create<bool>(false).run(),
@@ -144,6 +145,11 @@ final class Runtime {
   /// released their gate. When it is zero, the tail is stale, and the next
   /// mutation does not wait on it.
   final IORef<int> _open;
+
+  /// The snapshots that the last reads built. A read of a state keeps the
+  /// object of what did not change since then. The memo changes no rule: a
+  /// read without it gives an equal value.
+  final IORef<Snapshots> _snapshots;
 
   /// The listeners of every scope of the root, in insertion order.
   final IORef<List<Listener>> _listeners;

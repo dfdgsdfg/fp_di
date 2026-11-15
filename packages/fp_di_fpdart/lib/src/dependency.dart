@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:fpdart/fpdart.dart';
 
 import 'cause.dart';
-import 'environment.dart';
 import 'failure.dart';
 import 'finalizers.dart';
 import 'key.dart';
@@ -31,29 +30,6 @@ final class StepContext {
     required this.readOption,
     required this.checkpoint,
   });
-
-  /// Creates a context that reads [environment] and is never canceled.
-  ///
-  /// The context serves tests and tools that run a dependency without a
-  /// scope.
-  factory StepContext.fromEnvironment(
-    String owner,
-    Environment environment,
-    IORef<Finalizers> finalizers,
-  ) => StepContext(
-    owner: owner,
-    finalizers: finalizers,
-    read: (key) => environment
-        .lookup(key)
-        .match(
-          () => Left<Cause<DiFailure>, Object?>(
-            Fail<DiFailure>(UnavailableKeyFailure(key), StackTrace.current),
-          ),
-          Right<Cause<DiFailure>, Object?>.new,
-        ),
-    readOption: environment.lookup,
-    checkpoint: () => const Right<Cause<DiFailure>, Unit>(unit),
-  );
 
   /// The label of the component.
   final String owner;

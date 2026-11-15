@@ -1,59 +1,8 @@
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
-import 'package:fp_di_fpdart/src/environment.dart';
 import 'package:fp_di_fpdart/src/finalizers.dart';
-import 'package:fpdart/fpdart.dart';
 import 'package:test/test.dart';
 
 void main() {
-  const a = DiKey<int>(name: 'a');
-  const b = DiKey<String>(name: 'b');
-
-  group('Environment', () {
-    test('the monoid is right-biased and has an identity', () {
-      final below = Environment.of({a: 1, b: 'a'});
-      final above = Environment.of({a: 2});
-      final stacked = Environment.monoid.combine(below, above);
-      expect(stacked.read(a), 2);
-      expect(stacked.read(b), 'a');
-      expect(Environment.monoid.combine(Environment.empty, below).read(a), 1);
-      expect(Environment.monoid.combine(below, Environment.empty).read(b), 'a');
-      expect(below.read(a), 1);
-    });
-
-    test('the monoid is associative', () {
-      final x = Environment.of({a: 1});
-      final y = Environment.of({a: 2, b: 'y'});
-      final z = Environment.of({b: 'z'});
-      final left = Environment.monoid.combine(
-        Environment.monoid.combine(x, y),
-        z,
-      );
-      final right = Environment.monoid.combine(
-        x,
-        Environment.monoid.combine(y, z),
-      );
-      expect(left.read(a), right.read(a));
-      expect(left.read(b), right.read(b));
-    });
-
-    test('lookup tells a null value from a missing value', () {
-      final environment = Environment.of({const DiKey<int?>(): null});
-      expect(
-        environment.lookup(const DiKey<int?>()),
-        const Some<Object?>(null),
-      );
-      expect(environment.lookup(a), const None());
-      expect(environment.contains(a), isFalse);
-    });
-
-    test('the environment is a copy', () {
-      final entries = <DiKey<Object?>, Object?>{a: 1};
-      final environment = Environment.of(entries);
-      entries[a] = 2;
-      expect(environment.read(a), 1);
-    });
-  });
-
   group('Finalizers', () {
     test(
       'a release runs the newest entry first, one after the other',
@@ -69,24 +18,8 @@ void main() {
       },
     );
 
-    test('a group releases every member', () async {
-      final log = <String>[];
-      final group = Finalizers.empty.pushGroup([
-        Finalizers.empty.push('a', () => throw 'a failed'),
-        Finalizers.empty.push('b', () => log.add('b')),
-        Finalizers.empty.push('c', () => throw 'c failed'),
-      ]);
-      final cause = await group.release().run();
-      expect(log, ['b']);
-      expect(cause.defects, [
-        const DisposeFailure('a', 'a failed'),
-        const DisposeFailure('c', 'c failed'),
-      ]);
-      expect(cause, isA<Both<DiFailure>>());
-    });
-
-    test('an empty group and an empty stack release to Empty', () async {
-      expect(Finalizers.empty.pushGroup(const []).isEmpty, isTrue);
+    test('an empty stack releases to Empty', () async {
+      expect(Finalizers.empty.isEmpty, isTrue);
       expect(await Finalizers.empty.release().run(), const Empty<DiFailure>());
     });
 
@@ -126,18 +59,6 @@ void main() {
         final log = <String>[];
         final both = monoid.combine(entry('first', log), entry('second', log));
         expect(await order(both, log), ['second', 'first']);
-      });
-
-      test('a group keeps its place in a combination', () async {
-        final log = <String>[];
-        final group = Finalizers.empty.pushGroup([
-          entry('g1', log),
-          entry('g2', log),
-        ]);
-        final stack = monoid.combine(entry('below', log), group);
-        final released = await order(stack, log);
-        expect(released.last, 'below');
-        expect(released.take(2), unorderedEquals(['g1', 'g2']));
       });
     });
 

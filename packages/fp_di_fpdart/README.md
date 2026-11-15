@@ -38,7 +38,7 @@ The design follows [ZIO](https://zio.dev) and the typeclasses of fpdart 1.2.
 | `ZLayer.make` arguments | the list of components that you give to `Scope` |
 | `R` and `ZIO.service` reads | `Dependency<A>`: `Functor` and `Applicative`, no `flatMap` |
 | `Scope` with finalizers | `Scope`: it holds an immutable stack of dispose functions |
-| `ZEnvironment` | an internal immutable environment, stacked with a monoid; a node reads the values of the publishers that its scope resolves |
+| `ZEnvironment` | no environment value: a node reads the values of the publishers that its scope resolves, at the moment that a step runs |
 | `Fiber.interrupt` | `Interrupt`: a canceled activation is never a `Fail` |
 | `Ref` | `IORef`: the runtime keeps its state in one cell for each root |
 | `ZIO.scoped` | `Scope.use` |
@@ -52,7 +52,7 @@ The package has no layer composition operators, such as `>>>` or `++`. The
 scope derives the wiring from the graph of the keys.
 
 The package has no hold, no lazy value, no collection key, no public
-cancellation token, no `describe`, and no inspector yet.
+cancellation token, and no inspector yet.
 
 ## Structure
 
@@ -216,6 +216,24 @@ that outlives the operation can start one.
   (`id`, `label`, `key`, `phase`, `missing`, `activationFailure`, `commits`),
   and the states of the children. `scope.revision` counts the observable
   changes of the whole tree. A read changes nothing.
+- The runtime keeps the object of what a change did not touch. Two reads with
+  no change between them give the same object, an unchanged `NodeState` stays
+  the same object, and an unchanged scope keeps its `ScopeState`. So
+  `identical` tells that nothing in a scope and its descendants changed.
+  `ScopeState.changedSince(earlier)` lists the pairs of the earlier and the
+  later `NodeState` of each node that differs: a created node has no earlier
+  state, and a node that left has no later state.
+- `scope.states` is a `Stream<ScopeState>`. A subscription listens to the scope
+  and emits the state after each round of listener calls that changed the
+  scope or a descendant. It does not emit the state at the time of the
+  subscription. It emits the state with the phase `disposed`, and then closes.
+- `scope.describe()` is an `Either` with a text for people. It lists each
+  node with its state and its missing keys, and `(not initialized)` in the
+  heading of a scope that did not run. The format can change.
+- A `get` that fails with an `UnavailableKeyFailure` says why. The message
+  names the node that waits or failed. `failedNodeStates` lists the nodes with
+  a failed automatic activation behind the key, found by a depth-first search
+  through the missing keys.
 - `addListener` calls a function after each change, with the new state
   already in place. Listeners run in rounds, one round after the other. A
   listener that throws leaves, and `errors` reports a `ListenerFailure` after
@@ -226,7 +244,8 @@ that outlives the operation can start one.
   closes the stream.
 - `ComponentNode.whenActive` is a `TaskEither` that completes at the next
   commit. `Scope.getWhenAvailable` waits for a key of the scope or an
-  ancestor, and fails when no scope can publish it any more.
+  ancestor, and fails when an activation failed behind the key or when no
+  scope can publish it any more.
 
 ## Dependency
 
@@ -284,7 +303,6 @@ The types of the package have the fpdart typeclass instances that fit them.
 | `Dependency<A>` | `Functor` and `Applicative`, and not `Monad` |
 | `DiKey` | `DiKey.eq` (`Eq`) and `DiKey.hash` (`Hash`), both built on `==` and `hashCode` |
 | `Finalizers` (internal) | `Finalizers.monoid`: the empty stack and `then` |
-| `Environment` (internal) | `Environment.monoid`: right-biased stacking |
 
 The effects of the interpreters are fpdart values. A step is a
 `ReaderTaskEither` that uses `TaskEither.tryCatch`, `flatMap`, and
@@ -343,7 +361,7 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 | `DependencyCycleFailure` | a read inside an activation would close a cycle of committed reads; `path` lists the keys. Components that require each other wait, and the check of a scope raises no cycle |
 | `ActivationFailure` | a create step threw or returned a `Left`; `error` is the error or the `Left` value |
 | `UnmatchedOverrideFailure` | an override has no single component to replace |
-| `UnavailableKeyFailure` | `get` of a key that no scope of the chain resolves, or a read inside an activation of a key without publisher |
+| `UnavailableKeyFailure` | `get` of a key that no scope of the chain resolves, or a read inside an activation of a key without publisher; `failedNodeStates` lists the failed nodes behind the key |
 | `ScopePhaseFailure` | an operation in a phase where it is not valid, such as `run` of an initialized scope |
 | `DisposedScopeFailure` | an operation of a scope that is disposing or disposed |
 | `ReentrantMutationFailure` | a lifecycle operation that started inside a lifecycle operation |
@@ -406,7 +424,7 @@ dart run packages/fp_di_fpdart/example/checkout.dart
 | [`parallel.dart`](example/parallel.dart) | Independent components start and release at the same time |
 | [`token_key.dart`](example/token_key.dart) | A token key orders one component after the effect of another |
 | [`rollback.dart`](example/rollback.dart) | A failed run rolls back in reverse, and the retry is a second `run`; a failed program inside `use` disposes the scope |
-| [`reactive.dart`](example/reactive.dart) | A nearer publisher and a withdrawn publisher reach only the readers; a listener traces the nodes |
+| [`reactive.dart`](example/reactive.dart) | A nearer publisher and a withdrawn publisher reach only the readers; a listener traces the nodes with `changedSince` |
 | [`session_scope.dart`](example/session_scope.dart) | A login child scope, and a logout that disposes it |
 | [`drain_scope.dart`](example/drain_scope.dart) | A logout flushes the database after the readers of the database release |
 | [`environments.dart`](example/environments.dart) | Platform, flavor, test fakes, and a two-stage boot with plain lists |

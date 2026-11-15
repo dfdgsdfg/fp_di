@@ -75,18 +75,26 @@ final rowViewFactory = Component<RowViewFactory>(
       .map<RowViewFactory>((cache) => cache.view),
 );
 
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
-
 Future<void> main() async {
   final app = Scope(components: [database('main')]);
-  // A nearer scope that publishes another database.
-  final replica = childOf(app, [database('replica')]);
-  final feature = childOf(replica, [rowViewFactory]);
+  // A nearer scope that publishes another database. `child` is a `Left` only
+  // for a scope that is disposing or disposed.
+  final scopes = app
+      .child(components: [database('replica')])
+      .flatMap(
+        (replica) => replica
+            .child(components: [rowViewFactory])
+            .map((feature) => (replica, feature)),
+      );
+  switch (scopes) {
+    case Left(value: final failure):
+      print('child failed: $failure');
+    case Right(value: (final replica, final feature)):
+      await demo(app, replica, feature);
+  }
+}
 
+Future<void> demo(Scope app, Scope replica, Scope feature) async {
   print('run');
   final started = await TaskEither<Cause<DiFailure>, Scope>(app.run)
       .flatMap((_) => TaskEither<Cause<DiFailure>, Scope>(replica.run))

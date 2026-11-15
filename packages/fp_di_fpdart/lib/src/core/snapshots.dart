@@ -58,6 +58,7 @@ final class NodeState {
 
   @override
   bool operator ==(Object other) {
+    if (identical(this, other)) return true;
     if (other is! NodeState) return false;
     if (other.id != id ||
         other.label != label ||
@@ -87,7 +88,13 @@ final class NodeState {
       '${missing.isEmpty ? '' : ', missing ${missing.join(', ')}'})';
 }
 
-/// What an observer sees of one scope, at one revision.
+/// What an observer sees of one scope and its descendants, at one revision.
+///
+/// The value is a tree: it holds the scope and each descendant that is not
+/// disposed, and no ancestor. Two values with an equal phase, equal nodes, and
+/// equal children are equal. The runtime keeps the object of a scope that a
+/// transition does not change, so `identical` tells that nothing in the scope
+/// and its descendants changed.
 final class ScopeState {
   /// Creates the state of a scope.
   ScopeState({
@@ -109,10 +116,63 @@ final class ScopeState {
 
   @override
   bool operator ==(Object other) =>
+      identical(this, other) ||
       other is ScopeState &&
-      other.phase == phase &&
-      _same(other.nodeStates, nodeStates) &&
-      _same(other.childStates, childStates);
+          other.phase == phase &&
+          _same(other.nodeStates, nodeStates) &&
+          _same(other.childStates, childStates);
+
+  /// The nodes of this value and its descendants whose state differs from
+  /// their state in [earlier], an earlier value of the same scope.
+  ///
+  /// Each pair holds the earlier and the later state of one node. A created
+  /// node has no earlier state. A node that this value does not hold, after a
+  /// failed run or the disposal of its scope, has no later state. The pairs of
+  /// this value come first, in the order of the tree. Then come the pairs of
+  /// the nodes that only [earlier] holds.
+  ///
+  /// A scope object that both trees hold did not change, so the walk does not
+  /// enter it.
+  List<(NodeState?, NodeState?)> changedSince(ScopeState earlier) {
+    if (identical(this, earlier)) return const [];
+    final earlierScopes = Set<ScopeState>.identity();
+    void collect(ScopeState scope) {
+      earlierScopes.add(scope);
+      scope.childStates.forEach(collect);
+    }
+
+    collect(earlier);
+    final kept = Set<ScopeState>.identity();
+    final later = <NodeId, NodeState>{};
+    void walkLater(ScopeState scope) {
+      if (earlierScopes.contains(scope)) {
+        kept.add(scope);
+        return;
+      }
+      for (final node in scope.nodeStates) {
+        later[node.id] = node;
+      }
+      scope.childStates.forEach(walkLater);
+    }
+
+    walkLater(this);
+    final before = <NodeId, NodeState>{};
+    void walkEarlier(ScopeState scope) {
+      if (kept.contains(scope)) return;
+      for (final node in scope.nodeStates) {
+        before[node.id] = node;
+      }
+      scope.childStates.forEach(walkEarlier);
+    }
+
+    walkEarlier(earlier);
+    return [
+      for (final node in later.values)
+        if (before[node.id] != node) (before[node.id], node),
+      for (final node in before.values)
+        if (!later.containsKey(node.id)) (node, null),
+    ];
+  }
 
   @override
   int get hashCode => Object.hash(
@@ -171,14 +231,10 @@ ScopeState scopeState(RuntimeState s, ScopeId id) {
 /// A scope has nodes from the start of its initialization.
 Option<NodeId> nodeForKey(RuntimeState s, ScopeId scope, DiKey<Object?> key) {
   final record = scopeRecord(s, scope);
-  for (var i = 0; i < record.nodes.length; i++) {
-    final component = record.components[i];
-    if (!component.isEffect && component.key == key) {
-      final id = record.nodes[i];
-      return nodeRecord(s, id).removed ? const None() : Some(id);
-    }
-  }
-  return const None();
+  final index = record.keyIndex[key];
+  if (index == null || record.nodes.isEmpty) return const None();
+  final id = record.nodes[index];
+  return nodeRecord(s, id).removed ? const None() : Some(id);
 }
 
 /// Whether a scope from [from] to the root can still publish [key].
@@ -221,4 +277,217 @@ List<NodeId>? readsPath(RuntimeState s, NodeId from, NodeId target) {
   }
 
   return visit(from);
+}
+
+// ---- Sharing.
+
+/// The snapshots that the runtime built before, so that a new snapshot can keep
+/// the object of what did not change.
+///
+/// The value is immutable. [scopeStateShared] takes one and gives the next
+/// one. The shell keeps the current one in a cell. A read at the revision that
+/// the memo knows gives the same object. A read at a later revision builds the
+/// scopes again, and keeps the earlier object of each node state that is equal
+/// and of each scope state whose parts are the same objects.
+final class Snapshots {
+  const Snapshots._(this._nodes, this._scopes);
+
+  /// A memo without a snapshot.
+  static const Snapshots empty = Snapshots._({}, {});
+
+  final Map<NodeId, NodeState> _nodes;
+  final Map<ScopeId, ({int revision, ScopeState state})> _scopes;
+}
+
+bool _sameObjects<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (!identical(a[i], b[i])) return false;
+  }
+  return true;
+}
+
+/// The state of the scope [id] in [s], and the memo for the next read.
+///
+/// The state shares objects with the states that [memo] holds: an unchanged
+/// node keeps its `NodeState`, and a scope whose phase, nodes, and children
+/// are unchanged keeps its `ScopeState`. Two reads at one revision give the
+/// same object.
+(ScopeState, Snapshots) scopeStateShared(
+  RuntimeState s,
+  ScopeId id,
+  Snapshots memo,
+) {
+  final known = memo._scopes[id];
+  if (known != null && known.revision == s.revision) return (known.state, memo);
+  final nodes = {...memo._nodes};
+  final scopes = {...memo._scopes};
+  ScopeState build(ScopeId at) {
+    final cached = scopes[at];
+    if (cached != null && cached.revision == s.revision) return cached.state;
+    final record = scopeRecord(s, at);
+    final children = [for (final child in record.children) build(child)];
+    final nodeStates = <NodeState>[];
+    for (final n in record.nodes) {
+      final fresh = nodeState(s, n);
+      final previous = nodes[n];
+      final kept = previous != null && previous == fresh ? previous : fresh;
+      nodes[n] = kept;
+      nodeStates.add(kept);
+    }
+    final phase = scopePhase(s, at);
+    final previous = cached?.state;
+    final state =
+        previous != null &&
+            previous.phase == phase &&
+            _sameObjects(previous.nodeStates, nodeStates) &&
+            _sameObjects(previous.childStates, children)
+        ? previous
+        : ScopeState(
+            phase: phase,
+            nodeStates: nodeStates,
+            childStates: children,
+          );
+    scopes[at] = (revision: s.revision, state: state);
+    return state;
+  }
+
+  final state = build(id);
+  return (state, Snapshots._(nodes, scopes));
+}
+
+/// The state of the node [n] in [s], and the memo for the next read.
+///
+/// The object is the one that `scopeStateShared` gives for the scope of the
+/// node, when the scope lists the node.
+(NodeState, Snapshots) nodeStateShared(
+  RuntimeState s,
+  NodeId n,
+  Snapshots memo,
+) {
+  final node = nodeRecord(s, n);
+  final (_, next) = scopeStateShared(s, node.scope, memo);
+  // A scope that rolled back its run lists no node. The state of such a node
+  // is not part of a scope state, so it is not shared.
+  final nodes = scopeRecord(s, node.scope).nodes;
+  final listed = node.index < nodes.length && nodes[node.index] == n;
+  return (listed ? next._nodes[n]! : nodeState(s, n), next);
+}
+
+// ---- The cause of an unavailable key.
+
+/// The word that `describe` uses for [phase].
+String stateWord(NodePhase phase) => switch (phase) {
+  NodePhase.active => 'active',
+  NodePhase.activating => 'activating',
+  NodePhase.deactivating => 'deactivating',
+  NodePhase.waiting => 'waiting',
+  NodePhase.activationFailed => 'activation failed',
+  NodePhase.disposeFailed => 'dispose failed',
+  NodePhase.inactive => 'inactive',
+  NodePhase.disposed => 'disposed',
+};
+
+String _causeText(Cause<DiFailure> cause) {
+  final first = cause.failures.firstOrNull;
+  return switch (first) {
+    ActivationFailure(:final error) => '$error',
+    final DiFailure failure => failure.message,
+    null => cause.prettyPrint().replaceAll('\n', ' '),
+  };
+}
+
+/// The failure of a `get` of [key] from the scope [scope], when the key has no
+/// value.
+///
+/// The search starts at the node that `findNode` returns. A failed node ends
+/// its path. A waiting node continues at the nodes of its missing keys: the
+/// nearest node of a required key, other than the waiting node itself. The
+/// search is depth-first, visits each node one time, and changes nothing.
+UnavailableKeyFailure unavailableKey(
+  RuntimeState s,
+  ScopeId scope,
+  DiKey<Object?> key,
+) {
+  NodeId? first;
+  var declaredOnly = false;
+  for (
+    ScopeId? at = scope;
+    at != null;
+    at = scopeRecord(s, at).parent.toNullable()
+  ) {
+    first = nodeForKey(s, at, key).toNullable();
+    if (first != null) break;
+    declaredOnly |=
+        scopePhase(s, at) == ScopePhase.declared &&
+        scopeRecord(s, at).keyIndex.containsKey(key);
+  }
+  if (first == null) {
+    return UnavailableKeyFailure(
+      key,
+      message: declaredOnly
+          ? 'No node publishes $key: a scope declares the key and is not '
+                'initialized.'
+          : 'No node publishes $key.',
+    );
+  }
+
+  NodeId? behind(NodeId reader, DiKey<Object?> missing) {
+    for (
+      ScopeId? at = nodeRecord(s, reader).scope;
+      at != null;
+      at = scopeRecord(s, at).parent.toNullable()
+    ) {
+      final node = nodeForKey(s, at, missing).toNullable();
+      if (node != null && node != reader) return node;
+    }
+    return null;
+  }
+
+  final failed = <NodeState>[];
+  final seen = <NodeId>{};
+  final pending = <NodeId>[first];
+  while (pending.isNotEmpty) {
+    final node = pending.removeLast();
+    if (!seen.add(node)) continue;
+    final state = nodeState(s, node);
+    if (state.phase == NodePhase.activationFailed) {
+      failed.add(state);
+      continue;
+    }
+    if (state.phase != NodePhase.waiting) continue;
+    final next = <NodeId>[
+      for (final missing in state.missing) ?behind(node, missing),
+    ];
+    // The last node of the stack is the next one, so the first node behind
+    // this node goes on last.
+    pending.addAll(next.reversed);
+  }
+
+  final state = nodeState(s, first);
+  final buffer = StringBuffer('No value is available for $key');
+  switch (state.phase) {
+    case NodePhase.waiting:
+      buffer.write(
+        ': the node ${state.label} waits for ${state.missing.join(', ')}.',
+      );
+    case NodePhase.activationFailed:
+      buffer.write('.');
+    case final phase:
+      buffer.write(': the node ${state.label} is ${stateWord(phase)}.');
+  }
+  if (failed.isNotEmpty) {
+    final cause = failed.first;
+    buffer.write(' The activation of ${cause.label} failed');
+    if (failed.length > 1) {
+      buffer.write(', and ${failed.length - 1} more failed');
+    }
+    final text = cause.activationFailure.map(_causeText).getOrElse(() => '');
+    buffer.write(': $text');
+  }
+  return UnavailableKeyFailure(
+    key,
+    message: buffer.toString(),
+    failedNodeStates: failed,
+  );
 }

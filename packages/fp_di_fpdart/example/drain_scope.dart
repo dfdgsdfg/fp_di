@@ -156,18 +156,29 @@ final class Login {
 
 /// Runs the database scope, and then the session scope inside it.
 Future<Option<Login>> login(Scope app, String userId) async {
-  final db = childOf(app, sessionDbComponents(userId));
-  final session = childOf(db, sessionComponents);
-  final started = await TaskEither<Cause<DiFailure>, Scope>(
-    db.run,
-  ).flatMap((_) => TaskEither<Cause<DiFailure>, Scope>(session.run)).run();
-  switch (started) {
-    case Left(value: final cause):
-      print('  login failed:\n${cause.prettyPrint()}');
-      await close(db);
+  final scopes = app
+      .child(components: sessionDbComponents(userId))
+      .flatMap(
+        (db) => db
+            .child(components: sessionComponents)
+            .map((session) => (db, session)),
+      );
+  switch (scopes) {
+    case Left(value: final failure):
+      print('  login failed: $failure');
       return const None();
-    case Right():
-      return Some(Login(db, session));
+    case Right(value: (final db, final session)):
+      final started = await TaskEither<Cause<DiFailure>, Scope>(
+        db.run,
+      ).flatMap((_) => TaskEither<Cause<DiFailure>, Scope>(session.run)).run();
+      switch (started) {
+        case Left(value: final cause):
+          print('  login failed:\n${cause.prettyPrint()}');
+          await close(db);
+          return const None();
+        case Right():
+          return Some(Login(db, session));
+      }
   }
 }
 
@@ -189,12 +200,6 @@ void draft(Login login, String text) {
     composer.draft = text;
   }
 }
-
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   final app = Scope(components: appComponents);

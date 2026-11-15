@@ -309,10 +309,18 @@ Future<void> startApp(Scope boot, Flavor flavor) async {
   // Choose the components from the flavor that the boot scope publishes. A
   // second source of the flavor could disagree with the value that
   // components read.
-  final app = childOf(
-    boot,
-    appComponents(flavor: flavor, platform: Platform.mobile),
+  final child = boot.child(
+    components: appComponents(flavor: flavor, platform: Platform.mobile),
   );
+  // `child` is a `Left` only for a scope that is disposing or disposed.
+  final Scope app;
+  switch (child) {
+    case Left(value: final failure):
+      print(indent('child failed: $failure'));
+      return;
+    case Right(value: final scope):
+      app = scope;
+  }
   switch (await app.run()) {
     case Left(value: final cause):
       print(indent(cause.prettyPrint()));
@@ -349,12 +357,6 @@ Future<void> runTest() async {
       await close(test);
   }
 }
-
-/// A child scope of [parent]. `child` is a `Left` only for a scope that is
-/// disposing or disposed, so the example reads it as a bug.
-Scope childOf(Scope parent, List<Component<Object?>> components) => parent
-    .child(components: components)
-    .getOrElse((failure) => throw StateError('$failure'));
 
 Future<void> main() async {
   print('check the variants');

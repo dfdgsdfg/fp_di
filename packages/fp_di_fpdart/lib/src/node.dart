@@ -22,7 +22,7 @@ final class ComponentNode<A> {
   final NodeId _id;
 
   /// The state of the node now.
-  NodeState get state => nodeState(_runtime.state, _id);
+  NodeState get state => _runtime.nodeStateOf(_id);
 
   /// The name of the node in a message.
   String get label => state.label;
@@ -39,7 +39,7 @@ final class ComponentNode<A> {
     final s = _runtime.state;
     final phase = nodePhase(s, _id);
     if (phase != NodePhase.active) {
-      return Left(InactiveNodeFailure(nodeState(s, _id).missing));
+      return Left(InactiveNodeFailure(_runtime.nodeStateOf(_id).missing));
     }
     return Right(nodeRecord(s, _id).value.toNullable() as A);
   }

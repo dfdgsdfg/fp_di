@@ -2,7 +2,6 @@ import 'package:fp_di_fpdart/fp_di_fpdart.dart';
 import 'package:fp_di_fpdart/src/dependency.dart'
     as internal
     show StepContext, foldDependency, runDependency;
-import 'package:fp_di_fpdart/src/environment.dart';
 import 'package:fp_di_fpdart/src/finalizers.dart';
 import 'package:fp_di_fpdart/src/syntax.dart';
 import 'package:fpdart/fpdart.dart';
@@ -247,10 +246,20 @@ void main() {
       ) => internal
           .runDependency(
             dependency,
-            internal.StepContext.fromEnvironment(
-              'probe',
-              Environment.of(map),
-              ref,
+            internal.StepContext(
+              owner: 'probe',
+              finalizers: ref,
+              read: (key) => map.containsKey(key)
+                  ? Right<Cause<DiFailure>, Object?>(map[key])
+                  : Left<Cause<DiFailure>, Object?>(
+                      Fail<DiFailure>(
+                        UnavailableKeyFailure(key),
+                        StackTrace.current,
+                      ),
+                    ),
+              readOption: (key) =>
+                  map.containsKey(key) ? Some(map[key]) : const None(),
+              checkpoint: () => const Right<Cause<DiFailure>, Unit>(unit),
             ),
           )
           .run();

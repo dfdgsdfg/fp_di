@@ -26,10 +26,12 @@ final class ScopeRecord {
     this.disposed = false,
     List<NodeId> nodes = const [],
     Map<DiKey<Object?>, PublisherRef> bindings = const {},
+    Map<DiKey<Object?>, int>? keyIndex,
   }) : components = List.unmodifiable(components),
        children = List.unmodifiable(children),
        nodes = List.unmodifiable(nodes),
-       bindings = Map.unmodifiable(bindings);
+       bindings = Map.unmodifiable(bindings),
+       keyIndex = keyIndex ?? _indexOfKeys(components);
 
   /// The identity of the scope.
   final ScopeId id;
@@ -65,6 +67,11 @@ final class ScopeRecord {
   /// The committed publications of the nodes of this scope, by key.
   final Map<DiKey<Object?>, PublisherRef> bindings;
 
+  /// The position of the component that publishes each key. An effect
+  /// publishes no key. The map is a function of [components], so a copy keeps
+  /// it.
+  final Map<DiKey<Object?>, int> keyIndex;
+
   /// A record with the given fields replaced.
   ScopeRecord copyWith({
     List<ScopeId>? children,
@@ -87,7 +94,16 @@ final class ScopeRecord {
     disposed: disposed ?? this.disposed,
     nodes: nodes ?? this.nodes,
     bindings: bindings ?? this.bindings,
+    keyIndex: keyIndex,
   );
+}
+
+Map<DiKey<Object?>, int> _indexOfKeys(List<Component<Object?>> components) {
+  final index = <DiKey<Object?>, int>{};
+  for (var i = 0; i < components.length; i++) {
+    if (!components[i].isEffect) index.putIfAbsent(components[i].key, () => i);
+  }
+  return Map.unmodifiable(index);
 }
 
 /// The immutable record of one node.
