@@ -28,7 +28,7 @@ library;
 
 export 'src/cause.dart';
 export 'src/component.dart' hide buildComponent;
-export 'src/dependency.dart' hide StepContext, runDependency;
+export 'src/dependency.dart' hide StepContext, foldDependency, runDependency;
 export 'src/failure.dart';
 export 'src/key.dart';
 export 'src/scope.dart';

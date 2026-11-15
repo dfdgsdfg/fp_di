@@ -9,9 +9,9 @@
 //
 // Differences from the fp_di version:
 //
-// - A component always publishes a value. The package has no
-//   `Component.effect`. The crash reporter publishes a small object that no
-//   component reads.
+// - The crash reporter is a `Component.effect`. It publishes no key, so
+//   nothing can read it. It still owns the reporter, and the runtime releases
+//   it before the logger.
 // - `Dependency.require<LoggingReady>().mapTask(...)` replaces `Dependency1`.
 //   `mapTask` waits for the install.
 //
@@ -100,8 +100,8 @@ final logging = Component<LoggingReady>(
 );
 
 /// Reads the token, so it starts after the logger. The runtime releases it
-/// before the logger.
-final crashReporting = Component<CrashReporting>(
+/// before the logger. It publishes no key.
+final crashReporting = Component<CrashReporting>.effect(
   debugLabel: 'crashReporting',
   dependency: Dependency.require<LoggingReady>().mapTask<CrashReporting>(
     (_) => Task(() async {

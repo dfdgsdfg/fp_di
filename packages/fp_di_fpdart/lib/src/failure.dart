@@ -77,6 +77,26 @@ final class DuplicateKeyFailure extends DiFailure {
   String get message => '$key is provided by ${labels.join(', ')}';
 }
 
+/// An override has no single component to replace.
+///
+/// Either no component publishes the key of the override, or the override is
+/// an effect component, which publishes no key.
+final class UnmatchedOverrideFailure extends DiFailure {
+  /// Creates the failure for [key], which the override with the label
+  /// [owner] names.
+  const UnmatchedOverrideFailure(this.key, {required this.owner});
+
+  /// The key that the override names.
+  final DiKey<Object?> key;
+
+  /// The label of the override.
+  final String owner;
+
+  @override
+  String get message =>
+      '$owner overrides $key, which no single component publishes';
+}
+
 /// The components of one scope read each other in a cycle.
 final class DependencyCycleFailure extends DiFailure {
   /// Creates the failure for the cycle that [path] lists.

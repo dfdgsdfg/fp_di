@@ -119,6 +119,8 @@ final class Scope {
 
   final List<Component<Object?>> _components;
   final Scope? _parent;
+  // The two `IORef` values are the one unavoidable construction of effects:
+  // a field initializer must give the reference now, so the `IO` runs here.
   final IORef<_State> _state = IORef.create<_State>(const _Declared()).run();
   final IORef<List<Scope>> _children = IORef.create<List<Scope>>(
     const [],
@@ -180,7 +182,7 @@ final class Scope {
     return execution;
   }
 
-  Task<Exit<DiFailure, Scope>> _execute() => TaskEither.fromEither(_prepare())
+  Task<Exit<DiFailure, Scope>> _execute() => _prepare()
       .flatMap((prepared) => Plan.build(prepared.$2, prepared.$1))
       .match<(_State, Exit<DiFailure, Scope>)>(
         (cause) => (const _Failed(), Left(cause)),
@@ -191,22 +193,35 @@ final class Scope {
       );
 
   /// The inherited environment and the layers of the components.
-  Exit<DiFailure, (Environment, Strata)> _prepare() => _inherited().flatMap(
-    (environment) => Plan.of(_components, [
-      for (var scope = _parent; scope != null; scope = scope._parent)
-        scope._components.publishes,
-    ]).map((layers) => (environment, layers)),
-  );
+  TaskEither<Cause<DiFailure>, (Environment, Strata)> _prepare() =>
+      _inherited().flatMap(
+        (environment) => TaskEither.fromEither(
+          Plan.of(_components, [
+            for (var scope = _parent; scope != null; scope = scope._parent)
+              scope._components.publishes,
+          ]),
+        ).map((layers) => (environment, layers)),
+      );
 
   /// The environment that the parent makes visible.
-  Exit<DiFailure, Environment> _inherited() => switch (_parent) {
-    null => const Right(Environment.empty),
-    final parent => switch (parent._current) {
-      _Active(:final environment) => Right(environment),
-      final other => Left(
-        Fail(InactiveAncestorFailure(other.phase), StackTrace.current),
+  ///
+  /// The task reads the state of the parent when it runs.
+  TaskEither<Cause<DiFailure>, Environment> _inherited() => switch (_parent) {
+    null => TaskEither.right(Environment.empty),
+    final parent =>
+      TaskEither<Cause<DiFailure>, _State>.fromTask(
+        Task.of(unit).flatMap((_) => parent._state.read().toTask()),
+      ).flatMap(
+        (state) => switch (state) {
+          _Active(:final environment) => TaskEither.right(environment),
+          final other => TaskEither.left(
+            Fail<DiFailure>(
+              InactiveAncestorFailure(other.phase),
+              StackTrace.current,
+            ),
+          ),
+        },
       ),
-    },
   };
 
   bool get _ancestorsActive =>
@@ -260,8 +275,9 @@ final class Scope {
             .map((_) => exit),
       );
 
-  Task<Cause<DiFailure>> _disposeChildren() =>
-      Task(() async => _children.read().run()).flatMap(
+  Task<Cause<DiFailure>> _disposeChildren() => Task.of(unit)
+      .flatMap((_) => _children.read().toTask())
+      .flatMap(
         (children) => children.reversed.fold(
           Task<Cause<DiFailure>>.of(const Empty<DiFailure>()),
           (done, child) => done.flatMap(
@@ -316,19 +332,16 @@ final class Scope {
   /// task does not dispose the scope.
   TaskEither<Cause<Either<DiFailure, E>>, A> use<E, A>(
     ReaderTaskEither<Scope, E, A> program,
-  ) => TaskEither(
-    () => Task(run)
-        .flatMap<Exit<Either<DiFailure, E>, A>>(
-          (started) => started.match(
-            (runCause) => _afterFailedRun<E, A>(runCause),
-            (_) => _attemptProgram(program).flatMap(
-              (used) => _disposeCause().map(
-                (disposal) => _combine<E, A>(used, disposal),
-              ),
-            ),
-          ),
-        )
-        .run(),
+  ) => TaskEither.fromTaskFlatten(
+    Task<Exit<DiFailure, Scope>>(run).flatMap(
+      (started) => started.match(
+        (runCause) => _afterFailedRun<E, A>(runCause),
+        (_) => _attemptProgram(program).flatMap(
+          (used) =>
+              _disposeCause().map((disposal) => _combine<E, A>(used, disposal)),
+        ),
+      ),
+    ),
   );
 
   /// The disposal after a failed run. A phase failure means that the owner
@@ -363,19 +376,28 @@ final class Scope {
   static Cause<Either<DiFailure, E>> _lift<E>(Cause<DiFailure> cause) =>
       cause.map<Either<DiFailure, E>>(Left.new);
 
+  /// The program as a task that never throws.
+  ///
+  /// A throw is a `Die`, and a `Left` is a `Fail` of a `Right`.
   Task<Exit<Either<DiFailure, E>, A>> _attemptProgram<E, A>(
     ReaderTaskEither<Scope, E, A> program,
-  ) => Task(() async {
-    try {
-      final result = await program.run(this);
-      return result.match<Exit<Either<DiFailure, E>, A>>(
-        (error) => Left(Fail(Right<DiFailure, E>(error), StackTrace.current)),
-        Right.new,
-      );
-    } catch (error, stackTrace) {
-      return Left<Cause<Either<DiFailure, E>>, A>(Die(error, stackTrace));
-    }
-  });
+  ) =>
+      TaskEither<Cause<Either<DiFailure, E>>, Either<E, A>>.tryCatch(
+            () => program.run(this),
+            (error, stackTrace) => Die<Either<DiFailure, E>>(error, stackTrace),
+          )
+          .chainEither(
+            (result) => result.mapLeft<Cause<Either<DiFailure, E>>>(
+              (error) => Fail<Either<DiFailure, E>>(
+                Right<DiFailure, E>(error),
+                StackTrace.current,
+              ),
+            ),
+          )
+          .match(
+            Left<Cause<Either<DiFailure, E>>, A>.new,
+            Right<Cause<Either<DiFailure, E>>, A>.new,
+          );
 
   /// The value that the scope or the nearest active ancestor publishes for
   /// [key].

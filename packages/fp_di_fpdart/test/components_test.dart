@@ -52,54 +52,136 @@ void main() {
     expect(scope.child().components, isEmpty);
   });
 
-  test('overriddenBy replaces in place and appends new keys', () async {
-    final log = <String>[];
-    final base = [
-      logged<int>('base int', 1, log, key: intKey),
-      logged<String>('base text', 'a', log, key: textKey),
-    ];
-    final overrides = [
-      logged<bool>('new flag', true, log, key: flagKey),
-      logged<int>('override int', 2, log, key: intKey),
-    ];
-    final components = base.overriddenBy(overrides);
-    expect(components.publishes.toList(), [intKey, textKey, flagKey]);
-    expect(components.map((c) => c.label), [
-      'override int',
-      'base text',
-      'new flag',
-    ]);
-    final scope = Scope(components: components);
-    rightOf(await scope.run());
-    expect(rightOf(scope.get<int>(key: intKey)), 2);
-    expect(rightOf(scope.get<String>(key: textKey)), 'a');
-    expect(rightOf(scope.get<bool>(key: flagKey)), isTrue);
-    expect(log, isNot(contains('create base int')));
-    expect(log, containsAll(['create override int', 'create new flag']));
-  });
+  group('overriddenBy', () {
+    test('replaces the component that publishes the key, in place', () async {
+      final log = <String>[];
+      final base = [
+        logged<int>('base int', 1, log, key: intKey),
+        logged<String>('base text', 'a', log, key: textKey),
+        logged<bool>('base flag', false, log, key: flagKey),
+      ];
+      final overrides = [
+        logged<bool>('new flag', true, log, key: flagKey),
+        logged<int>('override int', 2, log, key: intKey),
+      ];
+      final components = rightOf(base.overriddenBy(overrides));
+      expect(components.publishes.toList(), [intKey, textKey, flagKey]);
+      expect(components.map((c) => c.label), [
+        'override int',
+        'base text',
+        'new flag',
+      ]);
+      final scope = Scope(components: components);
+      rightOf(await scope.run());
+      expect(rightOf(scope.get<int>(key: intKey)), 2);
+      expect(rightOf(scope.get<String>(key: textKey)), 'a');
+      expect(rightOf(scope.get<bool>(key: flagKey)), isTrue);
+      expect(log, isNot(contains('create base int')));
+      expect(log, containsAll(['create override int', 'create new flag']));
+    });
 
-  test('overriddenBy keeps the base list unchanged', () {
-    final base = [number(1, key: intKey)];
-    base.overriddenBy([number(2, key: intKey)]);
-    expect(base.publishes, {intKey});
-    expect(base.single.label, 'n1');
-  });
+    test('keeps the base list unchanged', () {
+      final base = [number(1, key: intKey)];
+      rightOf(base.overriddenBy([number(2, key: intKey)]));
+      expect(base.publishes, {intKey});
+      expect(base.single.label, 'n1');
+    });
 
-  test('overriddenBy works for any iterable', () {
-    final result = {
-      number(1, key: intKey),
-    }.overriddenBy(Iterable.generate(1, (_) => number(2, key: intKey)));
-    expect(result.single.label, 'n2');
-  });
+    test('works for any iterable', () {
+      final result = rightOf(
+        {
+          number(1, key: intKey),
+        }.overriddenBy(Iterable.generate(1, (_) => number(2, key: intKey))),
+      );
+      expect(result.single.label, 'n2');
+    });
 
-  test('a duplicate in the overrides still fails the run', () async {
-    final components = [
-      number(1, key: intKey),
-    ].overriddenBy([number(2, key: intKey), number(3, key: intKey)]);
-    expect(components, hasLength(2));
-    expect(
-      await failureOfRun(Scope(components: components)),
-      isA<DuplicateKeyFailure>(),
-    );
+    test('an empty override list gives an equal list', () {
+      final base = [number(1, key: intKey)];
+      expect(rightOf(base.overriddenBy(const [])), base);
+    });
+
+    test('a key that no component publishes is unmatched', () {
+      final cause = leftOf(
+        [number(1, key: intKey)].overriddenBy([
+          Component<String>.value(key: textKey, value: 'x', debugLabel: 'text'),
+        ]),
+      );
+      expect(
+        cause.only,
+        isA<UnmatchedOverrideFailure>()
+            .having((f) => f.key, 'key', textKey)
+            .having((f) => f.owner, 'owner', 'text'),
+      );
+      expect(cause, isA<Fail<DiFailure>>());
+    });
+
+    test('every problem is reported, in the order of the overrides', () {
+      final base = [
+        number(1, key: intKey),
+        number(2, key: intKey),
+        number(3, key: const DiKey<int>(name: 'flag')),
+      ];
+      final cause = leftOf(
+        base.overriddenBy([
+          Component<String>.value(key: textKey, value: 'a', debugLabel: 'a'),
+          number(4, key: intKey),
+          Component<String>.value(key: textKey, value: 'b', debugLabel: 'b'),
+        ]),
+      );
+      expect(cause.failures.map((f) => f.runtimeType), [
+        UnmatchedOverrideFailure,
+        DuplicateKeyFailure,
+        DuplicateKeyFailure,
+        UnmatchedOverrideFailure,
+      ]);
+      expect(cause, isA<Both<DiFailure>>());
+      final baseDuplicate = cause.failures[2] as DuplicateKeyFailure;
+      expect(baseDuplicate.key, intKey);
+      expect(baseDuplicate.labels, ['n1', 'n2']);
+      final overrideDuplicate = cause.failures[1] as DuplicateKeyFailure;
+      expect(overrideDuplicate.key, textKey);
+      expect(overrideDuplicate.labels, ['a', 'b']);
+    });
+
+    test('two overrides with the same key are a duplicate', () {
+      final cause = leftOf(
+        [
+          number(1, key: intKey),
+        ].overriddenBy([number(2, key: intKey), number(3, key: intKey)]),
+      );
+      expect(
+        cause.only,
+        isA<DuplicateKeyFailure>().having((f) => f.labels, 'labels', [
+          'n2',
+          'n3',
+        ]),
+      );
+    });
+
+    test('an effect cannot be an override', () {
+      final effect = Component<int>.effect(
+        debugLabel: 'effect',
+        dependency: Dependency<int>.of(1),
+      );
+      final cause = leftOf([number(1, key: intKey)].overriddenBy([effect]));
+      expect(
+        cause.only,
+        isA<UnmatchedOverrideFailure>().having(
+          (f) => f.owner,
+          'owner',
+          'effect',
+        ),
+      );
+    });
+
+    test('an effect of the base stays where it is', () {
+      final effect = Component<int>.effect(dependency: Dependency<int>.of(1));
+      final result = rightOf(
+        [effect, number(1, key: intKey)].overriddenBy([number(2, key: intKey)]),
+      );
+      expect(result.first, same(effect));
+      expect(result.last.label, 'n2');
+    });
   });
 }

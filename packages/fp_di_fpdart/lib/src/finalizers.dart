@@ -24,6 +24,15 @@ final class Finalizers {
   /// The stack with no entry.
   static const Finalizers empty = Finalizers._([]);
 
+  /// The monoid of stacking: [empty] and [then].
+  ///
+  /// The operation is associative. A release of the combination runs the
+  /// entries of the second stack first.
+  static final Monoid<Finalizers> monoid = Monoid.instance<Finalizers>(
+    empty,
+    (first, second) => first.then(second),
+  );
+
   final List<_Entry> _entries;
 
   /// Whether the stack has no entry.
@@ -77,14 +86,15 @@ final class _Single extends _Entry {
   final FutureOr<void> Function() run;
 
   @override
-  Task<Cause<DiFailure>> release() => Task<Cause<DiFailure>>(() async {
-    try {
-      await run();
-      return const Empty<DiFailure>();
-    } catch (error, stackTrace) {
-      return Die<DiFailure>(DisposeFailure(owner, error), stackTrace);
-    }
-  });
+  Task<Cause<DiFailure>> release() =>
+      TaskEither<Cause<DiFailure>, Unit>.tryCatch(
+        () async {
+          await run();
+          return unit;
+        },
+        (error, stackTrace) =>
+            Die<DiFailure>(DisposeFailure(owner, error), stackTrace),
+      ).match((defect) => defect, (_) => const Empty<DiFailure>());
 }
 
 final class _Group extends _Entry {

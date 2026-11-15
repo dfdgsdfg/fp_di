@@ -57,6 +57,8 @@ String describe(DiFailure failure) => switch (failure) {
   DependencyCycleFailure(:final path) => 'cycle: ${path.join(' -> ')}',
   ActivationFailure(:final owner, :final error) =>
     'activation: $owner failed with $error',
+  UnmatchedOverrideFailure(:final key, :final owner) =>
+    'unmatched override: $owner names $key',
   UnavailableKeyFailure(:final key) => 'unavailable: $key',
   ScopePhaseFailure(:final operation, :final phase) =>
     'phase: $operation in ${phase.name}',

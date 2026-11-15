@@ -21,9 +21,9 @@
 //
 // - A `Module` becomes a plain list of components. Spread joins the lists:
 //   `[...core, ...platform]`.
-// - `overriddenBy` replaces a component with the same key. It does not
-//   reject a fake whose key no component publishes, so the example checks
-//   that case with `publishes`.
+// - `overriddenBy` returns an `Exit`. A fake whose key no single component
+//   publishes is a `Fail(UnmatchedOverrideFailure)`, so a renamed key fails
+//   instead of adding a component.
 // - The duplicate check is `run()`, not a count of the members.
 // - `scope.get` returns an `Either`, and `getOption` returns an `Option`.
 //
@@ -215,18 +215,6 @@ final strayFakes = <Component<Object?>>[
   ),
 ];
 
-/// Replaces components with [fakes]. A fake whose key no component publishes
-/// is a `Left`, so a renamed key fails instead of adding a component.
-Either<String, List<Component<Object?>>> replaceWith(
-  List<Component<Object?>> base,
-  List<Component<Object?>> fakes,
-) {
-  final stray = fakes.publishes.difference(base.publishes);
-  return stray.isEmpty
-      ? Either.right(base.overriddenBy(fakes))
-      : Either.left('no component publishes $stray');
-}
-
 // --- Checks ----------------------------------------------------------------
 
 /// Disposes a scope and prints the cause of a failure.
@@ -339,10 +327,16 @@ Future<void> startApp(Scope boot, Flavor flavor) async {
 Future<void> runTest() async {
   print('test: the same graph with fakes');
   final root = appRoot(flavor: Flavor.dev, platform: Platform.web);
-  log('stray fake: ${replaceWith(root, strayFakes)}');
-  switch (replaceWith(root, testFakes)) {
-    case Left(value: final reason):
-      log(reason);
+  log('stray fake:');
+  switch (root.overriddenBy(strayFakes)) {
+    case Left(value: final cause):
+      print(indent(cause.prettyPrint()));
+    case Right():
+      log('unexpected: the stray fake replaced nothing');
+  }
+  switch (root.overriddenBy(testFakes)) {
+    case Left(value: final cause):
+      print(indent(cause.prettyPrint()));
     case Right(value: final components):
       final test = Scope(components: components);
       switch (await test.run()) {

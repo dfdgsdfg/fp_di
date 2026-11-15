@@ -1,10 +1,10 @@
 import 'package:fp_di_fpdart/fp_di_fpdart.dart';
-import 'package:fp_di_fpdart/src/dependency.dart' show StepContext;
 import 'package:fp_di_fpdart/src/dependency.dart'
     as internal
-    show runDependency;
+    show StepContext, foldDependency, runDependency;
 import 'package:fp_di_fpdart/src/environment.dart';
 import 'package:fp_di_fpdart/src/finalizers.dart';
+import 'package:fp_di_fpdart/src/syntax.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:test/test.dart';
 
@@ -247,7 +247,7 @@ void main() {
       ) => internal
           .runDependency(
             dependency,
-            StepContext('probe', Environment.of(map), ref),
+            internal.StepContext('probe', Environment.of(map), ref),
           )
           .run();
       final full = await runWith({intKey: 5, textKey: 'xy', flagKey: true});
@@ -274,4 +274,125 @@ void main() {
       expect(effects, 2);
     });
   });
+
+  group('algebras', () {
+    test('a third algebra reads the tree without the node classes', () {
+      final dependency = (
+        Dependency.require<int>(key: intKey),
+        Dependency.option<String>(key: textKey),
+        Dependency<bool>.of(true),
+      ).zip.mapN<String>((a, b, c) => '$a $b $c');
+
+      final text = internal.foldDependency(dependency, const _Describe());
+      expect(
+        (text as _Text<String>).text,
+        // `zip` builds applications of maps of applications.
+        contains('require(DiKey<int>(int))'),
+      );
+      expect(text.text, contains('optional(DiKey<String>(text))'));
+      expect(text.text, contains('pure(true)'));
+      expect(text.text, contains('ap('));
+      expect(text.text, contains('step('));
+
+      final count = internal.foldDependency(dependency, const _Count());
+      expect((count as _Counted<String>).nodes, greaterThan(5));
+    });
+
+    test('a small tree has a known shape', () {
+      final tree = Dependency<int>.of(1).map<int>((v) => v + 1);
+      expect(
+        (internal.foldDependency(tree, const _Describe()) as _Text<int>).text,
+        'step(pure(1))',
+      );
+      expect(
+        (internal.foldDependency(tree, const _Count()) as _Counted<int>).nodes,
+        2,
+      );
+    });
+
+    test('an algebra can fold a node tree directly', () {
+      const node = ApNode<int, int>(
+        PureNode<int>(1),
+        PureNode<int Function(int)>(_identity),
+      );
+      expect((node.fold(const _Count()) as _Counted<int>).nodes, 3);
+    });
+  });
+}
+
+int _identity(int x) => x;
+
+abstract final class _TextTag {}
+
+final class _Text<A> extends HKT<_TextTag, A> {
+  const _Text(this.text);
+
+  final String text;
+}
+
+String _textOf<A>(HKT<_TextTag, A> result) => (result as _Text<A>).text;
+
+/// A trivial algebra: it describes the tree as a string.
+final class _Describe implements DependencyAlgebra<_TextTag> {
+  const _Describe();
+
+  @override
+  HKT<_TextTag, A> pure<A>(A value) => _Text<A>('pure($value)');
+
+  @override
+  HKT<_TextTag, A> require<A>(DiKey<A> key) => _Text<A>('require($key)');
+
+  @override
+  HKT<_TextTag, Option<A>> optional<A>(DiKey<A> key) =>
+      _Text<Option<A>>('optional($key)');
+
+  @override
+  HKT<_TextTag, B> ap<A, B>(
+    HKT<_TextTag, A> fa,
+    HKT<_TextTag, B Function(A a)> ff,
+  ) => _Text<B>('ap(${_textOf(fa)}, ${_textOf(ff)})');
+
+  @override
+  HKT<_TextTag, B> step<A, B>(
+    HKT<_TextTag, A> source,
+    StepEffect<A, B> effect,
+    StepRelease<B>? release,
+  ) => _Text<B>('step(${_textOf(source)})');
+}
+
+abstract final class _CountTag {}
+
+final class _Counted<A> extends HKT<_CountTag, A> {
+  const _Counted(this.nodes);
+
+  final int nodes;
+}
+
+int _nodesOf<A>(HKT<_CountTag, A> result) => (result as _Counted<A>).nodes;
+
+/// A trivial algebra: it counts the nodes.
+final class _Count implements DependencyAlgebra<_CountTag> {
+  const _Count();
+
+  @override
+  HKT<_CountTag, A> pure<A>(A value) => _Counted<A>(1);
+
+  @override
+  HKT<_CountTag, A> require<A>(DiKey<A> key) => _Counted<A>(1);
+
+  @override
+  HKT<_CountTag, Option<A>> optional<A>(DiKey<A> key) => _Counted<Option<A>>(1);
+
+  @override
+  HKT<_CountTag, B> ap<A, B>(
+    HKT<_CountTag, A> fa,
+    HKT<_CountTag, B Function(A a)> ff,
+  ) => _Counted<B>(1 + _nodesOf(fa) + _nodesOf(ff));
+
+  @override
+  HKT<_CountTag, B> step<A, B>(
+    HKT<_CountTag, A> source,
+    StepEffect<A, B> effect,
+    StepRelease<B>? release,
+  ) => _Counted<B>(1 + _nodesOf(source));
 }

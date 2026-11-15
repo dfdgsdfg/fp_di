@@ -57,16 +57,20 @@ abstract final class Plan {
   static TaskEither<Cause<DiFailure>, Built> build(
     Strata strata,
     Environment input,
-  ) => TaskEither(
-    () => _accumulate(input, Finalizers.empty, strata).flatMap((settled) {
-      final (:failure, :built) = settled;
-      return failure.isEmpty
-          ? Task.of(Right<Cause<DiFailure>, Built>(built))
-          : built.$2.release().map(
-              (rollback) => Left<Cause<DiFailure>, Built>(failure + rollback),
-            );
-    }).run(),
-  );
+  ) =>
+      TaskEither<Cause<DiFailure>, _Settled>.fromTask(
+        _accumulate(input, Finalizers.monoid.empty, strata),
+      ).flatMap(
+        (settled) => settled.failure.isEmpty
+            ? TaskEither<Cause<DiFailure>, Built>.right(settled.built)
+            : TaskEither<Cause<DiFailure>, Cause<DiFailure>>.fromTask(
+                settled.built.$2.release(),
+              ).flatMap(
+                (rollback) => TaskEither<Cause<DiFailure>, Built>.left(
+                  settled.failure + rollback,
+                ),
+              ),
+      );
 
   /// The sequential accumulation of the strata.
   static Task<_Settled> _accumulate(
@@ -82,7 +86,7 @@ abstract final class Plan {
     }
     return _parallel(rest.first, environment).flatMap((settled) {
       final grown = Environment.monoid.combine(environment, settled.built.$1);
-      final stack = finalizers.then(settled.built.$2);
+      final stack = Finalizers.monoid.combine(finalizers, settled.built.$2);
       return settled.failure.isEmpty
           ? _accumulate(grown, stack, rest.sublist(1))
           : Task.of((failure: settled.failure, built: (grown, stack)));
@@ -100,7 +104,10 @@ abstract final class Plan {
   ) =>
       Task.traverseList(
         stratum,
-        (component) => Task(() => buildComponent(component, input).run()),
+        (component) => buildComponent(component, input).match(
+          Left<Cause<DiFailure>, Built>.new,
+          Right<Cause<DiFailure>, Built>.new,
+        ),
       ).map((results) {
         final failures = [
           for (final result in results) ?result.getLeft().toNullable(),

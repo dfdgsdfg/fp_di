@@ -15,9 +15,11 @@ abstract final class _CauseHKT {}
 /// two causes that happened at the same time.
 ///
 /// [Empty] is the identity of `+` and `&`. A cause is a [Functor] over the
-/// typed error. Use [Cause.thenMonoid] and [Cause.bothMonoid] to combine
+/// typed error, and a [Foldable] over the typed errors, from left to right.
+/// Use [Cause.thenMonoid] and [Cause.bothMonoid] to combine
 /// causes with the fpdart typeclasses.
-sealed class Cause<E> extends HKT<_CauseHKT, E> with Functor<_CauseHKT, E> {
+sealed class Cause<E> extends HKT<_CauseHKT, E>
+    with Functor<_CauseHKT, E>, Foldable<_CauseHKT, E> {
   /// Creates a cause.
   const Cause();
 
@@ -115,6 +117,36 @@ sealed class Cause<E> extends HKT<_CauseHKT, E> with Functor<_CauseHKT, E> {
     then: (first, second) => ['Then', ..._indent(first), ..._indent(second)],
     both: (left, right) => ['Both', ..._indent(left), ..._indent(right)],
   ).join('\n');
+
+  /// Folds the typed errors from the right.
+  ///
+  /// The fold visits the errors of [failures] from the last to the first.
+  @override
+  B foldRight<B>(B b, B Function(B acc, E a) f) => failures.reversed.fold(b, f);
+
+  /// Folds the typed errors from the left.
+  ///
+  /// The fold visits the errors of [failures] from the first to the last.
+  @override
+  B foldLeft<B>(B b, B Function(B acc, E a) f) => failures.fold(b, f);
+
+  /// A cause that happened after this cause and then [v].
+  @override
+  Cause<E> plus(covariant Cause<E> v) => this + v;
+
+  /// A cause with a new typed failure [t] before this cause.
+  @override
+  Cause<E> prepend(E t) => Fail<E>(t, StackTrace.current) + this;
+
+  /// A cause with a new typed failure [t] after this cause.
+  @override
+  Cause<E> append(E t) => this + Fail<E>(t, StackTrace.current);
+
+  /// The equality typeclass of causes.
+  ///
+  /// The equality is structural, and it ignores the stack traces.
+  static Eq<Cause<E>> eq<E>() =>
+      Eq.instance<Cause<E>>((first, second) => first == second);
 
   /// The monoid of sequential composition: `+` with [Empty] as identity.
   static Monoid<Cause<E>> thenMonoid<E>() =>

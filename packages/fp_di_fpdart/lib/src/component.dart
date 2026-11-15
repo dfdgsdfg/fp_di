@@ -31,13 +31,35 @@ final class Component<A> {
   Component.value({required A value, DiKey<A>? key, String? debugLabel})
     : this._(Dependency<A>.of(value), key ?? DiKey<A>(), debugLabel);
 
-  Component._(this._dependency, this.key, this._debugLabel);
+  /// Creates a component that publishes no key.
+  ///
+  /// The component runs for its effect. It reads the keys of [dependency], so
+  /// it runs after the components that publish them. It owns its values like
+  /// any component, and a scope releases it before the components that it
+  /// reads. Nobody can read the value, and the component cannot be
+  /// overridden. Two effects of one type can exist in one list.
+  ///
+  /// The [debugLabel] names the component in a failure.
+  Component.effect({required Dependency<A> dependency, String? debugLabel})
+    : this._(dependency, effectKey<A>(debugLabel), debugLabel, isEffect: true);
+
+  Component._(
+    this._dependency,
+    this.key,
+    this._debugLabel, {
+    this.isEffect = false,
+  });
 
   final Dependency<A> _dependency;
   final String? _debugLabel;
 
   /// The key under which the component publishes its value.
+  ///
+  /// An effect component has a key that equals only itself.
   final DiKey<A> key;
+
+  /// Whether the component is an effect: it publishes no key.
+  final bool isEffect;
 
   /// The keys that the component must read.
   Set<DiKey<Object?>> get requires => _dependency.requires;
@@ -57,26 +79,44 @@ final class Component<A> {
   /// a `ZLayer`. The task runs the dependency. When a step fails, the task
   /// releases the values that the component owns, in reverse order. The cause
   /// is then the failure followed by the dispose failures.
-  TaskEither<Cause<DiFailure>, Built> _build(Environment input) => TaskEither(
-    () => IORef.create<Finalizers>(Finalizers.empty).toTask().flatMap((owned) {
-      final context = StepContext(label, input, owned);
-      return runDependency(_dependency, context).flatMap(
-        (exit) => owned.read().toTask().flatMap(
-          (finalizers) => exit.match(
-            (failure) => finalizers.release().map(
-              (rollback) => Left<Cause<DiFailure>, Built>(failure + rollback),
+  TaskEither<Cause<DiFailure>, Built> _build(Environment input) =>
+      TaskEither<Cause<DiFailure>, IORef<Finalizers>>.fromTask(
+        IORef.create<Finalizers>(Finalizers.monoid.empty).toTask(),
+      ).flatMap(
+        (owned) => runDependency(_dependency, StepContext(label, input, owned))
+            .orElse(
+              (failure) => _rollback(owned).flatMap(
+                (rollback) =>
+                    TaskEither<Cause<DiFailure>, A>.left(failure + rollback),
+              ),
+            )
+            .flatMap(
+              (value) =>
+                  TaskEither<Cause<DiFailure>, Finalizers>.fromTask(
+                    owned.read().toTask(),
+                  ).map(
+                    (finalizers) => (
+                      // An effect publishes nothing.
+                      isEffect
+                          ? Environment.empty
+                          : Environment.of({key: value}),
+                      finalizers,
+                    ),
+                  ),
             ),
-            (value) => Task.of(
-              Right<Cause<DiFailure>, Built>((
-                Environment.of({key: value}),
-                finalizers,
-              )),
-            ),
-          ),
+      );
+
+  /// The release of the owned values, as a task.
+  ///
+  /// The task reads the owned values when it runs.
+  TaskEither<Cause<DiFailure>, Cause<DiFailure>> _rollback(
+    IORef<Finalizers> owned,
+  ) => TaskEither<Cause<DiFailure>, Finalizers>.fromTask(owned.read().toTask())
+      .flatMap(
+        (finalizers) => TaskEither<Cause<DiFailure>, Cause<DiFailure>>.fromTask(
+          finalizers.release(),
         ),
       );
-    }).run(),
-  );
 }
 
 /// Makes the value of [component] from the [input] environment.
@@ -94,12 +134,17 @@ TaskEither<Cause<DiFailure>, Built> buildComponent(
 /// `[...a, ...b]`.
 extension ComponentsOps on Iterable<Component<Object?>> {
   /// The keys that the components publish.
+  ///
+  /// An effect component publishes no key.
   Set<DiKey<Object?>> get publishes => {
-    for (final component in this) component.key,
+    for (final component in this)
+      if (!component.isEffect) component.key,
   };
 
   /// The keys that a component requires and that no component of the group
   /// publishes.
+  ///
+  /// The reads of an effect component count.
   Set<DiKey<Object?>> get requires {
     final published = publishes;
     return {
@@ -109,24 +154,77 @@ extension ComponentsOps on Iterable<Component<Object?>> {
     };
   }
 
-  /// A list in which the components of [overrides] replace this group.
+  /// A list in which each component of [overrides] replaces the component
+  /// that publishes the same key.
   ///
-  /// A component of [overrides] replaces the component with the same key, in
-  /// place. A component with a new key goes to the end. A duplicate key in
-  /// [overrides] stays, so the duplicate check of a scope reports it.
-  List<Component<Object?>> overriddenBy(
+  /// The replacement keeps the place of the replaced component. The result is
+  /// a `Left` when an override has no single target. The cause accumulates
+  /// every problem, in the order of [overrides], joined with `&`:
+  ///
+  /// - An override whose key no component publishes is an
+  ///   [UnmatchedOverrideFailure]. An effect component as an override is an
+  ///   [UnmatchedOverrideFailure], too, because it publishes no key.
+  /// - An override whose key more than one component publishes is a
+  ///   [DuplicateKeyFailure].
+  /// - Two overrides with the same key are a [DuplicateKeyFailure].
+  Exit<DiFailure, List<Component<Object?>>> overriddenBy(
     Iterable<Component<Object?>> overrides,
   ) {
+    final base = toList();
     final replacements = <DiKey<Object?>, List<Component<Object?>>>{};
-    for (final component in overrides) {
-      (replacements[component.key] ??= []).add(component);
+    for (final override in overrides) {
+      (replacements[override.key] ??= []).add(override);
     }
-    final present = publishes;
-    return [
-      for (final component in this)
-        ...(replacements[component.key] ?? [component]),
-      for (final component in overrides)
-        if (!present.contains(component.key)) component,
-    ];
+    final failures = <Cause<DiFailure>>[];
+    final reported = <DiKey<Object?>>{};
+    for (final override in overrides) {
+      final key = override.key;
+      final targets = [
+        for (final component in base)
+          if (!component.isEffect && component.key == key) component,
+      ];
+      if (override.isEffect || targets.isEmpty) {
+        failures.add(
+          Fail<DiFailure>(
+            UnmatchedOverrideFailure(key, owner: override.label),
+            StackTrace.current,
+          ),
+        );
+      } else if (targets.length > 1) {
+        if (reported.add(key)) {
+          failures.add(
+            Fail<DiFailure>(
+              DuplicateKeyFailure(key, [
+                for (final target in targets) target.label,
+              ]),
+              StackTrace.current,
+            ),
+          );
+        }
+      }
+      final same = replacements[key]!;
+      if (same.length > 1 && !override.isEffect && reported.add(key)) {
+        failures.add(
+          Fail<DiFailure>(
+            DuplicateKeyFailure(key, [
+              for (final component in same) component.label,
+            ]),
+            StackTrace.current,
+          ),
+        );
+      }
+    }
+    final cause = failures.fold<Cause<DiFailure>>(
+      const Empty<DiFailure>(),
+      (all, next) => all & next,
+    );
+    if (!cause.isEmpty) return Left(cause);
+    return Right([
+      for (final component in base)
+        if (!component.isEffect && replacements.containsKey(component.key))
+          replacements[component.key]!.single
+        else
+          component,
+    ]);
   }
 }

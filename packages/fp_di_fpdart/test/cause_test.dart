@@ -187,4 +187,97 @@ void main() {
       );
     });
   });
+
+  group('Eq', () {
+    final eq = Cause.eq<int>();
+
+    test('reflexive, symmetric, and transitive', () {
+      final other = StackTrace.fromString('other');
+      final again = <Cause<int>>[
+        empty,
+        Fail<int>(1, other),
+        Die<int>('d', other),
+        Then<int>(Fail<int>(1, other), Die<int>('d', other)),
+        Both<int>(
+          Fail<int>(1, other),
+          Then<int>(Fail<int>(2, other), Die<int>('e', other)),
+        ),
+      ];
+      for (var i = 0; i < samples.length; i++) {
+        expect(eq.eqv(samples[i], samples[i]), isTrue);
+        expect(eq.eqv(samples[i], again[i]), isTrue);
+        expect(eq.eqv(again[i], samples[i]), isTrue);
+        for (var j = 0; j < samples.length; j++) {
+          expect(
+            eq.eqv(samples[i], samples[j]),
+            eq.eqv(samples[j], samples[i]),
+          );
+          if (i != j) expect(eq.eqv(samples[i], samples[j]), isFalse);
+        }
+      }
+    });
+
+    test('Then and Both differ, and so do the orders', () {
+      expect(eq.eqv(fail(1) + fail(2), fail(1) & fail(2)), isFalse);
+      expect(eq.eqv(fail(1) + fail(2), fail(2) + fail(1)), isFalse);
+      expect(eq.neqv(fail(1), fail(2)), isTrue);
+    });
+  });
+
+  group('Foldable', () {
+    final cause = Both<int>(
+      Then<int>(fail(1), die('a')),
+      Then<int>(fail(2), Both<int>(die('b'), fail(3))),
+    );
+
+    test('a cause is a Foldable', () {
+      expect(cause, isA<Foldable<Object?, int>>());
+    });
+
+    test('foldLeft visits the failures from left to right', () {
+      for (final sample in [...samples, cause]) {
+        expect(
+          sample.foldLeft<List<int>>([], (all, error) => [...all, error]),
+          sample.failures,
+        );
+      }
+    });
+
+    test('foldRight visits the failures from right to left', () {
+      for (final sample in [...samples, cause]) {
+        expect(
+          sample.foldRight<List<int>>([], (all, error) => [...all, error]),
+          sample.failures.reversed.toList(),
+        );
+      }
+    });
+
+    test('the derived operations agree with failures', () {
+      expect(cause.length(), cause.failures.length);
+      expect(cause.any((e) => e == 3), isTrue);
+      expect(cause.all((e) => e < 3), isFalse);
+      expect(
+        cause.foldMap<List<int>>(
+          Monoid.instance([], (a, b) => [...a, ...b]),
+          (e) => [e],
+        ),
+        cause.failures,
+      );
+      expect(
+        cause.foldLeftWithIndex<List<String>>(
+          [],
+          (i, all, e) => [...all, '$i:$e'],
+        ),
+        ['0:1', '1:2', '2:3'],
+      );
+      expect(empty.length(), 0);
+    });
+
+    test('plus, prepend, and append add typed failures', () {
+      expect(fail(1).plus(fail(2)).failures, [1, 2]);
+      expect(fail(2).prepend(1).failures, [1, 2]);
+      expect(fail(1).append(2).failures, [1, 2]);
+      expect(die('d').append(1).defects, ['d']);
+    });
+  });
 }

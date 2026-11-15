@@ -7,6 +7,7 @@ import 'environment.dart';
 import 'failure.dart';
 import 'finalizers.dart';
 import 'key.dart';
+import 'syntax.dart';
 
 /// The type tag of [Dependency] for the fpdart higher-kinded types.
 abstract final class _DependencyHKT {}
@@ -36,114 +37,91 @@ typedef _Program<A> = ReaderTaskEither<StepContext, Cause<DiFailure>, A>;
 /// The reads of a dependency.
 typedef _Reads = ({Set<DiKey<Object?>> requires, Set<DiKey<Object?>> optional});
 
-/// The syntax tree of a dependency: a free applicative.
+/// The tag of the reads interpreter.
+abstract final class _ReadsTag {}
+
+/// The result of the reads interpreter. The type `A` is a phantom type.
+final class _ReadsOf<A> extends HKT<_ReadsTag, A> {
+  const _ReadsOf(this.reads);
+
+  final _Reads reads;
+}
+
+_Reads _readsIn<A>(HKT<_ReadsTag, A> result) => (result as _ReadsOf<A>).reads;
+
+_Reads _union(_Reads left, _Reads right) => (
+  requires: Set.unmodifiable({...left.requires, ...right.requires}),
+  optional: Set.unmodifiable({...left.optional, ...right.optional}),
+);
+
+/// The interpreter that folds a tree into the keys that it reads.
+final class _ReadsAlgebra implements DependencyAlgebra<_ReadsTag> {
+  const _ReadsAlgebra();
+
+  @override
+  HKT<_ReadsTag, A> pure<A>(A value) =>
+      _ReadsOf<A>((requires: const {}, optional: const {}));
+
+  @override
+  HKT<_ReadsTag, A> require<A>(DiKey<A> key) =>
+      _ReadsOf<A>((requires: {key}, optional: const {}));
+
+  @override
+  HKT<_ReadsTag, Option<A>> optional<A>(DiKey<A> key) =>
+      _ReadsOf<Option<A>>((requires: const {}, optional: {key}));
+
+  @override
+  HKT<_ReadsTag, B> ap<A, B>(
+    HKT<_ReadsTag, A> fa,
+    HKT<_ReadsTag, B Function(A a)> ff,
+  ) => _ReadsOf<B>(_union(_readsIn(fa), _readsIn(ff)));
+
+  @override
+  HKT<_ReadsTag, B> step<A, B>(
+    HKT<_ReadsTag, A> source,
+    StepEffect<A, B> effect,
+    StepRelease<B>? release,
+  ) => _ReadsOf<B>(_readsIn(source));
+}
+
+/// The tag of the runner interpreter.
+abstract final class _ProgramTag {}
+
+/// The result of the runner interpreter: a step program.
+final class _ProgramOf<A> extends HKT<_ProgramTag, A> {
+  const _ProgramOf(this.program);
+
+  final _Program<A> program;
+}
+
+_Program<A> _programIn<A>(HKT<_ProgramTag, A> result) =>
+    (result as _ProgramOf<A>).program;
+
+/// A step program that needs the context of the component.
 ///
-/// A node describes a value and does nothing. Two interpreters read the tree:
-/// [_readsOf] folds the tree into the keys that it reads, and `compile`
-/// turns the tree into a step program.
-sealed class _Node<A> {
-  const _Node();
+/// The program reads the context with `ask`, so no code runs a task while it
+/// builds the program.
+_Program<B> _withContext<B>(
+  TaskEither<Cause<DiFailure>, B> Function(StepContext context) f,
+) => ReaderTaskEither.ask<StepContext, Cause<DiFailure>>().flatMap(
+  (context) => ReaderTaskEither.fromTaskEither(f(context)),
+);
 
-  /// The sub-trees of the node, without their value types.
-  ///
-  /// A fold reads the tree through this list. A fold needs no type of a
-  /// value, so it can ignore the types of the function values of an [_Ap].
-  List<_Node<Object?>> get operands;
-
-  /// The interpreter that makes the step program of the tree.
-  _Program<A> compile();
-}
-
-/// A value that exists already.
-final class _Pure<A> extends _Node<A> {
-  const _Pure(this.value);
-
-  final A value;
-
-  @override
-  List<_Node<Object?>> get operands => const [];
-
-  @override
-  _Program<A> compile() => ReaderTaskEither<StepContext, Cause<DiFailure>, A>(
-    (_) async => Right(value),
-  );
-}
-
-/// A required read of [key].
-final class _Require<A> extends _Node<A> {
-  const _Require(this.key);
-
-  final DiKey<A> key;
-
-  @override
-  List<_Node<Object?>> get operands => const [];
-
-  @override
-  _Program<A> compile() => ReaderTaskEither<StepContext, Cause<DiFailure>, A>(
-    (context) async => Right(context.environment.read(key)),
-  );
-}
-
-/// An optional read of [key].
-final class _Optional<A> extends _Node<Option<A>> {
-  const _Optional(this.key);
-
-  final DiKey<A> key;
-
-  @override
-  List<_Node<Object?>> get operands => const [];
-
-  @override
-  _Program<Option<A>> compile() =>
-      ReaderTaskEither<StepContext, Cause<DiFailure>, Option<A>>(
-        (context) async => Right(
-          context.environment.contains(key)
-              ? Some(context.environment.read(key))
-              : const None(),
-        ),
-      );
-}
-
-/// The application of a function value [ff] to the value [fa].
+/// The registration of a dispose function, as a task.
 ///
-/// The interpreter runs [fa] first and then [ff].
-final class _Ap<A, B> extends _Node<B> {
-  const _Ap(this.fa, this.ff);
-
-  final _Node<A> fa;
-  final _Node<B Function(A a)> ff;
-
-  @override
-  List<_Node<Object?>> get operands => [fa, ff];
-
-  @override
-  _Program<B> compile() => fa.compile().flatMap(
-    (a) => ff.compile().flatMap(
-      (g) => _attempt<B>(() async => Right<Object?, B>(g(a)), null),
-    ),
-  );
-}
-
-/// One effect after the value of [source], with an optional release.
-///
-/// The step covers `create`, `map`, `mapTask`, and `mapTaskEither`. The
-/// [effect] gives a `Right` value, or a `Left` that fails the activation. A
-/// throw of the effect fails the activation, too. With a [release], the step
-/// owns its result.
-final class _Step<A, B> extends _Node<B> {
-  const _Step(this.source, this.effect, this.release);
-
-  final _Node<A> source;
-  final Future<Either<Object?, B>> Function(A a) effect;
-  final FutureOr<void> Function(B value)? release;
-
-  @override
-  List<_Node<Object?>> get operands => [source];
-
-  @override
-  _Program<B> compile() =>
-      source.compile().flatMap((a) => _attempt<B>(() => effect(a), release));
-}
+/// The task gives [value] after it registered the release. The registration is
+/// part of the effect, so it happens when the step runs.
+TaskEither<Cause<DiFailure>, B> _own<B>(
+  StepContext context,
+  B value,
+  StepRelease<B>? release,
+) => release == null
+    ? TaskEither<Cause<DiFailure>, B>.right(value)
+    : TaskEither<Cause<DiFailure>, Unit>.fromTask(
+        context.finalizers
+            .modify((owned) => owned.push(context.owner, () => release(value)))
+            .toTask(),
+      ).map((_) => value);
 
 /// The step program of one effect.
 ///
@@ -152,43 +130,74 @@ final class _Step<A, B> extends _Node<B> {
 /// `Right` value goes to the finalizers when it has a [release].
 _Program<B> _attempt<B>(
   Future<Either<Object?, B>> Function() effect,
-  FutureOr<void> Function(B value)? release,
-) => ReaderTaskEither<StepContext, Cause<DiFailure>, B>((context) async {
-  final Either<Object?, B> result;
-  try {
-    result = await effect();
-  } catch (error, stackTrace) {
-    return Left(Fail(ActivationFailure(context.owner, error), stackTrace));
-  }
-  return result.match(
-    (error) => Left<Cause<DiFailure>, B>(
-      Fail(ActivationFailure(context.owner, error), StackTrace.current),
-    ),
-    (value) {
-      if (release != null) {
-        context.finalizers
-            .modify((owned) => owned.push(context.owner, () => release(value)))
-            .run();
-      }
-      return Right<Cause<DiFailure>, B>(value);
-    },
-  );
-});
-
-/// The interpreter that folds a tree into the keys that it reads.
-_Reads _readsOf(_Node<Object?> node) => switch (node) {
-  _Require<Object?>() => (requires: {node.key}, optional: const {}),
-  _Optional<Object?>() => (requires: const {}, optional: {node.key}),
-  _ => node.operands.map(_readsOf).fold((
-    requires: const {},
-    optional: const {},
-  ), _union),
-};
-
-_Reads _union(_Reads left, _Reads right) => (
-  requires: Set.unmodifiable({...left.requires, ...right.requires}),
-  optional: Set.unmodifiable({...left.optional, ...right.optional}),
+  StepRelease<B>? release,
+) => _withContext<B>(
+  (context) =>
+      TaskEither<Cause<DiFailure>, Either<Object?, B>>.tryCatch(
+            effect,
+            (error, stackTrace) => Fail<DiFailure>(
+              ActivationFailure(context.owner, error),
+              stackTrace,
+            ),
+          )
+          .chainEither(
+            (result) => result.mapLeft<Cause<DiFailure>>(
+              (error) => Fail<DiFailure>(
+                ActivationFailure(context.owner, error),
+                StackTrace.current,
+              ),
+            ),
+          )
+          .flatMap((value) => _own(context, value, release)),
 );
+
+/// The interpreter that turns a tree into a step program.
+final class _ProgramAlgebra implements DependencyAlgebra<_ProgramTag> {
+  const _ProgramAlgebra();
+
+  @override
+  HKT<_ProgramTag, A> pure<A>(A value) => _ProgramOf<A>(
+    ReaderTaskEither<StepContext, Cause<DiFailure>, A>.of(value),
+  );
+
+  @override
+  HKT<_ProgramTag, A> require<A>(DiKey<A> key) => _ProgramOf<A>(
+    ReaderTaskEither<StepContext, Cause<DiFailure>, A>.asks(
+      (context) => context.environment.read(key),
+    ),
+  );
+
+  @override
+  HKT<_ProgramTag, Option<A>> optional<A>(DiKey<A> key) =>
+      _ProgramOf<Option<A>>(
+        ReaderTaskEither<StepContext, Cause<DiFailure>, Option<A>>.asks(
+          (context) => context.environment.contains(key)
+              ? Some(context.environment.read(key))
+              : const None(),
+        ),
+      );
+
+  @override
+  HKT<_ProgramTag, B> ap<A, B>(
+    HKT<_ProgramTag, A> fa,
+    HKT<_ProgramTag, B Function(A a)> ff,
+  ) => _ProgramOf<B>(
+    _programIn(fa).flatMap(
+      (a) => _programIn(
+        ff,
+      ).flatMap((g) => _attempt<B>(() async => Right<Object?, B>(g(a)), null)),
+    ),
+  );
+
+  @override
+  HKT<_ProgramTag, B> step<A, B>(
+    HKT<_ProgramTag, A> source,
+    StepEffect<A, B> effect,
+    StepRelease<B>? release,
+  ) => _ProgramOf<B>(
+    _programIn(source).flatMap((a) => _attempt<B>(() => effect(a), release)),
+  );
+}
 
 /// The value of a component and the keys that the value reads.
 ///
@@ -219,8 +228,8 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
     required FutureOr<A> Function() create,
     FutureOr<void> Function(A value)? dispose,
   }) => Dependency._(
-    _Step<Unit, A>(
-      const _Pure(unit),
+    StepNode<Unit, A>(
+      const PureNode(unit),
       (_) async => Right<Object?, A>(await create()),
       dispose,
     ),
@@ -229,7 +238,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   /// A dependency of a [value] that exists already.
   ///
   /// The dependency reads nothing and owns nothing.
-  factory Dependency.of(A value) => Dependency._(_Pure<A>(value));
+  factory Dependency.of(A value) => Dependency._(PureNode<A>(value));
 
   /// A dependency that runs the [create] task.
   ///
@@ -248,8 +257,8 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
     TaskEither<E, A> create, {
     FutureOr<void> Function(A value)? dispose,
   }) => Dependency<A>._(
-    _Step<Unit, A>(
-      const _Pure(unit),
+    StepNode<Unit, A>(
+      const PureNode(unit),
       (_) async => (await create.run()).mapLeft<Object?>((error) => error),
       dispose,
     ),
@@ -260,7 +269,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   /// The key is `DiKey<T>()` when [key] is `null`. A scope or an ancestor
   /// must publish the key.
   static Dependency<T> require<T>({DiKey<T>? key}) =>
-      Dependency<T>._(_Require<T>(key ?? DiKey<T>()));
+      Dependency<T>._(RequireNode<T>(key ?? DiKey<T>()));
 
   /// A dependency that reads the value of [key] when a scope publishes it.
   ///
@@ -268,7 +277,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   /// the key. When the key is present, the activation still waits for the
   /// publisher.
   static Dependency<Option<T>> option<T>({DiKey<T>? key}) =>
-      Dependency<Option<T>>._(_Optional<T>(key ?? DiKey<T>()));
+      Dependency<Option<T>>._(OptionalNode<T>(key ?? DiKey<T>()));
 
   /// A dependency of the list of the values of [list] after [f].
   ///
@@ -288,9 +297,9 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   static Dependency<List<A>> sequenceList<A>(List<Dependency<A>> list) =>
       traverseList<Dependency<A>, A>(list, (dependency) => dependency);
 
-  final _Node<A> _node;
+  final DependencyNode<A> _node;
 
-  late final _Reads _reads = _readsOf(_node);
+  late final _Reads _reads = _readsIn(_node.fold(const _ReadsAlgebra()));
 
   /// The keys that the dependency must read.
   ///
@@ -313,7 +322,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
   /// `ActivationFailure`.
   @override
   Dependency<B> ap<B>(covariant Dependency<B Function(A a)> f) =>
-      Dependency<B>._(_Ap<A, B>(_node, f._node));
+      Dependency<B>._(ApNode<A, B>(_node, f._node));
 
   /// Creates the next value from this value with [f].
   ///
@@ -324,7 +333,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
     B Function(A value) f, {
     FutureOr<void> Function(B value)? dispose,
   }) => Dependency<B>._(
-    _Step<A, B>(_node, (a) async => Right<Object?, B>(f(a)), dispose),
+    StepNode<A, B>(_node, (a) async => Right<Object?, B>(f(a)), dispose),
   );
 
   /// Runs the task that [f] creates from this value.
@@ -334,7 +343,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
     Task<B> Function(A value) f, {
     FutureOr<void> Function(B value)? dispose,
   }) => Dependency<B>._(
-    _Step<A, B>(
+    StepNode<A, B>(
       _node,
       (a) async => Right<Object?, B>(await f(a).run()),
       dispose,
@@ -351,7 +360,7 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
     TaskEither<E, B> Function(A value) f, {
     FutureOr<void> Function(B value)? dispose,
   }) => Dependency<B>._(
-    _Step<A, B>(
+    StepNode<A, B>(
       _node,
       (a) async => (await f(a).run()).mapLeft<Object?>((error) => error),
       dispose,
@@ -385,10 +394,22 @@ final class Dependency<A> extends HKT<_DependencyHKT, A>
 /// Runs the steps of [dependency] in [context].
 ///
 /// The task never throws. A failed step gives a `Left` with a `Cause`.
-Task<Exit<DiFailure, A>> runDependency<A>(
+TaskEither<Cause<DiFailure>, A> runDependency<A>(
   Dependency<A> dependency,
   StepContext context,
-) => Task(() => dependency._node.compile().run(context));
+) {
+  final program = _programIn(dependency._node.fold(const _ProgramAlgebra()));
+  // The adapter from a reader program to a task: it runs when the task runs.
+  return TaskEither(() => program.run(context));
+}
+
+/// Folds the tree of [dependency] with [algebra].
+///
+/// The function reads the tree and runs nothing.
+HKT<G, A> foldDependency<G, A>(
+  Dependency<A> dependency,
+  DependencyAlgebra<G> algebra,
+) => dependency._node.fold(algebra);
 
 /// Applies a function to the values of a zip of two dependencies.
 extension DependencyOfRecord2<A, B> on Dependency<(A, B)> {

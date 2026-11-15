@@ -178,10 +178,14 @@ final checkout = (
 | `map2`, `map3`, `zip`, `mapN` | the union of the reads; the steps run left to right |
 | `Dependency.traverseList`, `Dependency.sequenceList` | a list of values from a list of dependencies |
 
-A dependency is a syntax tree: a free applicative with the nodes pure, read,
-ap, and step. Building a dependency runs nothing. `requires` and `optional`
-come from a fold of the tree. A second interpreter turns the tree into a
-`ReaderTaskEither` program that a scope runs.
+A dependency is a syntax tree: a free applicative with the nodes pure, require,
+optional, ap, and step. Building a dependency runs nothing. An interpreter is
+an algebra: one method for each node, and a node only dispatches to the method
+(a catamorphism). The result type of a method is an fpdart `HKT<G, A>`, so the
+result can depend on the value type `A`. Two algebras exist. The reads algebra
+gives `requires` and `optional`. The runner algebra gives a
+`ReaderTaskEither` program that a scope runs. A new interpreter needs a new
+algebra and no change to the nodes.
 
 A step with `dispose` owns its value. Within one component, the scope disposes
 the owned values in reverse creation order. A throw in a step is a typed
@@ -189,6 +193,25 @@ failure, like `ZIO.attempt`. If a step fails, the scope disposes the owned
 values that the component created so far. The cause of the component is
 `Fail(ActivationFailure)` followed by one `Die` for each dispose function that
 threw.
+
+## Typeclass instances
+
+The types of the package have the fpdart typeclass instances that fit them.
+
+| Type | Instances |
+|---|---|
+| `Cause<E>` | `Functor` (`map`), `Foldable` over the typed failures from left to right (`foldLeft`, `foldRight`, `length`, `any`, `all`, and the others); `Cause.eq<E>()` (structural, ignores stack traces); `Cause.thenMonoid<E>()` and `Cause.bothMonoid<E>()` |
+| `Exit<E, A>` | an fpdart `Either`, so it has all the instances of `Either` |
+| `Dependency<A>` | `Functor` and `Applicative`, and not `Monad` |
+| `DiKey` | `DiKey.eq` (`Eq`) and `DiKey.hash` (`Hash`), both built on `==` and `hashCode` |
+| `Finalizers` (internal) | `Finalizers.monoid`: the empty stack and `then` |
+| `Environment` (internal) | `Environment.monoid`: right-biased stacking |
+
+The effects of the interpreters are fpdart values. A step is a
+`ReaderTaskEither` that uses `TaskEither.tryCatch`, `flatMap`, and
+`chainEither`. The registration of a finalizer is an `IO` that the step
+composes. Only the edge of the package runs an effect: `Scope.run`,
+`Scope.dispose`, and the program that `Scope.use` receives.
 
 ## Components
 
@@ -206,10 +229,26 @@ members:
 |---|---|
 | `publishes` | the keys that the components publish |
 | `requires` | the required keys that no component of the list publishes |
-| `overriddenBy(overrides)` | a list in which a component of `overrides` replaces the component with the same key, in place; a new key goes to the end |
+| `overriddenBy(overrides)` | an `Exit` with a list in which each override replaces the one component that publishes its key, in place |
 
-A duplicate key in `overrides` stays in the list, so the duplicate check of
-the scope reports it.
+`overriddenBy` rejects instead of appending. The cause accumulates every
+problem in the order of the overrides, joined with `Both`:
+
+- An override whose key no component publishes, or an override that is an
+  effect, is an `UnmatchedOverrideFailure`.
+- A key that more than one component of the list publishes is a
+  `DuplicateKeyFailure`.
+- Two overrides with the same key are a `DuplicateKeyFailure`.
+
+## Effects
+
+`Component.effect(dependency:)` is a component that publishes no key. It runs
+for its effect. It reads the keys of its dependency, so it starts after the
+components that publish them. It owns its values like any component, and the
+scope releases it before the components that it reads. Nobody can read its
+value, and an override cannot replace it. Two effects of one type can exist
+in one list. `isEffect` tells an effect from a component with a key.
+`publishes` leaves out the effects, and `requires` counts their reads.
 
 ## Failures
 
@@ -221,6 +260,7 @@ A `DiFailure` is a typed error. It appears in a `Fail` of a `Cause`.
 | `UndeclaredKeyFailure` | a required key has no publisher in the scope or an ancestor |
 | `DependencyCycleFailure` | components read each other in a cycle; `path` lists the keys |
 | `ActivationFailure` | a create step threw or returned a `Left`; `error` is the error or the `Left` value |
+| `UnmatchedOverrideFailure` | an override has no single component to replace |
 | `UnavailableKeyFailure` | `get` of a key that the scope and its ancestors do not publish |
 | `ScopePhaseFailure` | an operation in a phase where it is not valid |
 | `InactiveAncestorFailure` | `run` of a child whose parent is not active |
