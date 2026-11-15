@@ -13,7 +13,7 @@ identifiers use. One script reads these files: the vocabulary check. No CI reads
 | [domains.yml](domains.yml) | Domain IDs used by nodes; a registry, not a hierarchy |
 | [workspace.yml](workspace.yml) | Workspace packages, their platforms, and their edges |
 | [lifecycle.yml](lifecycle.yml) | Lifecycle domain concepts: preferred terms, short definitions, code symbols, identifier words, and edges |
-| [vocabulary.yml](vocabulary.yml) | Words of public identifiers with an ordinary meaning from Dart, Flutter, fpdart, diagnostics, or package prefixes |
+| [vocabulary.yml](vocabulary.yml) | Words of public identifiers with an ordinary meaning from Dart, Flutter, diagnostics, or package prefixes |
 | [log.md](log.md) | Durable decisions that explain ontology changes |
 
 ## Local Checks

@@ -67,14 +67,12 @@ flowchart LR
 |---|---|---|
 | `fp_di` | Component algebra, typed keys, scoped lookup, activation transactions, dependency graph, ownership of dispose functions, lifecycle errors | [fp_di.dart](../../packages/fp_di/lib/fp_di.dart) |
 | `fp_di_flutter` | Caller-owned scope publication, the scope of one widget subtree, BuildContext lookup and observation | [fp_di_flutter.dart](../../packages/fp_di_flutter/lib/fp_di_flutter.dart) |
-| `fp_di_fpdart` | The scope lifecycle, lookups, and `Dependency` steps as fpdart types; no lifecycle logic of its own | [fp_di_fpdart.dart](../../packages/fp_di_fpdart/lib/fp_di_fpdart.dart) |
 | Host | Root scope, concrete services, truthful acquire/release adapters, application state | Host composition root; [examples](../../packages/fp_di/example) |
 | Verification tooling | Checks and evidence about contracts; no production runtime dependencies | [Test specification](../verification/test/spec.md), [formal specification](../verification/formal/spec.md) |
 | `fp_di_devtools` | The DevTools extension app, an experimental and unpublished Flutter web app; a local build puts it in `packages/fp_di/extension/devtools/`, and a release of `fp_di` does not ship it | [DevTools extension](../tooling/devtools/spec.md) |
 
-Source dependency direction is `host -> fp_di_flutter -> fp_di` and
-`host -> fp_di_fpdart -> fp_di, fpdart`; a host without either imports `fp_di`
-directly. `fp_di_flutter` and `fp_di_fpdart` do not depend on each other.
+Source dependency direction is `host -> fp_di_flutter -> fp_di`; a host
+without `fp_di_flutter` imports `fp_di` directly.
 `fp_di_devtools` reads a running app only through the inspector protocol of
 the VM service. It does not depend on `fp_di`, and no package depends on it. Adapter imports MUST use `package:fp_di/fp_di.dart`,
 not core `src/` internals. Tooling and tests MUST NOT become production imports.
@@ -361,9 +359,8 @@ a watcher of a value does not rebuild for it. A watcher of a node reads
 every phase except `active` and `activationFailed` as pending. The failure of `initialize` rolls the members
 of the scope back and goes to the caller alone, so no node holds it.
 
-The adapter imports only the public core API. Functional result conversion
-follows [Fpdart Interoperability](#fpdart-interoperability); `fp_di_flutter`
-does not depend on fpdart or on `fp_di_fpdart`.
+The adapter imports only the public core API. `fp_di_flutter` does not
+depend on fpdart; a host converts a core result to an fpdart value itself.
 
 ### Lifecycles of the adapter
 
@@ -488,7 +485,7 @@ read of an exiting route after a replacement.
 
 | Topic | Canonical responsibility |
 |---|---|
-| This topic | Project boundaries, package separation, Flutter widget-scope ownership and lookup (AR-UI), paper adoption, and fpdart interoperability |
+| This topic | Project boundaries, package separation, Flutter widget-scope ownership and lookup (AR-UI), and paper adoption |
 | [Runtime lifecycle](../runtime/lifecycle/spec.md) | Core runtime behavior, including core scope visibility and disposal, with verified runtime gaps |
 | [Automated tests](../verification/test/spec.md) | Test layers, fixtures, selection, and evidence policy |
 | [Formal verification](../verification/formal/spec.md) | Model scope, proof obligations, assumptions, and model-to-code correspondence |
@@ -520,69 +517,7 @@ are not bugs. A violation of accepted behavior is recorded as a gap of its
 topic. Adding a paper feature requires
 an explicit contract extension and validation of its interaction with this profile.
 
-## Fpdart Interoperability
-
-`fp_dart` in the design request is interpreted as the Dart package `fpdart`.
-It is a functional library, not a replacement interpreter or a core
-dependency. The optional package
-[`fp_di_fpdart`](../../packages/fp_di_fpdart/lib/fp_di_fpdart.dart) puts the
-public core API into fpdart types, so a host that writes its programs with
-fpdart gets one vocabulary on both sides of the boundary. It depends on
-`fpdart: ^1.2.0`; the `2.0.0-dev.3` prerelease is not a compatibility target.
-See the publisher's [version list](https://pub.dev/packages/fpdart/versions).
-
-| Core operation | `fp_di_fpdart` form |
-|---|---|
-| `initialize`, `dispose` | `initializeTask()`, `disposeTask()`: lazy `TaskEither<DiFailure, _>` |
-| initialize, use, dispose | `use(ReaderTaskEither<Scope, E, A>)`: a `TaskEither<ScopeFailure<E>, A>` that disposes on every path |
-| `get`, `maybeGet` | `getEither()`: `Either<DiFailure, T>`; `getOption()`: `Option<T>` |
-| `whenActive` | `whenActiveTask()`: `TaskEither<DiFailure, A>` |
-| `Dependency.map` with an async effect | `mapTaskEither` (a `Left` fails the setup), `mapTaskEitherAsData` (a `Left` is the value), `mapTask` |
-| `Dependency.maybe` | `toOption()`: `Dependency<Option<A>>` |
-| `CancellationToken.whenCanceled` | `canceledTask`: `Task<Unit>` |
-| `Lazy.force` | `toTaskEither()`: a lazy `TaskEither<DiFailure, A>`; a failure is not cached |
-
-The package MUST NOT add lifecycle behavior: each form calls one public core
-operation and converts its result or its error. `DiFailure` keeps the
-original error and stack trace, so an `ActivationException` keeps its cause
-and rollback failures. A `Dependency` step keeps the shape of its
-`Dependency`: the package has no `flatMap` that chooses the next reads from a
-value, because the runtime needs the reads before it runs. The contract below
-applies to these forms and to a host that converts values itself.
-
-| Host value/computation | Integration contract |
-|---|---|
-| `Option<T>` | A normal component result. Converting `maybeGet<T>()` with nullable-to-Option semantics is appropriate only when null is not itself a valid bound value; absence and a bound null are otherwise ambiguous. |
-| `Either<L, A>` | A normal value. `Left` does not throw, roll back effects, or make a component inactive. The host explicitly chooses whether to keep a domain result or raise setup failure. |
-| Lazy async task | Execute only at an explicit host initialization boundary or within tracked component setup. Re-running it in a new scope creates another set of nodes; it is not a memoized singleton. |
-| Reader-style environment | Use a narrow application environment. Passing a Scope into a Reader does not derive requires/optional metadata or create tracked dependency edges. Component reads go through a `Dependency`. |
-| Resource / node | Ownership remains with fp_di. Wrapping acquisition in a functional result container does not supply or execute its dispose function. The caller still disposes a successful handle. |
-
-A successful `initialize` can leave member nodes dormant. A bridge
-MUST NOT equate a successful async result with `node.isActive`. A `TaskEither`
-error callback SHOULD retain both the original error and stack trace; restricting
-its error type to domain failures MUST NOT erase cleanup/rollback diagnostics.
-
-When `Left` is intended to abort setup, the conversion to an exception happens
-inside a `Dependency` step or a resource acquire before commit. When `Left` is intentional business
-data, keep it as the result and continue owning its acquired resources until
-disposal. The host chooses the policy; `fp_di_fpdart` names it in the step
-(`mapTaskEither` or `mapTaskEitherAsData`) instead of choosing one for the
-host.
-
-`initializeTask` runs `initialize` once per run, so a second run on the same
-scope is a `Left`, not a cached `Right`. A `Right` scope is still owned by the
-caller until disposal; `use` brackets the scope when the host does not keep
-it. When the disposal after a use fails, `use` keeps the use's own `Left` in
-the `DisposeFailed` result. The core's `map` vocabulary on `Dependency`
-expresses lifecycle ownership; shared names do not establish equivalence to
-fpdart's effects.
-
 ## Verification
-
-`fp_di_fpdart` is a workspace member, so the workspace lock file resolves
-fpdart. No other package depends on it, and the core MUST NOT depend on
-fpdart.
 
 ### <a id="v-t-ar-di-001"></a>V-T-AR-DI-001 — `[test]` Core suite without Flutter
 
@@ -600,15 +535,6 @@ fpdart.
 - **Files:** manifests plus all production imports
 - **Fixtures:** the boundary audit below and `dart analyze`
 - **Pass:** No prohibited dependency, no private cross-package import, and no import of `runtime/` from `model/`.
-- **Evidence:** present
-
-### <a id="v-t-ar-di-002"></a>V-T-AR-DI-002 — `[test]` Fpdart host interoperability
-
-- **Layer:** Unit + host integration
-- **Target:** `fp_di_fpdart` and its example
-- **Files:** [`fp_di_fpdart_test.dart`](../../packages/fp_di_fpdart/test/fp_di_fpdart_test.dart), with the example [`checkout.dart`](../../packages/fp_di_fpdart/example/checkout.dart)
-- **Fixtures:** `dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test` with fpdart from the workspace lock file; small scopes of `int` and `String` members with recorded and failing dispose functions; a parent and a dormant child. The example builds a checkout with configuration validation that keeps every problem, a State cart store, a ReaderTaskEither workflow, and an optional analytics read.
-- **Pass:** Assert lazy execution, repeated-run behavior, `use` disposal on a Right, a use Left, a setup failure, a dispose failure, and a throwing use; active vs dormant nodes; Left-as-data versus Left-as-setup-failure with rollback; retained errors, stacks, and rollback failures; unchanged dependency shape; optional null policy; and a `Lazy` task that creates nothing until it runs, does not cache a failure, keeps a value, and is a `Left` after the disposal.
 - **Evidence:** present
 
 ### <a id="v-l-ar-di-003"></a>V-L-AR-DI-003 — `[lint]` Paper adoption claims
@@ -766,9 +692,8 @@ for p in (core / 'lib').rglob('*.dart'):
                     assert p.parent.name == 'runtime', (p, uri)
                     assert uri.startswith('../model/'), (p, uri)
                     assert '..' not in uri[3:], (p, uri)
-for adapter in ('packages/fp_di_flutter', 'packages/fp_di_fpdart'):
-    for p in Path(adapter, 'lib').rglob('*.dart'):
-        assert 'package:fp_di/src/' not in p.read_text(), p
+for p in Path('packages/fp_di_flutter', 'lib').rglob('*.dart'):
+    assert 'package:fp_di/src/' not in p.read_text(), p
 PY
 ```
 

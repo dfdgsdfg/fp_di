@@ -58,7 +58,7 @@ boundary, not classification or containment.
 | `component` | A buildable or composable unit defined here, such as a workspace package |
 | `platform` | A host runtime or SDK that a component needs to build or run |
 | `concept` | A domain term of the DI model with one meaning. The bound spec owns its behavior |
-| `vocabulary` | A group of words that public identifiers take with their ordinary meaning from one source, such as the Dart SDK, Flutter, or fpdart |
+| `vocabulary` | A group of words that public identifiers take with their ordinary meaning from one source, such as the Dart SDK or Flutter |
 
 The sibling ontology also uses `entity`, `activity`, and `data_asset`. This
 repository does not adopt them. The `concept` kind is local, and no alignment
@@ -180,7 +180,7 @@ when both repositories mean the same logical object. Wording and evidence may di
 ### <a id="v-l-ont-fmt-002"></a>V-L-ONT-FMT-002 — `[lint]` Vocabulary of the public API
 
 - **Layer:** static analysis
-- **Target:** the public libraries of `fp_di`, `fp_di_flutter`, and `fp_di_fpdart`, and `ontology/*.yml`
+- **Target:** the public libraries of `fp_di` and `fp_di_flutter`, and `ontology/*.yml`
 - **Command:** `dart run agents/scripts/check_vocabulary.dart --prose`
 - **Pass:** the script prints `OK` and exits with 0: no unknown, avoided, or conflicting word, no stale binding, and no avoided word in prose.
 - **Evidence:** present

@@ -36,20 +36,6 @@ nodes:
     evidence:
       - pubspec.yaml
       - specs/architecture/spec.md
-  fp_di_fpdart:
-    kind: component
-    definition: >-
-      Optional package that puts the scope lifecycle, lookups, and Dependency steps of the public runtime
-      API into fpdart types.
-    domain: architecture
-    bindings:
-      - type: package
-        path: packages/fp_di_fpdart
-      - type: spec
-        path: specs/architecture/spec.md
-    evidence:
-      - pubspec.yaml
-      - specs/architecture/spec.md
   fp_di_devtools:
     kind: component
     definition: >-
@@ -90,13 +76,6 @@ relations:
     description: The adapter requires the Flutter SDK to build and run.
     evidence:
       - packages/fp_di_flutter/pubspec.yaml
-  - from: fp_di_fpdart
-    type: depends_on
-    to: fp_di_core
-    description: The fpdart package composes over the public lifecycle and lookup APIs of the core.
-    evidence:
-      - packages/fp_di_fpdart/pubspec.yaml
-      - specs/architecture/spec.md
   - from: fp_di_devtools
     type: depends_on
     to: flutter_sdk

@@ -38,7 +38,7 @@ must not make the core package depend on Flutter.
 
 - Any change to the state of a running app from DevTools: no disposal, no new scope, no new value. The inspector reads only.
 - An inspector in a release or profile build.
-- A separate extension for `fp_di_flutter` or `fp_di_fpdart`. The widget tree stays the business of the Flutter inspector.
+- A separate extension for `fp_di_flutter`. The widget tree stays the business of the Flutter inspector.
 - A stable public Dart API for the protocol. The protocol is a contract between the inspector and the extension of the same version.
 - The built extension in a release of `fp_di`, while the extension is experimental.
 

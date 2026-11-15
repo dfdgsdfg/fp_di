@@ -16,8 +16,8 @@
 // avoided word, a vocabulary conflict, or a stale binding, and 2 when the
 // script cannot run (for example `flutter pub get` is missing).
 //
-// The public API is the export namespace of the public libraries of the three
-// workspace packages, resolved with `package:analyzer`. Run
+// The public API is the export namespace of the public libraries of `fp_di`
+// and `fp_di_flutter`, resolved with `package:analyzer`. Run
 // `flutter pub get` first: the workspace contains a Flutter package.
 //
 // Each node under `nodes:` of an `ontology/*.yml` file MAY declare:
@@ -38,7 +38,6 @@ const _publicLibraries = <String>[
   'packages/fp_di/lib/fp_di.dart',
   'packages/fp_di/lib/tooling.dart',
   'packages/fp_di_flutter/lib/fp_di_flutter.dart',
-  'packages/fp_di_fpdart/lib/fp_di_fpdart.dart',
 ];
 
 /// English function words that carry no vocabulary meaning. The word check

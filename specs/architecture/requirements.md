@@ -26,12 +26,13 @@ architecture topics. Detailed lifecycle semantics remain in the runtime topic.
 - A widget that holds the disposal of a caller-owned scope while it is mounted, publishes the scope, and builds from its state.
 - The lifecycles that meet in the adapter: the frames of Flutter, the mounting of widgets and of routes, the replacement of the published scope, and the transitions of the runtime.
 - Host execution boundary and canonical documentation responsibilities.
-- The paper-inspired subset and host-side interoperability with `fpdart`.
+- The paper-inspired subset.
 
 ## Out of Scope
 
 - Lifecycle algorithms, test methodology, and formal model internals owned by linked topics.
 - New platforms, services, generated code, publishing infrastructure, or package relocation.
+- `fp_di_fpdart`: a separate track that owns its own spec when it needs one.
 
 The existing AR-DI and AR-UI identifiers remain stable after consolidation;
 AR-UI is a retained identifier namespace, not a separate document domain.
@@ -63,14 +64,6 @@ AR-UI is a retained identifier namespace, not a separate document domain.
   - Main flow: each contract MUST have one owning topic with linked requirements, design, and decision log.
   - Alternative flows: verified divergence belongs in the owning topic's gap document.
   - Postcondition: tool instructions and indexes link to those owners instead of defining a second contract.
-
-- <a id="r-uc-ar-di-003"></a>**R-UC-AR-DI-003** — Compose with functional application code
-  - Actor: host author
-  - Trigger: using `fpdart` values or lazy computations with DI
-  - Preconditions: host-selected compatible `fpdart` version
-  - Main flow: the core MUST remain independent of `fpdart`; integrations MUST preserve the core's node/resource ownership and explicit dependency tracking.
-  - Alternative flows: a domain `Left` is returned as a value unless the host explicitly converts it to activation failure.
-  - Postcondition: using functional containers does not silently acquire ownership, trigger rollback, or discharge runtime dependencies.
 
 - <a id="r-uc-ar-di-004"></a>**R-UC-AR-DI-004** — Interpret paper-derived claims
   - Actor: maintainer
@@ -125,7 +118,7 @@ AR-UI is a retained identifier namespace, not a separate document domain.
   - Trigger: adding or changing Flutter integration
   - Preconditions: the public core API and project architecture are available
   - Main flow: use only `package:fp_di/fp_di.dart` and keep result interoperability at the host boundary.
-  - Alternative flows: a UI needs an `fpdart` result bridge, which follows the project interoperability contract without adding an adapter dependency.
+  - Alternative flows: a UI that needs an `fpdart` value converts the core result itself, without an adapter dependency.
   - Postcondition: the adapter remains a Flutter-facing layer over core contracts.
 
 ## Verification
@@ -134,7 +127,6 @@ AR-UI is a retained identifier namespace, not a separate document domain.
 - <a id="v-l-ar-di-001"></a>**V-L-AR-DI-001** `[lint]` Given manifests and source imports, when boundary checks run, then the core has no Flutter/adapter dependency and the adapter uses no core src import. Covers: R-UC-AR-DI-001.
 - <a id="v-l-ar-di-002"></a>**V-L-AR-DI-002** `[lint]` Given canonical topics, when documentation validation runs, then topic triads, IDs, and cross-links are valid. Covers: R-UC-AR-DI-002.
 
-- <a id="v-t-ar-di-002"></a>**V-T-AR-DI-002** `[test]` Given a host-side fpdart bridge, when lazy initialization is executed, domain failure is returned, or a node waits for a publisher, then scopes and nodes retain explicit disposal ownership, Left follows the selected host policy, and successful initialization does not imply active availability. Covers: R-UC-AR-DI-003.
 - <a id="v-l-ar-di-003"></a>**V-L-AR-DI-003** `[lint]` Given architectural claims, when the topic is validated, then paper adoption rows link their source and owning contract without asserting an unexecuted proof. Covers: R-UC-AR-DI-004.
 - <a id="v-t-ar-ui-001"></a>**V-T-AR-UI-001** `[test]` Given a caller-owned context published by `ScopeProvider`, when a publisher changes, then non-listening `di` widgets do not rebuild while `watchDi` rebuilds for the selected publisher identity and ignores an unrelated key. Covers: R-US-AR-UI-001, R-US-AR-UI-003, R-UC-AR-UI-001, R-UC-AR-UI-003.
 - <a id="v-t-ar-ui-004"></a>**V-T-AR-UI-004** `[test]` Given two caller-owned scopes, when the parent rebuilds a fixed `ScopeProvider` with the other scope, then each listening lookup moves to that scope, a non-listening widget does not rebuild, and both scopes stay usable after the provider is removed. Covers: R-US-AR-UI-001, R-UC-AR-UI-001, R-UC-AR-UI-003.

@@ -12,7 +12,7 @@ This navigation document owns no independent requirements or implementation cont
 
 | Topic | Responsibility |
 |---|---|
-| [Project architecture](architecture/spec.md) | Package split, core/Flutter responsibilities, paper adoption, and fpdart interoperability |
+| [Project architecture](architecture/spec.md) | Package split, core/Flutter responsibilities, and paper adoption |
 | [Runtime lifecycle](runtime/lifecycle/spec.md) | Activation, rollback, dependency targets, and withdrawal |
 | [Automated tests](verification/test/spec.md) | Test layers, deterministic fixtures, and evidence policy |
 | [Formal verification](verification/formal/spec.md) | TLA+ model design, properties, bounds, and optional Lean proof boundary |

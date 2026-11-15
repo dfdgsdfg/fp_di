@@ -494,7 +494,7 @@ those lifecycle IDs; these blocks own the test location and pass evidence.
 - **Target:** all core and adapter tests relevant to a lifecycle change.
 - **Files:** the test files named in the preceding rows.
 - **Fixtures:** the checked-in test fixtures and the configured Dart/Flutter SDK; no wall-clock result is accepted as an ordering oracle.
-- **Commands:** `dart run agents/scripts/test_core.dart`, `dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test`, and `flutter test packages/fp_di_flutter/test`.
+- **Commands:** `dart run agents/scripts/test_core.dart` and `flutter test packages/fp_di_flutter/test`.
 - **Pass:** the command exits successfully and the evidence report names the exact command and target suite. A timeout, skipped test, tool error, or unfinished exploration is incomplete evidence.
 - **Evidence:** present
 

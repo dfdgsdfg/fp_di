@@ -332,3 +332,10 @@ Current definitions live in YAML. Authoring guidance lives in [AGENTS.md](AGENTS
 - Decision: `lifecycle.yml` adds the concept `disposal_hold` (term Hold) with the identifiers `hold`, `holds`, `open`, `close`, `ignore`, and `ignored`, bound to the lifecycle and architecture specs, and a `belongs_to` edge to `scope`. It has no file binding until the runtime has the symbol. `flutter_words` lists `boundary` with the meaning that Flutter gives it in `RepaintBoundary`. The definition of `fp_di_flutter` states that a `ScopeBoundary` holds the disposal of a caller-owned scope.
 - Consequences: The identifiers of the holds pass the vocabulary check when they land. `ignoring` stays in `observation_words` for `SlowMutation.ignoringCancellation`; `ignore` and `ignored` name the call that does not wait for the holds. A file binding with the symbol `DisposeHold` is added with the implementation.
 - References: [lifecycle.yml](lifecycle.yml), [vocabulary.yml](vocabulary.yml), [workspace.yml](workspace.yml), [lifecycle log](../specs/runtime/lifecycle/log.md), [architecture log](../specs/architecture/log.md).
+
+## [2026-11-15] decision | Remove fp_di_fpdart from the ontology
+
+- Context: `fp_di_fpdart` no longer depends on `fp_di`; it is a separate runtime on fpdart. The specs exclude it as a separate track that will own its spec when it needs one. The ontology defined it as a package over the core API, with a `depends_on` edge to the core, and the vocabulary check read its public library.
+- Decision: `workspace.yml` drops the `fp_di_fpdart` node and its edge. `agents/scripts/check_vocabulary.dart` reads only the public libraries of `fp_di` and `fp_di_flutter`. `vocabulary.yml` drops the `fpdart_words` node and the prefix `fpdart`. `failed` moves to `observation_words`, because the node phases of the core use it.
+- Consequences: No ontology node, edge, or vocabulary word describes `fp_di_fpdart`, and the vocabulary check does not read its identifiers. The track of the package adds them again if it needs them.
+- References: [workspace.yml](workspace.yml), [vocabulary.yml](vocabulary.yml), [architecture log](../specs/architecture/log.md).
