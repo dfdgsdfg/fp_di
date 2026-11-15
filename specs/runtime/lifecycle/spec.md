@@ -2494,6 +2494,15 @@ conforms.
 - **Pass:** for each generated case, the release trace with holds equals the trace without holds; each waiting `dispose()` future completes once with the same result; a disposal with `ignoreHolds` releases with holds open; the holds of a child delay the disposal of its parent; `disposeHold` after the request throws. A failing case is shrunk and printed by `kiri_check`.
 - **Evidence:** present
 
+### <a id="v-t-rt-lc-043"></a>V-T-RT-LC-043 — `[test]` Holds over random histories
+
+- **Layer:** Unit, random histories
+- **Target:** the holds of a disposal over the commands of the [random lifecycle histories](../../verification/test/spec.md#random-lifecycle-histories)
+- **Files:** [`lifecycle_fuzz_test.dart`](../../../packages/fp_di/test/lifecycle_fuzz_test.dart), [`lifecycle_fuzz_defect_test.dart`](../../../packages/fp_di/test/lifecycle_fuzz_defect_test.dart), and [`lifecycle_fuzz_harness.dart`](../../../packages/fp_di/test/support/lifecycle_fuzz_harness.dart)
+- **Fixtures:** the commands `OpenHold`, `CloseHold`, and `DisposeIgnoringHolds`; the terminal phase that closes the open holds; the deliberate defects `queueWithHolds`, `setupWhileHeld`, `dropIgnoredReport`, and `loseHeldCaller`, which the runtime reads only inside `assert`.
+- **Pass:** the checks `NoDisposalWhileHeld`, `NoSetupAfterRequest`, `OpenHoldsCurrent`, `IgnoredHoldsReported`, and `HeldFuturesComplete` hold for every case, and the run reaches the coverage floors of the holds. Each defect makes its control of [V-T-VR-TEST-006](../../verification/test/requirements.md#v-t-vr-test-006) report its check.
+- **Evidence:** present
+
 ### <a id="v-l-rt-lc-001"></a>V-L-RT-LC-001 — `[lint]` Static analysis
 
 - **Layer:** Static analysis

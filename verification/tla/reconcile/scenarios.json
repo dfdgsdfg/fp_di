@@ -27,6 +27,10 @@
       "expect": "pass"
     },
     {
+      "name": "ReconcileHeldConforming",
+      "expect": "pass"
+    },
+    {
       "name": "ReconcileProgress",
       "expect": "pass"
     },
@@ -36,6 +40,10 @@
     },
     {
       "name": "ReconcileCollectionProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "ReconcileHeldProgress",
       "expect": "pass"
     },
     {
@@ -96,6 +104,12 @@
       "name": "ReconcileNegChildVisible",
       "expect": {
         "invariant": "VisibleBinding"
+      }
+    },
+    {
+      "name": "ReconcileNegActivateWhileHeld",
+      "expect": {
+        "invariant": "NoActivationWhileRequested"
       }
     }
   ]

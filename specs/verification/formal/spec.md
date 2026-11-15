@@ -86,6 +86,9 @@ not successful recovery.
 | IgnoreHolds | Queues the disposal at once, whatever holds are open | `Scope.dispose(ignoreHolds: true)` |
 | CancelledSettle | Activation with a forbidden commit rolls back once acquisitions settle; queued setup for a disposed owner never starts | `activate`, `_RuntimeMutationQueue.run` |
 | LazyRelease | Mark the holder released, await in-flight acquisition, release an acquired lease, then continue left in the composition | `Lazy._release`, `runCleanups` |
+| RequestOwner (Lazy) | The disposal of the owner is requested; the holder takes no new acquisition, an acquisition in flight goes on, and the release comes later | `Lazy.force`, `DiContext.ownerDisposalRequested` |
+| HoldWait / ReleaseHolds (Cancellation) | A disposal request of a held target cancels its episodes at once and stays outside the queue; setups of other owners enqueue and run meanwhile; the disposal enters the queue when the holds close | `Scope.dispose`, `DisposeHold.close` |
+| HeldRequest / ReleaseHolds (Reconcile) | The disposal of a scope is requested and waits; withdrawals and returns of publishers of an ancestor run during the wait; the scope disposal follows when the holds close | `Scope.dispose`, `DisposeHold.close`, `reconcile` |
 
 This table is an abstraction map, not a proved refinement mapping. Any transition
 change MUST trigger review of its source boundary and concrete test mapping.
@@ -126,6 +129,10 @@ Names below designate planned model operators; they are not new runtime requirem
 | `CleanupBeforeNextSetup` | A setup that enters the queue after a disposal mutation starts only after that disposal's rollback and release attempts finish; a setup of another scope MAY run while a disposal waits for holds outside the queue | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `AcquireOnlyOnUse`, `SingleFlight`, `AtMostOneSuccess` | A memoized resource is acquired only after a get, with at most one acquisition in flight and one success | [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `NoAcquireAfterRelease` | A released holder never starts an acquisition | [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
+| `NoCreationAfterRequest` (Lazy) | A holder whose owner disposal was requested never starts an acquisition | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `NoActivationWhileRequested` (Reconcile) | No node of a scope whose disposal was requested commits an activation, also while a hold delays that disposal and publishers of an ancestor come and go | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `HeldDisposalCompletes` (Cancellation, Reconcile) | A held disposal request finishes once its holds close, under fairness that includes the close | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `ReleaseAfterRequest` (Lazy) | The release of a holder whose owner disposal was requested follows, under fairness that includes the request | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `DependentFirst` (Lazy) | Left-composed dependencies are released only after the holder has no live or in-flight lease | [R-UC-RT-LC-003](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-003), [R-UC-RT-LC-007](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-007) |
 | `RecipientsExact` (Integration) | A late dispose failure of a canceled activation reaches the caller of that activation (`initialize`, or `Scope.errors` for an automatic activation or a withdrawal); dispose callers receive only the dispose failures of the disposal itself | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008) |
 | `NoLostDisposeFailure` (Integration) | Every release that ran and failed reaches one recipient | [R-UC-RT-LC-002](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-002) |
@@ -178,6 +185,9 @@ report the limit and rerun with a sufficient larger bound.
 | `ReentrancyConforming`, `ReentrancyWitnessDuring` | `reentrancy/Reentrancy.tla` | Three mutations; a callback that fires in its own mutation, after it while the queue is idle, and during a later mutation; a mutation that awaits the request of its own callback |
 | `Teardown{Diamond,Cycle,LowReadsHigh}`, `TeardownProgress{Diamond,Cycle}`, `TeardownWitness{Overlap,CycleDisposeFailures}` | `teardown/Teardown.tla` | Committed read graphs of a disposed scope: a diamond with an independent node (28,633 distinct states, depth 31), an optional-read cycle that reads a publisher (178, depth 28), and a reader created before its publisher (1,161, depth 19); two dispose functions per node, each a begin and an end step, and up to two failures. The fallback walks dependents depth first from the node created last, as `deactivate` does, and collects their dispose failures under that call. The witnesses reach two overlapping releases and a Cycle run with the dispose failures of 1 and 4 |
 | `Disposal{Conforming,Progress,HeldIgnoreProgress}` | `disposal/Disposal.tla` | Two host callers of one disposal, repeated calls, a dispose function that calls `dispose()` on its own target and on another target; two open holds of the target and one of its child, a call that ignores the holds, a waiting disposal of the child, and a call of the child that joins the disposal of the target. `Progress` assumes that each hold closes; `HeldIgnoreProgress` assumes only that a call ignores the holds |
+| `CancelHeld{Conforming,Progress}` | `cancellation/Cancellation.tla` | A disposal request of a held target during its setup, a setup of another owner that enqueues and runs during the wait, and the close of the hold; `NoSetupAfterCancel`, `NoCommitAfterCancel`, `CancelPrompt`, and `CleanupBeforeNextSetup` for the setups that enter the queue after the disposal |
+| `LazyRequest{Conforming,Progress}` | `lifecycle/Lazy.tla` | A force before and after the request of the owner disposal, an acquisition in flight at the request, and the release after it |
+| `ReconcileHeld{Conforming,Progress}` | `reconcile/Reconcile.tla` | A held disposal request of a child scope, the withdrawal and the return of a publisher of its parent during the wait, and the scope disposal after the close |
 | `CancelConforming*` | `cancellation/Cancellation.tla` | A disposal request during setup, cooperative and uncooperative acquisitions, caught and propagated composite failures, withdrawal reaching in-flight dependents transitively, and the next queued setup |
 | `LazyProgress`, `ReconcileProgress`, `ReconcileFeedbackProgress`, `ReconcileCollectionProgress`, `InitProgress*`, `CancelProgress*`, `Integration*Progress`, `TeardownProgress*` | each model | Finite host input, then draining under the fairness assumptions of each `FairSpec`; each lists exactly one property |
 | `*Neg*` | each model | One deliberate defect per property, in the table below |
@@ -189,7 +199,13 @@ checks that decision from the mutation identity that a callback keeps.
 It models the holds as counts that close in any order and the disposal of the
 child as one step. A hold that closes inside a mutation, the zone that queues
 the waiting disposal, and the closing of `Lazy` holders at the request are
-outside it; [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) covers them.
+outside it; [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) covers them. `Cancellation.tla` gives a held request its transaction id when its holds
+close, so the queue order and `CleanupBeforeNextSetup` hold for the setups
+that enter the queue after it, and it reserves the ids of the waiting requests.
+`Reconcile.tla` takes a held request only between transactions and has no
+request of the root while a hold of the child is open; `Cancellation.tla`
+owns a request inside a transaction, and `Disposal.tla` owns the join of an
+ancestor.
 Release attempts and their order are checked by
 `Lazy.tla`, `Initialize.tla`, and `Cancellation.tla`, whose releases succeed;
 `Teardown.tla` checks the order of the concurrent releases of a disposed
@@ -255,6 +271,7 @@ flowchart TD
 | Omit a read from the committed view | `NoNeutralReload` or `StableTargets` | [V-T-RT-LC-004](../../runtime/lifecycle/requirements.md#v-t-rt-lc-004) |
 | Release publisher before its readers | `DependentFirst` | [V-T-RT-LC-003](../../runtime/lifecycle/requirements.md#v-t-rt-lc-003) |
 | Cancel the token only when the disposal mutation runs | `CancelPrompt` | [V-T-RT-LC-008](../../runtime/lifecycle/requirements.md#v-t-rt-lc-008) (`cancellation_test.dart`) |
+| Start the setup of a held owner during the wait (`SetupWhileHeld`) | `NoSetupAfterCancel` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) (`dispose_hold_test.dart`) |
 | Commit an activation that settles after a disposal request | `NoCommitAfterCancel` | [V-T-RT-LC-008](../../runtime/lifecycle/requirements.md#v-t-rt-lc-008) (`cancellation_test.dart`) |
 | Start queued setup for a disposed owner | `NoSetupAfterCancel` | [V-T-RT-LC-008](../../runtime/lifecycle/requirements.md#v-t-rt-lc-008) |
 | Cancel the token of only the withdrawn publisher's own episode | `CancelPropagatesToDependents` | [V-T-RT-LC-008](../../runtime/lifecycle/requirements.md#v-t-rt-lc-008) (`cancellation_test.dart`) |
@@ -286,6 +303,7 @@ flowchart TD
 | Disposal: a request queues the disposal with a hold open (`NoWait`) | `NoDisposalWhileHeld` | `dispose_hold_test.dart`, the release log stays empty until the last hold closes |
 | Disposal: the disposal of the target leaves a waiting caller of its child (`LoseDescendant`) | `HeldDisposalProgress` under fairness | `dispose_hold_test.dart`, an ancestor that ignores the holds ends the wait of a descendant |
 | Reconcile: rebuild a node whose target is unchanged (`RebuildUnchanged`) | `NoNeutralReload` | [V-T-RT-LC-004](../../runtime/lifecycle/requirements.md#v-t-rt-lc-004) |
+| Reconcile: activate a node of a scope whose held disposal waits, when a publisher returns (`ActivateWhileHeld`) | `NoActivationWhileRequested` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) |
 | Reconcile: activate a disposed member again (`ResurrectRemoved`) | `NoResurrection` | [V-T-RT-LC-003](../../runtime/lifecycle/requirements.md#v-t-rt-lc-003) |
 | Reconcile: let `initialize` succeed with its own members stale at the pass bound (`UnsettledSucceeds`) | `UnsettledFailsInit` | [V-T-RT-LC-004](../../runtime/lifecycle/requirements.md#v-t-rt-lc-004) (`regression_test.dart`) |
 | Reconcile: keep a disposed contributor in the membership, so a strict reader waits for it (`CaptureMembership`) | `StableTargets` | [V-T-RT-LC-020](../../runtime/lifecycle/requirements.md#v-t-rt-lc-020) (`collection_test.dart`, a contributor disposed by itself) |
@@ -315,6 +333,7 @@ flowchart TD
 | Lazy: acquire during activation (`EagerAcquire`) | `AcquireOnlyOnUse` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
 | Lazy: reacquire after success (`NoMemo`) | `AtMostOneSuccess` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
 | Lazy: concurrent first forces each acquire (`NoSingleFlight`) | `SingleFlight` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
+| Lazy: acquire after the request of the owner disposal (`ForceAfterRequest`) | `NoCreationAfterRequest` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) |
 | Lazy: acquire after release (`AcquireAfterRelease`) | `NoAcquireAfterRelease` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
 | Lazy: late acquisition also releases itself (`SelfRelease`) | `ReleaseAtMostOnce` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
 | Lazy: release forgets an acquired lease (`DropLease`) | `LeaseAccounted` | [V-T-RT-LC-007](../../runtime/lifecycle/requirements.md#v-t-rt-lc-007) |
@@ -398,7 +417,7 @@ initial lifecycle model or current package tests.
 - **Target:** the nine models via the runner
 - **Files:** `verification/tla/*/*.tla`
 - **Fixtures:** Conforming safety configs plus separate Progress configs, with the bounds in each cfg.
-- **Pass:** Completed checks with all named properties passing and disclosed bounds: Lazy 3, Reconcile 8, Initialize 15, Cancellation 12, Disposal 3, Teardown 5, Reentrancy 1, Reporting 4, and Integration 6 conforming or progress scenarios.
+- **Pass:** Completed checks with all named properties passing and disclosed bounds: Lazy 5, Reconcile 10, Initialize 15, Cancellation 14, Disposal 3, Teardown 5, Reentrancy 1, Reporting 4, and Integration 6 conforming or progress scenarios.
 - **Evidence:** present
 
 ### <a id="v-t-vr-form-002"></a>V-T-VR-FORM-002 — `[test]` Negative controls
@@ -407,7 +426,7 @@ initial lifecycle model or current package tests.
 - **Target:** negative configs
 - **Files:** `verification/tla/*/*.cfg`, `verification/tla/*/scenarios.json`
 - **Fixtures:** Each fault scenario above, with paired positive configs.
-- **Pass:** Each fault scenario above produces its expected property violation, paired positive passes, tool errors fail: Lazy 8, Reconcile 10, Initialize 17, Cancellation 11, Disposal 7, Teardown 5, Reentrancy 3, Reporting 6, and Integration 7 negative configurations, plus 9 Cancellation, 2 Teardown, 1 Reentrancy, and 3 Integration reachability witnesses; 146 scenarios in all.
+- **Pass:** Each fault scenario above produces its expected property violation, paired positive passes, tool errors fail: Lazy 9, Reconcile 11, Initialize 17, Cancellation 12, Disposal 7, Teardown 5, Reentrancy 3, Reporting 6, and Integration 7 negative configurations, plus 9 Cancellation, 2 Teardown, 1 Reentrancy, and 3 Integration reachability witnesses; 155 scenarios in all.
 - **Evidence:** present
 
 ### <a id="v-t-vr-form-003"></a>V-T-VR-FORM-003 — `[test]` Counterexample regressions

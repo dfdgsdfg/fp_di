@@ -47,12 +47,29 @@
 (* The order in which changed or dormant nodes are picked is free, a      *)
 (* superset of the id order the runtime uses.                              *)
 (*                                                                         *)
+(* Holds of a disposal (R-UC-RT-LC-034). With Held, the child scope has an *)
+(* open hold from the start. HeldRequest is the disposal request of that   *)
+(* scope: the scope is "requested" at once and its disposal waits outside  *)
+(* the queue. During the wait the host mutates other nodes, so a publisher *)
+(* of the parent may withdraw and return. The withdrawal deactivates the   *)
+(* readers of the requested scope, and no node of that scope starts an     *)
+(* activation again. CloseHold and ReleaseHolds end the wait and run the   *)
+(* scope disposal. The request comes between two transactions; a request   *)
+(* inside a transaction, which cancels the activations in flight, belongs  *)
+(* to Cancellation.tla. A disposal request of the root while the child     *)
+(* hold is open is not modeled; Disposal.tla owns the join of holds.       *)
+(*                                                                         *)
+(*   HeldRequest      Scope.dispose with a hold open: disposeRequested      *)
+(*   CloseHold,       DisposeHold.close, _Runtime.holdClosed: the last      *)
+(*   ReleaseHolds     close queues the waiting disposal                     *)
+(*                                                                         *)
 (* Fault selects at most one deliberate defect (negative controls).        *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-    Topology,     \* "G002" | "Shadow" | "Chain" | "Feedback" | "Collection"
+    Topology,     \* "G002" | "Shadow" | "Chain" | "Feedback" | "Collection" | "Held"
+    Held,         \* the child scope has an open hold at the start
     MaxFailures,  \* automatic activations that may fail (host input)
     MaxDisposeFailures,
                   \* own releases that may fail and block reactivation
@@ -66,6 +83,7 @@ Faults == {
     "PublisherFirst",    \* a publisher releases before its dependents
     "RebuildUnchanged",  \* recheck rebuilds a node whose target is equal
     "ResurrectRemoved",  \* a disposed member activates again
+    "ActivateWhileHeld", \* a node of a scope whose held disposal waits activates
     "OmitOptional",      \* the committed view drops optional reads
     "CaptureMembership", \* a disposed member never leaves the membership
     "OwnMember",         \* a reader's own contribution is one of its members
@@ -74,6 +92,7 @@ Faults == {
 
 ASSUME Fault \in Faults
 ASSUME MaxFailures \in Nat /\ MaxDisposeFailures \in Nat
+ASSUME Held \in BOOLEAN
 
 NoNode == "none"
 
@@ -151,7 +170,20 @@ Collection == [
     colopt  |-> [n \in {"c1", "c2", "rs", "ro"} |->
                    IF n = "ro" THEN {"C"} ELSE {}]]
 
+\* A held scope. x is a root publisher; p, also in the root, reads x
+\* optionally and publishes kP; r, in the child, requires kP. The disposal of
+\* x withdraws p and r. p stays eligible, since its read of x is optional, and
+\* returns. r must not activate again while the disposal of the child waits.
+HeldTopology == [
+    nodes |-> {"x", "p", "r"},
+    scope |-> [n \in {"x", "p", "r"} |-> IF n = "r" THEN "child" ELSE "root"],
+    req   |-> [n \in {"x", "p", "r"} |-> IF n = "r" THEN {"kP"} ELSE {}],
+    opt   |-> [n \in {"x", "p", "r"} |-> IF n = "p" THEN {"kX"} ELSE {}],
+    pub   |-> [n \in {"x", "p", "r"} |->
+                 CASE n = "x" -> "kX" [] n = "p" -> "kP" [] OTHER -> NoNode]]
+
 T == CASE Topology = "G002" -> G002
+       [] Topology = "Held" -> HeldTopology
        [] Topology = "Collection" -> Collection
        [] Topology = "Shadow" -> Shadow
        [] Topology = "Chain" -> Chain
@@ -163,7 +195,7 @@ Keys == UNION {T.req[n] \cup T.opt[n] \cup
 MaxPasses == Cardinality(Nodes) + 1
 
 VARIABLES
-    scopeState,  \* [Scopes -> {"declared", "initialized", "disposed"}]
+    scopeState,  \* [Scopes -> {"declared", "initialized", "requested", "disposed"}]
     registered,  \* [Nodes -> BOOLEAN]
     active,      \* [Nodes -> BOOLEAN]
     blocked,     \* [Nodes -> BOOLEAN] own release failed
@@ -180,11 +212,16 @@ VARIABLES
     disposeFailures,  \* own dispose failures so far
     removed,     \* ghost: members that were disposed
     neutral,     \* ghost: a node was rebuilt with an unchanged target
-    unsettled    \* ghost: members of the initialize left stale at the bound
+    unsettled,   \* ghost: members of the initialize left stale at the bound
+    held,        \* the hold of the child scope is open
+    lateAct      \* ghost: a node activated in a scope whose disposal was requested
+
+holdVars == <<held, lateAct>>
 
 vars == <<scopeState, registered, active, blocked, committed, withdrawing,
           permanent, pc, afterWithdraw, failedNow, initCall, passes,
-          diverged, failures, disposeFailures, removed, neutral, unsettled>>
+          diverged, failures, disposeFailures, removed, neutral, unsettled,
+          held, lateAct>>
 
 (***************************************************************************)
 (* Resolution                                                              *)
@@ -301,7 +338,8 @@ Eligible(n) ==
 RtEligible(n) ==
     /\ (registered[n] \/ Fault = "ResurrectRemoved")
     /\ ~active[n] /\ ~blocked[n]
-    /\ Live(T.scope[n])
+    /\ (Live(T.scope[n])
+         \/ (Fault = "ActivateWhileHeld" /\ scopeState[T.scope[n]] = "requested"))
     /\ n \notin failedNow
     /\ RtSatisfied(n)
 
@@ -329,6 +367,8 @@ Init ==
     /\ removed = {}
     /\ neutral = FALSE
     /\ unsettled = {}
+    /\ held = Held
+    /\ lateAct = FALSE
 
 StartTxn == /\ failedNow' = {} /\ passes' = 0 /\ diverged' = FALSE
 
@@ -346,7 +386,7 @@ InitScope(s) ==
     /\ StartTxn
     /\ UNCHANGED <<active, blocked, committed, withdrawing, permanent,
                    afterWithdraw, failures, disposeFailures, removed, neutral,
-                   unsettled>>
+                   unsettled, holdVars>>
 
 DisposeNode(n) ==
     /\ pc = "idle"
@@ -365,13 +405,17 @@ DisposeNode(n) ==
     /\ initCall' = {}
     /\ StartTxn
     /\ UNCHANGED <<scopeState, active, blocked, committed, failures,
-                   disposeFailures, neutral, unsettled>>
+                   disposeFailures, neutral, unsettled, holdVars>>
 
 Subtree(s) == IF s = "root" THEN Scopes ELSE {s}
 
-DisposeScope(s) ==
+\* An open hold of the child scope delays the disposal of its scope and of
+\* the root, which contains it.
+HoldOpen(s) == held /\ "child" \in Subtree(s)
+
+\* The disposal mutation of scope s and its subtree.
+DisposeMutation(s) ==
     /\ pc = "idle"
-    /\ scopeState[s] = "initialized"
     /\ LET gone == {n \in Nodes : T.scope[n] \in Subtree(s) /\ registered[n]}
        IN /\ scopeState' = [t \in Scopes |->
                               IF t \in Subtree(s) THEN "disposed"
@@ -387,7 +431,41 @@ DisposeScope(s) ==
     /\ initCall' = {}
     /\ StartTxn
     /\ UNCHANGED <<active, blocked, committed, failures, disposeFailures,
-                   neutral, unsettled>>
+                   neutral, unsettled, holdVars>>
+
+DisposeScope(s) ==
+    /\ scopeState[s] = "initialized"
+    /\ ~HoldOpen(s)
+    /\ DisposeMutation(s)
+
+\* The disposal request of the held child scope. The scope is requested at
+\* once; its nodes stay active and start no activation, and its disposal
+\* waits for the hold outside the transaction queue.
+HeldRequest ==
+    /\ pc = "idle"
+    /\ held
+    /\ scopeState["child"] = "initialized"
+    /\ scopeState' = [scopeState EXCEPT !["child"] = "requested"]
+    /\ UNCHANGED <<registered, active, blocked, committed, withdrawing,
+                   permanent, pc, afterWithdraw, failedNow, initCall, passes,
+                   diverged, failures, disposeFailures, removed, neutral,
+                   unsettled, holdVars>>
+
+\* The hold closes; the mutations of the root run before and after it.
+CloseHold ==
+    /\ held
+    /\ held' = FALSE
+    /\ UNCHANGED <<scopeState, registered, active, blocked, committed,
+                   withdrawing, permanent, pc, afterWithdraw, failedNow,
+                   initCall, passes, diverged, failures, disposeFailures,
+                   removed, neutral, unsettled, lateAct>>
+
+\* The last hold closed: the waiting disposal of the child enters the queue
+\* and runs as a disposal mutation.
+ReleaseHolds ==
+    /\ scopeState["child"] = "requested"
+    /\ ~held
+    /\ DisposeMutation("child")
 
 (***************************************************************************)
 (* Transaction steps                                                       *)
@@ -410,7 +488,8 @@ ReleaseOne(n) ==
           /\ blocked' = [blocked EXCEPT ![n] = TRUE]
           /\ disposeFailures' = disposeFailures + 1
     /\ UNCHANGED <<scopeState, permanent, pc, afterWithdraw, failedNow,
-                   initCall, passes, diverged, failures, removed, neutral, unsettled>>
+                   initCall, passes, diverged, failures, removed, neutral, unsettled,
+                   holdVars>>
 
 FinishWithdraw ==
     /\ pc = "withdraw"
@@ -420,7 +499,7 @@ FinishWithdraw ==
     /\ UNCHANGED <<scopeState, registered, active, blocked, committed,
                    withdrawing, afterWithdraw, failedNow, initCall, passes,
                    diverged, failures, disposeFailures, removed, neutral,
-                   unsettled>>
+                   unsettled, holdVars>>
 
 \* Recheck: rebuild one active node whose target changed.
 CheckChanged(n) ==
@@ -433,7 +512,7 @@ CheckChanged(n) ==
     /\ afterWithdraw' = "check"
     /\ UNCHANGED <<scopeState, registered, active, blocked, committed,
                    permanent, failedNow, initCall, passes, diverged,
-                   failures, disposeFailures, removed, unsettled>>
+                   failures, disposeFailures, removed, unsettled, holdVars>>
 
 FinishCheck ==
     /\ pc = "check"
@@ -442,21 +521,22 @@ FinishCheck ==
     /\ UNCHANGED <<scopeState, registered, active, blocked, committed,
                    withdrawing, permanent, afterWithdraw, failedNow,
                    initCall, passes, diverged, failures, disposeFailures,
-                   removed, neutral, unsettled>>
+                   removed, neutral, unsettled, holdVars>>
 
 ActivateDormant(n) ==
     /\ pc = "dormant"
     /\ RtEligible(n)
     /\ \/ /\ active' = [active EXCEPT ![n] = TRUE]
           /\ committed' = [committed EXCEPT ![n] = Commit(n)]
+          /\ lateAct' = (lateAct \/ scopeState[T.scope[n]] = "requested")
           /\ UNCHANGED <<failedNow, failures, unsettled>>
        \/ /\ failures < MaxFailures /\ n \notin initCall
           /\ failedNow' = failedNow \cup {n}
           /\ failures' = failures + 1
-          /\ UNCHANGED <<active, committed, unsettled>>
+          /\ UNCHANGED <<active, committed, unsettled, lateAct>>
     /\ UNCHANGED <<scopeState, registered, blocked, withdrawing, permanent,
                    pc, afterWithdraw, initCall, passes, diverged,
-                   disposeFailures, removed, neutral, unsettled>>
+                   disposeFailures, removed, neutral, unsettled, held>>
 
 \* The dormant loop is done. Recheck when an activation changed a target,
 \* at most MaxPasses times; SkipRecheck stops at once. At the bound, a stale
@@ -496,10 +576,11 @@ FinishDormant ==
                /\ UNCHANGED <<scopeState, registered, withdrawing, permanent,
                               afterWithdraw, failedNow, passes>>
     /\ UNCHANGED <<active, blocked, committed, failures, disposeFailures,
-                   removed, neutral>>
+                   removed, neutral, holdVars>>
 
 Next ==
     \/ \E s \in Scopes : InitScope(s) \/ DisposeScope(s)
+    \/ HeldRequest \/ CloseHold \/ ReleaseHolds
     \/ \E n \in Nodes : DisposeNode(n) \/ ReleaseOne(n) \/ CheckChanged(n)
                          \/ ActivateDormant(n)
     \/ FinishWithdraw \/ FinishCheck \/ FinishDormant
@@ -509,6 +590,7 @@ Spec == Init /\ [][Next]_vars
 Fairness ==
     /\ WF_vars(FinishWithdraw) /\ WF_vars(FinishCheck)
     /\ WF_vars(FinishDormant)
+    /\ WF_vars(CloseHold) /\ WF_vars(ReleaseHolds)
     /\ \A n \in Nodes : WF_vars(ReleaseOne(n)) /\ WF_vars(CheckChanged(n))
                          /\ WF_vars(ActivateDormant(n))
 
@@ -518,7 +600,9 @@ FairSpec == Spec /\ Fairness
 (* Properties                                                              *)
 (***************************************************************************)
 TypeOK ==
-    /\ scopeState \in [Scopes -> {"declared", "initialized", "disposed"}]
+    /\ scopeState \in [Scopes -> {"declared", "initialized", "requested", "disposed"}]
+    /\ held \in BOOLEAN
+    /\ lateAct \in BOOLEAN
     /\ registered \in [Nodes -> BOOLEAN]
     /\ active \in [Nodes -> BOOLEAN]
     /\ blocked \in [Nodes -> BOOLEAN]
@@ -588,6 +672,15 @@ NoNeutralReload == ~neutral
 \* fails and rolls back instead of succeeding.
 UnsettledFailsInit == (Quiescent /\ diverged) => unsettled = {}
 
+\* No node of a scope whose disposal was requested activates, also while the
+\* hold delays the disposal and a publisher of the parent withdraws and returns.
+NoActivationWhileRequested == ~lateAct
+
 \* Liveness: every transaction finishes.
 Settles == []<>Quiescent
+
+\* Liveness with the hold, under FairSpec: a requested child scope is disposed
+\* once the hold closes.
+HeldDisposalCompletes ==
+    (scopeState["child"] = "requested") ~> (scopeState["child"] = "disposed")
 =============================================================================

@@ -14,11 +14,22 @@
 (* deactivates and removes nodes. A host disposal request completes the     *)
 (* episode signals at once and only then enqueues its transaction.         *)
 (*                                                                         *)
+(* Holds of a disposal (R-UC-RT-LC-034). A request of a target that holds  *)
+(* an open hold of its subtree cancels the episodes of the target at once  *)
+(* and then waits outside the queue. The queue runs other transactions     *)
+(* during the wait, and the setups of other owners enqueue and run. When   *)
+(* the last hold of the subtree closes, ReleaseHolds enqueues the disposal *)
+(* transaction, and the transaction takes its id at that point. The wait   *)
+(* starts no setup of the target and no activation of its nodes.          *)
+(*                                                                         *)
 (* Code correspondence (abstraction map, not a refinement proof):          *)
 (*   Initialize         Scope.initialize call (scope.dart)                 *)
 (*   RequestDispose     ComponentNode.dispose / Scope.dispose, before       *)
 (*                      _RuntimeMutationQueue.run (scope.dart,              *)
-(*                      _disposeNode)                                       *)
+(*                      _disposeNode); with an open hold the request ends   *)
+(*                      in the wait (HoldWait)                              *)
+(*   CloseHold,         DisposeHold.close, _Runtime.holdClosed; the last    *)
+(*   ReleaseHolds       close of the subtree queues the waiting disposal    *)
 (*   StartInit,         _RuntimeMutationQueue.run: the queued action        *)
 (*   StartDispose       starts (runtime_mutation_queue.dart)                *)
 (*   StartEpisode       _Runtime.activate (runtime.dart); one episode is   *)
@@ -71,6 +82,7 @@ CONSTANTS
     MaxEp,       \* activation episodes per node
     MaxLeases,   \* acquisition steps (lease slots) per episode
     MaxTx,       \* host requests (queued transactions) per run
+    HeldTargets, \* targets with an open hold at the start; a request that contains one waits
     Kinds,       \* acquisition kinds that occur: subset of {"coop", "uncoop"}
     CanFail,     \* a primitive or a region may fail
     Composite,   \* step 1 runs in a child region of the episode root
@@ -88,6 +100,7 @@ Faults == {
     "KeepEligible",          \* a withdrawal-cancelled node stays eligible
     "CaughtLeaksParent",     \* a caught child failure completes the parent signal
     "SkipCheckpoint",        \* no checkpoint between composition steps
+    "SetupWhileHeld",        \* a setup of the held owner starts during the wait
     "OverlapSetup",          \* the next setup does not wait for the queue
     "AbandonUncoop"          \* rollback does not wait for an uncooperative lease
 }
@@ -134,6 +147,8 @@ VARIABLES
     nextTx,   \* next transaction id
     initReq,  \* nodes with an initialize request
     reqd,     \* nodes whose owner disposal was requested
+    held,     \* the open holds, each named by its target
+    waiting,  \* requested targets whose disposal waits for a hold, outside the queue
     commitAfterCancel,    \* history: an episode committed after its signal
     setupAfterCancel,     \* history: setup started for a disposed owner
     stepAfterCancel,      \* history: a step started after its region signal
@@ -142,7 +157,8 @@ VARIABLES
 
 nodeVars == <<ph, ep, rsig, csig, cst, rcause, supp, awaitTx, wcnt, epTx, rfail>>
 leaseVars == <<ls, lk, rel>>
-txVars == <<tkind, ttgt, tstat, running, nextTx, initReq, reqd>>
+holdVars == <<held, waiting>>
+txVars == <<tkind, ttgt, tstat, running, nextTx, initReq, reqd, held, waiting>>
 histVars == <<commitAfterCancel, setupAfterCancel, stepAfterCancel,
               inverseBeforeSignal, landedLate>>
 vars == <<nodeVars, leaseVars, txVars, histVars>>
@@ -165,6 +181,14 @@ Up(S) ==
 \* (which owns every node).
 Targets == ({{n} : n \in Nodes} \cup ChildScopes \cup {Nodes}) \ {{}}
 
+ASSUME HeldTargets \subseteq Targets
+
+\* A hold of a target H delays the request of every target that contains H.
+Blocked(T) == \E H \in held : H \subseteq T
+
+\* The nodes of the requests that wait for a hold.
+WaitCover == UNION waiting
+
 RegionOf(k) == IF Composite /\ k = 1 THEN "child" ELSE "root"
 
 -----------------------------------------------------------------------------
@@ -185,7 +209,8 @@ Eligible(n) ==
     /\ ph[n] = "dormant"
     /\ ~supp[n]
     /\ ep[n] < MaxEp
-    /\ (n \notin reqd \/ Fault = "SetupAfterCancel")
+    /\ (n \notin reqd \/ Fault = "SetupAfterCancel"
+        \/ (Fault = "SetupWhileHeld" /\ n \in WaitCover))
     /\ \A p \in Nodes : <<n, p>> \in Reads => ph[p] = "active"
 
 \* The previous steps of the episode are done.
@@ -233,6 +258,8 @@ TypeOK ==
     /\ nextTx \in 1..(MaxTx + 1)
     /\ initReq \subseteq Nodes
     /\ reqd \subseteq Nodes
+    /\ held \subseteq HeldTargets
+    /\ waiting \subseteq Targets
     /\ commitAfterCancel \in BOOLEAN
     /\ setupAfterCancel \in BOOLEAN
     /\ stepAfterCancel \in BOOLEAN
@@ -261,6 +288,8 @@ Init ==
     /\ nextTx = 1
     /\ initReq = {}
     /\ reqd = {}
+    /\ held = HeldTargets
+    /\ waiting = {}
     /\ commitAfterCancel = FALSE
     /\ setupAfterCancel = FALSE
     /\ stepAfterCancel = FALSE
@@ -277,21 +306,23 @@ NewTx(kind, tgt) ==
     /\ nextTx' = nextTx + 1
 
 Initialize(n) ==
-    /\ nextTx <= MaxTx
+    /\ nextTx + Cardinality(waiting) <= MaxTx
     /\ ph[n] = "unreg" /\ n \notin initReq /\ n \notin reqd
     /\ initReq' = initReq \cup {n}
     /\ NewTx("init", {n})
-    /\ UNCHANGED <<nodeVars, leaseVars, running, reqd, histVars>>
+    /\ UNCHANGED <<nodeVars, leaseVars, running, reqd, histVars, holdVars>>
 
 \* The request completes the signals now, before the transaction is queued.
 \* It signals the owner episodes, and the in-flight episodes that read a
-\* publisher being withdrawn, transitively.
+\* publisher being withdrawn, transitively. A request that contains an open
+\* hold signals the owner episodes only and waits (HoldWait): no transaction
+\* exists yet, so its id and the dependents' signals follow at ReleaseHolds.
 RequestDispose(T) ==
     /\ T \in Targets
     /\ ~(T \subseteq reqd)
-    /\ nextTx <= MaxTx
+    /\ nextTx + Cardinality(waiting) <= MaxTx
     /\ LET d == nextTx
-           W == IF Fault = "OnlyOwnEpisode" THEN T ELSE Up(T)
+           W == IF Fault = "OnlyOwnEpisode" \/ Blocked(T) THEN T ELSE Up(T)
            hit(n) == Fault # "NoSignal" /\ n \in W /\ ph[n] = "setup" /\ ~rsig[n]
            dep(n) == hit(n) /\ n \notin T
        IN /\ rsig' = [n \in Nodes |-> IF hit(n) THEN TRUE ELSE rsig[n]]
@@ -302,9 +333,38 @@ RequestDispose(T) ==
           /\ wcnt' = [n \in Nodes |->
                         IF dep(n) THEN [wcnt[n] EXCEPT ![d] = @ + 1] ELSE wcnt[n]]
     /\ reqd' = reqd \cup T
+    /\ IF Blocked(T)
+       THEN /\ waiting' = waiting \cup {T}
+            /\ UNCHANGED <<tkind, ttgt, tstat, nextTx>>
+       ELSE /\ NewTx("dispose", T)
+            /\ UNCHANGED waiting
+    /\ UNCHANGED <<ph, ep, csig, cst, supp, epTx, rfail, leaseVars, running,
+                   initReq, held, histVars>>
+
+\* A hold closes. It only changes the set of open holds.
+CloseHold(H) ==
+    /\ H \in held
+    /\ held' = held \ {H}
+    /\ UNCHANGED <<nodeVars, leaseVars, tkind, ttgt, tstat, running, nextTx,
+                   initReq, reqd, waiting, histVars>>
+
+\* The last hold of the subtree closed: the waiting disposal enters the queue
+\* and takes its id now. As at a request without a hold, the enqueue signals
+\* the in-flight episodes that read the target, transitively.
+ReleaseHolds(T) ==
+    /\ T \in waiting /\ ~Blocked(T)
+    /\ LET d == nextTx
+           W == IF Fault = "OnlyOwnEpisode" THEN {} ELSE Up(T) \ T
+           hit(n) == Fault # "NoSignal" /\ n \in W /\ ph[n] = "setup" /\ ~rsig[n]
+       IN /\ rsig' = [n \in Nodes |-> IF hit(n) THEN TRUE ELSE rsig[n]]
+          /\ rcause' = [n \in Nodes |-> IF hit(n) THEN "withdraw" ELSE rcause[n]]
+          /\ awaitTx' = [n \in Nodes |-> IF hit(n) THEN d ELSE awaitTx[n]]
+          /\ wcnt' = [n \in Nodes |->
+                        IF hit(n) THEN [wcnt[n] EXCEPT ![d] = @ + 1] ELSE wcnt[n]]
+    /\ waiting' = waiting \ {T}
     /\ NewTx("dispose", T)
     /\ UNCHANGED <<ph, ep, csig, cst, supp, epTx, rfail, leaseVars, running,
-                   initReq, histVars>>
+                   initReq, reqd, held, histVars>>
 
 \* Serialized mutation queue: first queued transaction starts when none runs.
 \* The OverlapSetup defect lets a queued init bypass the queue.
@@ -322,13 +382,15 @@ StartInit(id) ==
     /\ CanStart(id) /\ tkind[id] = "init"
     /\ LET n == InitNode(id) IN
        IF n \in reqd /\ Fault # "SetupAfterCancel"
+          /\ ~(Fault = "SetupWhileHeld" /\ n \in WaitCover)
        THEN /\ tstat' = [tstat EXCEPT ![id] = "done"]
             /\ UNCHANGED <<ph, running>>
        ELSE /\ tstat' = [tstat EXCEPT ![id] = "running"]
             /\ running' = running \cup {id}
             /\ ph' = [ph EXCEPT ![n] = "dormant"]
     /\ UNCHANGED <<ep, rsig, csig, cst, rcause, supp, awaitTx, wcnt, epTx, rfail,
-                   leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars>>
+                   leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars,
+                   holdVars>>
 
 \* Reconcile inside a running init transaction starts an episode.
 \* A read of a publisher whose withdrawal is queued completes the reader's
@@ -527,7 +589,8 @@ FinishInit(id) ==
     /\ \A n \in Nodes : ~Eligible(n)
     /\ tstat' = [tstat EXCEPT ![id] = "done"]
     /\ running' = running \ {id}
-    /\ UNCHANGED <<nodeVars, leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars>>
+    /\ UNCHANGED <<nodeVars, leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars,
+                   holdVars>>
 
 \* The dispose transaction begins deactivation: the root signal of every
 \* active episode completes before its first inverse. Dormant targets go away.
@@ -544,7 +607,7 @@ StartDispose(id) ==
     /\ tstat' = [tstat EXCEPT ![id] = "running"]
     /\ running' = running \cup {id}
     /\ UNCHANGED <<ep, csig, cst, supp, awaitTx, wcnt, epTx, rfail, leaseVars,
-                   tkind, ttgt, nextTx, initReq, reqd, histVars>>
+                   tkind, ttgt, nextTx, initReq, reqd, histVars, holdVars>>
 
 \* All leases of a deactivated episode were released.
 DeactDone(n) ==
@@ -563,15 +626,18 @@ FinishDispose(id) ==
     /\ ph' = [n \in Nodes |-> IF ph[n] = "awaitW" /\ awaitTx[n] = id
                                THEN "dormant" ELSE ph[n]]
     /\ UNCHANGED <<ep, rsig, csig, cst, rcause, supp, awaitTx, wcnt, epTx, rfail,
-                   leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars>>
+                   leaseVars, tkind, ttgt, nextTx, initReq, reqd, histVars,
+                   holdVars>>
 
 Quiescent ==
+    /\ waiting = {}
     /\ \A id \in Txs : tstat[id] \notin {"queued", "running"}
     /\ \A n \in Nodes : ph[n] \notin {"setup", "rollback", "deact"}
 
 Runtime ==
     \/ \E id \in Txs : StartInit(id) \/ StartDispose(id)
                        \/ FinishInit(id) \/ FinishDispose(id)
+    \/ \E T \in Targets : ReleaseHolds(T)
     \/ \E n \in Nodes : \E id \in Txs : StartEpisode(n, id)
     \/ \E n \in Nodes : StartStep(n) \/ ChildEnd(n) \/ Resolve(n)
                         \/ LateChildSignal(n) \/ LateRootSignal(n)
@@ -581,6 +647,7 @@ Runtime ==
 Host ==
     \/ \E n \in Nodes : Initialize(n)
     \/ \E T \in Targets : RequestDispose(T)
+    \/ \E H \in HeldTargets : CloseHold(H)
 
 Next ==
     \/ Host
@@ -594,6 +661,9 @@ Spec == Init /\ [][Next]_vars
 \* step advances a bounded measure, so one weak-fairness condition on the
 \* whole runtime suffices.
 FairSpec == Spec /\ WF_vars(Runtime)
+
+\* A hold closes eventually, and the runtime then releases the wait.
+HeldFairSpec == FairSpec /\ \A H \in HeldTargets : WF_vars(CloseHold(H))
 
 -----------------------------------------------------------------------------
 (* Safety properties (R-UC-RT-LC-008 unless noted). *)
@@ -630,7 +700,10 @@ CaughtFailureIsolated ==
             \/ rcause[n] \in {"dispose", "withdraw"}
             \/ ls[L(n, MaxLeases)] = "void"
 
-\* A setup requested after a disposal starts after that disposal finished.
+\* A setup that enters the queue after a disposal transaction starts after that
+\* disposal finished. A disposal waits for its holds outside the queue and takes
+\* its id when it enters, so the setups of other owners that enqueued during the
+\* wait have smaller ids and are not restricted.
 CleanupBeforeNextSetup ==
     \A n \in Nodes :
         ph[n] \in {"setup", "rollback"} =>
@@ -695,5 +768,11 @@ WitnessTransitiveCancel ==
 DisposalCompletes ==
     \A d \in Txs :
         (tkind[d] = "dispose" /\ tstat[d] = "queued") ~> (tstat[d] = "done")
+
+\* Liveness with holds, under HeldFairSpec: a waiting request enters the queue
+\* once its holds close, and every queued disposal finishes.
+HeldDisposalCompletes ==
+    /\ (waiting # {}) ~> (waiting = {})
+    /\ DisposalCompletes
 
 =============================================================================

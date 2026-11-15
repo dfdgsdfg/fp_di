@@ -16,7 +16,15 @@
       "expect": "pass"
     },
     {
+      "name": "LazyRequestConforming",
+      "expect": "pass"
+    },
+    {
       "name": "LazyProgress",
+      "expect": "pass"
+    },
+    {
+      "name": "LazyRequestProgress",
       "expect": "pass"
     },
     {
@@ -65,6 +73,12 @@
       "name": "LazyNegWaitForCallers",
       "expect": {
         "temporal": "ReleaseCompletes"
+      }
+    },
+    {
+      "name": "LazyNegForceAfterRequest",
+      "expect": {
+        "invariant": "NoCreationAfterRequest"
       }
     }
   ]

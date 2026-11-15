@@ -415,8 +415,9 @@ build, so the provider reads the flag in an assertion. A release build has no
 assertion on `setState`. That statement comes from the source of Flutter, and
 no test runs a release build.
 
-The provider MUST keep four properties. The names are the names of the checks
-of [V-T-AR-UI-011](requirements.md#v-t-ar-ui-011):
+The provider MUST keep four properties, and a `ScopeBoundary` a fifth. The
+names are the names of the checks of
+[V-T-AR-UI-011](requirements.md#v-t-ar-ui-011):
 
 | Property | Statement |
 |---|---|
@@ -424,6 +425,7 @@ of [V-T-AR-UI-011](requirements.md#v-t-ar-ui-011):
 | `WatcherCurrent` | After the frames that a change asked for, each mounted watcher shows the value, the node state, or the scope that its lookup returns at that moment. |
 | `NoRebuildForDisposal` | The disposal of another scope rebuilds no watcher. |
 | `NoWorkAfterUnmount` | An unmounted provider schedules no frame. `State.dispose` of the provider removes its listener; no check observes the listener. |
+| `NoReleaseBeforeUnmount` | No member of a scope is released while a `ScopeBoundary` of that scope is mounted, unless a call ignored the holds; after such a call, the boundary keeps no widget below it from the next frame. |
 
 The adapter has no composition operator, so it has no algebra to prove. The
 four properties are safety properties over the product of the lifecycles.
@@ -693,10 +695,10 @@ fpdart.
 ### <a id="v-t-ar-ui-011"></a>V-T-AR-UI-011 — `[test]` Random histories of the adapter
 
 - **Layer:** Flutter widget
-- **Target:** `ScopeProvider` and the reads of `DiBuildContext` in [Lifecycles of the adapter](#lifecycles-of-the-adapter)
+- **Target:** `ScopeProvider`, `ScopeBoundary`, and the reads of `DiBuildContext` in [Lifecycles of the adapter](#lifecycles-of-the-adapter)
 - **Files:** `packages/fp_di_flutter/test/adapter_history_test.dart`
-- **Fixtures:** A `Random` with the seed of the history. An app scope, session scopes that are its children, and a `ValueNotifier<Scope>`. A `MaterialApp` with a `Navigator` below a `ScopeProvider.listenable`. Watchers of a value, of a node, and of the scope; a widget that replaces the scope from `State.dispose`; a page whose `State` owns a child scope. One defect of the harness for each check: a watcher that reads without listening, a logout that disposes before it changes the value, a disposal step that also withdraws a watched member, and a history that ends with the provider mounted.
-- **Pass:** 40 histories of 40 steps with the seeds 0 to 39 report no violation of `NoFailedRead`, `WatcherCurrent`, `NoRebuildForDisposal`, and `NoWorkAfterUnmount`, and each of the 11 kinds of step runs at least one time. Each control runs 10 histories with the seeds 0 to 9 and reports its check; a control that reports nothing fails and names the defect, the seeds, and the checks that reported.
+- **Fixtures:** A `Random` with the seed of the history. An app scope, session scopes that are its children, and a `ValueNotifier<Scope>`. A `MaterialApp` with a `Navigator` below a `ScopeProvider.listenable`. Watchers of a value, of a node, and of the scope; a widget that replaces the scope from `State.dispose`; a page whose `State` owns a child scope; routes of the session below a `ScopeBoundary` that read a session key with a strict read; a logout that changes the value, disposes the session without waiting, and pops the routes of the session; a disposal of the session that ignores the holds in the middle of a transition; and a move of a boundary with a `GlobalKey`. One defect of the harness for each check: a watcher that reads without listening, a logout that disposes before it changes the value, a disposal step that also withdraws a watched member, a history that ends with the provider mounted, and a route of the session below a fixed provider instead of a boundary.
+- **Pass:** 40 histories of 40 steps with the seeds 0 to 39 report no violation of `NoFailedRead`, `WatcherCurrent`, `NoRebuildForDisposal`, `NoWorkAfterUnmount`, and `NoReleaseBeforeUnmount`, and each kind of step runs at least one time. A disposal that still waits after the last unmount of a history is reported as `NoFailedRead`. A logout pops the routes above the lowest route of the session too. Each control runs 10 histories with the seeds 0 to 9 and reports its check; a control that reports nothing fails and names the defect, the seeds, and the checks that reported.
 - **Evidence:** present
 
 ### <a id="v-t-ar-ui-012"></a>V-T-AR-UI-012 — `[test]` Replacement in each phase of a frame

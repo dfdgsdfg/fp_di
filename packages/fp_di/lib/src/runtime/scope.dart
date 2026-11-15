@@ -330,7 +330,10 @@ final class Scope {
           }
           final disposeFailures = await _runtime.disposeScope(
             _scope,
-            started: ignored.isEmpty
+            // The defect `dropIgnoredReport` skips the report.
+            started:
+                ignored.isEmpty ||
+                    RuntimeFaults.injects(RuntimeDefect.dropIgnoredReport)
                 ? null
                 : () => _runtime.changes.report(IgnoredHoldsException(ignored)),
           );
@@ -347,7 +350,10 @@ final class Scope {
           ..queueDisposal = null
           ..heldResult = null
           ..holdTimer = null;
-        held?.complete(disposal);
+        // The defect `loseHeldCaller` leaves the waiting call incomplete.
+        if (!RuntimeFaults.injects(RuntimeDefect.loseHeldCaller)) {
+          held?.complete(disposal);
+        }
       }
     }
 
@@ -360,7 +366,10 @@ final class Scope {
     final ignored = ignoreHolds
         ? _runtime.holdStatesOf(_scope)
         : const <HoldState>[];
-    if (ignoreHolds || _runtime.subtreeHolds(_scope) == 0) {
+    // The defect `queueWithHolds` queues the disposal while a hold is open.
+    if (ignoreHolds ||
+        RuntimeFaults.injects(RuntimeDefect.queueWithHolds) ||
+        _runtime.subtreeHolds(_scope) == 0) {
       queue(ignored);
     } else {
       _scope

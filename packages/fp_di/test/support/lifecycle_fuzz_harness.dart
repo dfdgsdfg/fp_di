@@ -1322,6 +1322,29 @@ final class ScopeInfo {
   /// probe left.
   int probeCalls = 0;
   bool probeThrew = false;
+
+  /// Whether a listener call saw the phase `disposed`, so the runtime removed
+  /// the scope from its parent, and its holds no longer delay an ancestor.
+  bool gone = false;
+
+  /// Whether a listener call saw the phase `disposing` yet.
+  bool sawDisposing = false;
+}
+
+/// One hold that `OpenHold` kept, with the label that it gave.
+final class HoldRec {
+  HoldRec(this.number, this.scope, this.label, this.hold);
+
+  final int number;
+
+  /// The index of the scope that gave the hold.
+  final int scope;
+  final String? label;
+  final DisposeHold hold;
+
+  /// Whether the harness called `close()` once or more.
+  bool closed = false;
+  int closeCalls = 0;
 }
 
 /// A mutation request that a call site made, with its recorded result.
@@ -1463,6 +1486,22 @@ final class FuzzStats {
   static int partitionsTransitive = 0;
   static int partitionsAncestorKept = 0;
 
+  /// The disposals that waited for an open hold and then reached the phase
+  /// `disposing`, the ones among them whose scope had no hold of its own, so
+  /// a hold of a descendant delayed them, the `DisposeIgnoringHolds` calls
+  /// that ended the wait for at least one open hold, the reports of such calls
+  /// that reached `Scope.errors`, and the calls of `close` after the first one
+  /// on a hold.
+  static int heldDisposals = 0;
+  static int descendantHeldDisposals = 0;
+  static int ignoredOverHolds = 0;
+  static int ignoredReports = 0;
+  static int secondCloses = 0;
+
+  /// The holds that the harness opened and closed.
+  static int holdsOpened = 0;
+  static int holdsClosed = 0;
+
   /// The count of each explained result, by source and result type.
   static final Map<String, int> outcomes = {};
 
@@ -1507,6 +1546,11 @@ final class FuzzStats {
     if (siteAccepted == 0) 'an accepted request from another call site',
     if (listenerReports == 0) 'a report of the listener that throws',
     if (getsWithFailedNodes == 0) 'a get with a non-empty failedNodeStates',
+    if (heldDisposals == 0) 'a disposal that waited for an open hold',
+    if (descendantHeldDisposals == 0)
+      'a hold of a child that delayed the disposal of its parent',
+    if (ignoredOverHolds == 0) 'a DisposeIgnoringHolds over an open hold',
+    if (secondCloses == 0) 'a second close of one hold',
   ];
 
   static String summary() =>
@@ -1538,6 +1582,11 @@ final class FuzzStats {
       'partitionsSelecting=$partitionsSelecting '
       'partitionsTransitive=$partitionsTransitive '
       'partitionsAncestorKept=$partitionsAncestorKept '
+      'holdsOpened=$holdsOpened holdsClosed=$holdsClosed '
+      'heldDisposals=$heldDisposals '
+      'descendantHeldDisposals=$descendantHeldDisposals '
+      'ignoredOverHolds=$ignoredOverHolds ignoredReports=$ignoredReports '
+      'secondCloses=$secondCloses '
       'callbacks=${_text(callbacks)} '
       'outcomes=${_text(outcomes)}';
 }
@@ -1600,6 +1649,26 @@ final class Harness {
   /// The mutation requests of the call sites.
   final List<SiteCall> siteCalls = [];
 
+  /// The holds that `OpenHold` kept, in opening order, open or closed.
+  final List<HoldRec> holdRecs = [];
+
+  /// The scopes that own a call of `DisposeIgnoringHolds`. The wait of the
+  /// owner, and of each descendant with a waiting call, ended with that call.
+  final Set<int> _ignoredOwners = {};
+
+  /// The scopes whose disposal request found an open hold of the subtree and
+  /// did not ignore it. The value is true when the scope had no hold of its
+  /// own, so only a hold of a descendant delayed it.
+  final Map<int, bool> _waiting = {};
+
+  /// The scopes whose teardown starts when the listener reads the phase
+  /// `disposing`, because the disposal waited for a hold.
+  final Set<int> _pendingTeardowns = {};
+
+  /// The sorted labels of the holds that each ignoring call that ended a wait
+  /// must report, one entry for each such call.
+  final List<String> _expectedReports = [];
+
   /// The site calls of the running command, whose late calls MUST complete
   /// with success at the end of the command.
   final List<SiteCall> _newSiteCalls = [];
@@ -1636,11 +1705,61 @@ final class Harness {
         final value = info.scope.state;
         info.heard.add((value, _printState(value)));
         FuzzStats.transitions++;
+        _observePhase(info, value.phase);
       });
     });
     _guard('addListener probe(${info.name})', () {
       info.scope.addListener(() => _probe(info));
     });
+  }
+
+  /// Whether a call of `DisposeIgnoringHolds` ended the wait of scope [s]: the
+  /// call belongs to [s] or to an ancestor.
+  bool _ignored(int s) => graph.chain(s).any(_ignoredOwners.contains);
+
+  /// The open holds of scope [s] and of its descendants that the runtime still
+  /// counts: a hold of a descendant that the runtime already disposed no
+  /// longer belongs to the subtree.
+  List<HoldRec> _openHoldsOf(int s) => [
+    for (final h in holdRecs)
+      if (!h.closed && _countsFor(h.scope, s)) h,
+  ];
+
+  bool _countsFor(int holdScope, int s) {
+    final chain = graph.chain(holdScope);
+    if (!chain.contains(s)) return false;
+    for (final j in chain) {
+      if (j == s) return true;
+      if (scopes[j]?.gone ?? false) return false;
+    }
+    return true;
+  }
+
+  /// `NoDisposalWhileHeld`, and the counts of the waits: the first time that
+  /// the listener of [info] reads the phase `disposing`, no hold of the
+  /// subtree is open unless a call ignored the holds.
+  void _observePhase(ScopeInfo info, ScopePhase phase) {
+    if (phase == ScopePhase.disposed) info.gone = true;
+    if (phase != ScopePhase.disposing || info.sawDisposing) return;
+    info.sawDisposing = true;
+    if (_pendingTeardowns.remove(info.index)) {
+      _takeTeardown(info.index, started: true);
+    }
+    final waited = _waiting.remove(info.index);
+    final ignored = _ignored(info.index);
+    final open = _openHoldsOf(info.index);
+    if (open.isNotEmpty && !ignored) {
+      _violate(
+        'NoDisposalWhileHeld: ${info.name} reached the phase disposing '
+        'while ${open.length} hold(s) of its subtree were open '
+        '(${[for (final h in open) h.label ?? 'hold ${h.number}']}) '
+        'and no call ignored them',
+      );
+    }
+    if (waited != null && !ignored) {
+      FuzzStats.heldDisposals++;
+      if (waited) FuzzStats.descendantHeldDisposals++;
+    }
   }
 
   /// The second listener of a scope. It reads and requests at its site, and the
@@ -1773,7 +1892,17 @@ final class Harness {
     acqsByNode.putIfAbsent(node, () => []).add(a);
     a.createOpen = true;
     _record(Phase.start, 'create', a, desc.mode);
-    if (step == 0) _checkReadsCurrent(a);
+    if (step == 0) {
+      _checkReadsCurrent(a);
+      final scope = graph.node(node).scope;
+      if (_effectivelyRequested(scope)) {
+        _violate(
+          'NoSetupAfterRequest: the create of a$id ($node.s0) started in '
+          '${graph.scopeName(scope)} after the disposal of that scope or of '
+          'an ancestor was requested',
+        );
+      }
+    }
     final createSite = graph.sites.creates['$node/$step'];
     if (createSite != null) _createSite(a, createSite);
     final fail = desc.failing.contains(invocation);
@@ -2554,19 +2683,46 @@ final class Harness {
 
   Future<void> disposeAgain(int s) => _disposeScope(s, 'DisposeAgain');
 
+  /// Calls `dispose(ignoreHolds: true)` on scope [s]. The call ends the wait
+  /// of the scope that owns the disposal, which is [s] itself or the nearest
+  /// ancestor whose disposal was requested first.
+  Future<void> disposeIgnoringHolds(int s) =>
+      _disposeScope(s, 'DisposeIgnoringHolds', ignoreHolds: true);
+
   /// Calls `dispose()` on scope [s].
-  Future<void> _disposeScope(int s, String command) async {
+  Future<void> _disposeScope(
+    int s,
+    String command, {
+    bool ignoreHolds = false,
+  }) async {
     final info = scopes[s]!;
     final chain = [for (final j in graph.chain(s)) 'scope:$j'];
     final owner = _ownerOf(chain);
     final startsBefore = disposeStartCount;
-    if (owner == null) _takeTeardown(s);
+    final ownerScope = owner == null ? s : int.parse(owner.substring(6));
+    final open = _openHoldsOf(ownerScope);
+    if (ignoreHolds) {
+      // One report for a call that ends the wait for at least one open hold.
+      if (open.isNotEmpty && !_ignored(ownerScope)) {
+        _expectedReports.add(_labels(open));
+        FuzzStats.ignoredOverHolds++;
+      }
+      _ignoredOwners.add(ownerScope);
+    } else if (owner == null && open.isNotEmpty) {
+      _waiting[s] = !open.any((h) => h.scope == s);
+    }
+    if (owner == null) {
+      _takeTeardown(s, waitsForHolds: open.isNotEmpty && !ignoreHolds);
+    }
     // The listeners run inside this call, after the runtime recorded the
     // disposal. A site then calls into a disposal that a command requested.
     if (owner == null) _inFlight.add(chain.first);
     final Future<void> f;
     try {
-      f = _guard('$command dispose(${info.name})', () => info.scope.dispose());
+      f = _guard(
+        '$command dispose(${info.name})',
+        () => info.scope.dispose(ignoreHolds: ignoreHolds),
+      );
     } finally {
       _inFlight.remove(chain.first);
     }
@@ -2624,12 +2780,28 @@ final class Harness {
     }
   }
 
-  void _takeTeardown(int s) {
+  /// The sorted labels of [holds], with `-` for a hold without a label.
+  static String _labels(Iterable<HoldRec> holds) =>
+      ([for (final h in holds) h.label ?? '-']..sort()).join(',');
+
+  void _takeTeardown(
+    int s, {
+    bool waitsForHolds = false,
+    bool started = false,
+  }) {
+    // The release of a disposal that waits for a hold starts at a time that
+    // the trace does not show, and a withdrawal during the wait releases
+    // nodes that are not part of the teardown. The teardown starts when the
+    // listener of the scope reads the phase `disposing`.
+    if (waitsForHolds) {
+      _pendingTeardowns.add(s);
+      return;
+    }
     // Every lifecycle mutation of a runtime shares one queue. A disposal
     // that waits behind an earlier unfinished mutation (an initialize or a
     // member withdrawal) starts its releases at a time that the trace does
     // not show. The ReleaseOverlap check skips such a teardown.
-    if (!held.every((h) => h.done)) {
+    if (!started && !held.every((h) => h.done)) {
       FuzzStats.skipped++;
       return;
     }
@@ -2654,6 +2826,35 @@ final class Harness {
     FuzzStats.overlapNodes += nodes.length;
     teardowns.add(Teardown(graph.scopeName(s), nodes, trace.length));
     FuzzStats.teardowns++;
+  }
+
+  /// Calls `disposeHold` on scope [s] and keeps the hold.
+  Future<void> openHold(int s, {required bool labeled}) async {
+    final info = scopes[s]!;
+    final number = holdRecs.length;
+    final label = labeled ? 'hold$number of ${info.name}' : null;
+    final hold = _guard(
+      'disposeHold(${info.name})',
+      () => info.scope.disposeHold(debugLabel: label),
+    );
+    holdRecs.add(HoldRec(number, s, label, hold));
+    FuzzStats.holdsOpened++;
+    await _end();
+  }
+
+  /// Calls `close()` on kept hold [i] modulo the number of holds, open or
+  /// closed. Without a kept hold, the command does nothing.
+  Future<void> closeHold(int i) async {
+    if (holdRecs.isNotEmpty) _close(holdRecs[i % holdRecs.length]);
+    await _end();
+  }
+
+  /// Marks [h] closed before the call, because a listener can run inside it.
+  void _close(HoldRec h) {
+    if (h.closeCalls++ > 0) FuzzStats.secondCloses++;
+    if (!h.closed) FuzzStats.holdsClosed++;
+    h.closed = true;
+    h.hold.close();
   }
 
   Future<void> resolve(String kind, String outcome, int i) async {
@@ -2704,6 +2905,42 @@ final class Harness {
     _checkAtomicPublication();
     _checkRuntimeState();
     _checkUnavailableCause();
+    _checkOpenHolds();
+  }
+
+  /// `OpenHoldsCurrent`: for each scope whose lookups answer, `openHolds`
+  /// lists the open holds of the scope and of its descendants, with their
+  /// labels. The order follows the creation order of the child scopes, which
+  /// the descriptor does not fix, so the check compares the labels as a
+  /// multiset.
+  void _checkOpenHolds() {
+    for (final info in live) {
+      final phase = info.scope.state.phase;
+      if (phase == ScopePhase.disposing || phase == ScopePhase.disposed) {
+        continue;
+      }
+      final expected = _openHoldsOf(info.index);
+      final List<HoldState> actual;
+      try {
+        actual = info.scope.openHolds;
+      } on Object catch (error) {
+        _violate(
+          'OpenHoldsCurrent: openHolds of ${info.name} threw ${_show(error)}',
+        );
+        continue;
+      }
+      final actualLabels = ([
+        for (final h in actual) h.debugLabel ?? '-',
+      ]..sort()).join(',');
+      final expectedLabels = _labels(expected);
+      if (actual.length != expected.length || actualLabels != expectedLabels) {
+        _violate(
+          'OpenHoldsCurrent: openHolds of ${info.name} lists '
+          '${actual.length} hold(s) [$actualLabels], and the harness holds '
+          '${expected.length} open hold(s) [$expectedLabels]',
+        );
+      }
+    }
   }
 
   // -- RuntimeState (V-T-RT-LC-032) ------------------------------------------
@@ -3225,6 +3462,9 @@ final class Harness {
         return _disposeFailuresProblem(rollbackFailures);
       case DisposeException(:final disposeFailures) when scope == null:
         return _disposeFailuresProblem(disposeFailures);
+      case IgnoredHoldsException() when scope == null:
+        // `IgnoredHoldsReported` compares the reports with the calls.
+        return null;
       case DiListenerException(:final cause) when scope == null:
         if (!identical(cause, listenerError)) {
           return 'the listener error is ${_show(cause)}, not the tagged '
@@ -3346,6 +3586,13 @@ final class Harness {
     if (!firstDisposal.containsKey('scope:0')) {
       await _disposeScope(0, 'Terminal');
     }
+    // A disposal waits for its holds, so the holds close in opening order
+    // before any gate completes, and the queue drains after each close.
+    for (final h in [...holdRecs]) {
+      if (h.closed) continue;
+      _close(h);
+      await _end();
+    }
     var guard = 0;
     while (gates.isNotEmpty) {
       if (++guard > 5000) {
@@ -3446,13 +3693,30 @@ final class Harness {
         'DiListenerException with that error)',
       );
     }
-    // NoLostDisposeFailure.
+    // IgnoredHoldsReported: one report for each call that ended the wait for
+    // an open hold, listing the holds that it ignored, and no other report.
+    final reported = [
+      for (final e in errorEvents)
+        if (e is IgnoredHoldsException)
+          ([for (final h in e.holds) h.debugLabel ?? '-']..sort()).join(','),
+    ]..sort();
+    final expectedReports = [..._expectedReports]..sort();
+    FuzzStats.ignoredReports += reported.length;
+    if (reported.join(';') != expectedReports.join(';')) {
+      _violate(
+        'IgnoredHoldsReported: Scope.errors reports $reported, and the calls '
+        'that ended a wait for open holds give $expectedReports',
+      );
+    }
+    // NoLostDisposeFailure. A waiting call of a descendant completes with the
+    // disposal of the ancestor, so two futures can carry one exception.
     final carriers = <Object>[];
     final seen = <Future<Object?>>[];
     for (final h in held) {
       final error = h.error;
       if (error == null || seen.any((f) => identical(f, h.future))) continue;
       seen.add(h.future);
+      if (carriers.any((c) => identical(c, error))) continue;
       carriers.add(error);
     }
     carriers.addAll(errorEvents);
@@ -3598,6 +3862,32 @@ final class FuzzBehavior extends Behavior<FuzzModel, Harness> {
         commands.add(early);
       }
     }
+    // One command of each kind names its scope by an argument, so the weight
+    // of a kind does not grow with the number of scopes.
+    final scopeIndex = integer(min: 0, max: graph.scopes.length - 1);
+    final openHold = Action2<FuzzModel, Harness, int, bool, void>(
+      'OpenHold',
+      scopeIndex,
+      constantFrom<bool>([true, false]),
+      precondition: (m, s, labeled) => m.exists[s] && !m.requested(s),
+      nextState: (m, s, labeled) {},
+      run: (h, s, labeled) => h.openHold(s, labeled: labeled),
+    );
+    final disposeIgnoringHolds = Action1<FuzzModel, Harness, int, void>(
+      'DisposeIgnoringHolds',
+      scopeIndex,
+      precondition: (m, s) => m.exists[s],
+      nextState: (m, s) {
+        if (!m.requested(s)) m.disposeRequested[s] = true;
+      },
+      run: (h, s) => h.disposeIgnoringHolds(s),
+    );
+    final closeHold = Action1<FuzzModel, Harness, int, void>(
+      'CloseHold',
+      integer(min: 0, max: 7),
+      nextState: (m, i) {},
+      run: (h, i) => h.closeHold(i),
+    );
     final disposeMember = Action2<FuzzModel, Harness, int, int, void>(
       'DisposeMember',
       integer(min: 0, max: 3),
@@ -3624,6 +3914,11 @@ final class FuzzBehavior extends Behavior<FuzzModel, Harness> {
       ...commands,
       disposeMember,
       disposeMember,
+      openHold,
+      openHold,
+      closeHold,
+      closeHold,
+      disposeIgnoringHolds,
       for (var k = 0; k < 40; k++) resolve,
       terminal,
     ];

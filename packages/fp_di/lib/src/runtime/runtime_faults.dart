@@ -96,6 +96,22 @@ enum RuntimeDefect {
 
   /// No formal counterpart: a listener that throws stays a listener.
   keepThrowingListener,
+
+  /// `NoWait`: a disposal request queues the disposal mutation while a hold
+  /// of its scope or of a descendant is open.
+  queueWithHolds,
+
+  /// `SetupWhileHeld`: an automatic activation starts for a node whose scope
+  /// has a disposal request.
+  setupWhileHeld,
+
+  /// No formal counterpart: a call that ignores open holds reports no
+  /// `IgnoredHoldsException`.
+  dropIgnoredReport,
+
+  /// `LoseDescendant`: a disposal of an ancestor that releases a scope with a
+  /// waiting `dispose` call leaves that call incomplete.
+  loseHeldCaller,
 }
 
 /// The switches that a test sets to make the runtime break an invariant.

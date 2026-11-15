@@ -11,6 +11,14 @@
 // callback, the listener of a scope, and the `errors` subscriber read their
 // scope and request a disposal (`NestedCall`). One listener throws at a fixed
 // call (`ListenerFailure`).
+// Holds of a disposal open and close at random on the scopes (`OpenHold`,
+// `CloseHold`), and `DisposeIgnoringHolds` ends the wait of a disposal. No
+// scope reaches `disposing` while a hold of its subtree is open unless a call
+// ignored the holds (`NoDisposalWhileHeld`), no `create` starts after a
+// disposal request (`NoSetupAfterRequest`), `openHolds` lists the open holds
+// (`OpenHoldsCurrent`), and a call that ignores open holds reports one
+// `IgnoredHoldsException` (`IgnoredHoldsReported`). The terminal phase closes
+// the open holds in opening order before it completes the gates.
 // After each command, `get` of each key without a value names the failed nodes
 // behind the key (`UnavailableCause`). At the start of each case,
 // `Module.requiring` and `Module.withoutRequiring` of each module match a fixed

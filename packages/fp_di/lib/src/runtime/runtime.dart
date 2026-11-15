@@ -620,10 +620,18 @@ final class _Runtime {
         }
       });
 
+  /// Whether the disposal of [node] or of its scope was requested, so that
+  /// no setup starts. The defect `setupWhileHeld` ignores the request of the
+  /// scope and keeps the request of the node.
+  bool _setupRefused(_RuntimeNode node) =>
+      RuntimeFaults.injects(RuntimeDefect.setupWhileHeld)
+      ? node.disposeRequested
+      : node.disposalRequested;
+
   Future<void> activate(_RuntimeNode node) async {
     if (node.removed || node.active || node.scope.disposing) return;
     // Setup never starts for an owner whose disposal was requested.
-    if (node.disposalRequested) throw ActivationCanceledException();
+    if (_setupRefused(node)) throw ActivationCanceledException();
     // A component never runs against an unsatisfied environment, so
     // `Dependency.require` inside it cannot fail and no partial effect is ever
     // staged.
@@ -1177,7 +1185,7 @@ final class _Runtime {
                     !node.reactivationBlocked &&
                     !node.scope.disposed &&
                     !node.scope.disposing &&
-                    !node.disposalRequested &&
+                    !_setupRefused(node) &&
                     node.awaiting.isEmpty &&
                     !failed.contains(node) &&
                     node.satisfied,

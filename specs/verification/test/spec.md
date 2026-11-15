@@ -235,6 +235,9 @@ precondition reads the flags of that scope and of its ancestors only.
 | `DisposeAgain(s)` | call `dispose()` again on `s` and hold the future | `s` exists; `s` or an ancestor has `disposeRequested` |
 | `DisposeMember(s, i)` | call `dispose()` on the handle of member `i` of `s`, which withdraws its publication, and hold the future | none; see below |
 | `Resolve(kind, outcome, i)` | complete or fail open gate `i mod n` of `kind` (`create` or `dispose`); do nothing when `n` is 0 | none |
+| `OpenHold(s, labeled)` | call `disposeHold` on `s`, with a `debugLabel` when `labeled`, and keep the hold | `s` exists; neither `s` nor an ancestor has `disposeRequested` |
+| `CloseHold(i)` | call `close()` on kept hold `i mod n`, open or already closed; do nothing when `n` is 0 | none |
+| `DisposeIgnoringHolds(s)` | call `dispose(ignoreHolds: true)` on `s` and hold the future | `s` exists |
 
 `DisposeMember(s, i)` needs a handle from `node(key:)`, or from `nodes` for a
 member without a key. That call throws before `initialize` completes and once
@@ -262,7 +265,9 @@ history explores the order of gate completions. It does not explore the order
 of Dart microtasks between two commands.
 
 **Terminal phase.** After the last command, the harness disposes the root scope
-if no disposal started. Then it completes every open gate in the order that
+if no disposal started. Then it closes every open hold in the order that the
+holds opened, and it drains the event queue after each close, because a
+disposal waits for its holds. Then it completes every open gate in the order that
 the gates opened, and it drains the event queue after each completion. It
 repeats until no gate is open. Then it checks each held future synchronously
 through a flag that the future sets when it completes. The check uses no
@@ -279,7 +284,18 @@ whose disposal was requested first. The harness classifies the calls of a
 member `dispose()` the same way. The teardown of a scope starts at the first
 release of a node that was active when the disposal was requested. Rollback
 of an activation that the disposal canceled happens before the teardown and
-is not part of it.
+is not part of it. For a disposal that waits for holds, the harness takes the
+nodes of the teardown when the listener of the scope reads `disposing`,
+because a withdrawal can release nodes during the wait, and those releases
+are not part of the teardown. A waiting call of a descendant completes with
+the result of the disposal of an ancestor; `NoLostDisposeFailure` counts that
+shared result once, by its identity.
+
+The owner of a disposal that waits is the scope whose `dispose` call started
+it: the scope itself or the nearest ancestor whose disposal was requested
+first. A `DisposeIgnoringHolds` ends the wait of the owner of its scope, so it
+can start the disposal of an ancestor whose request came first. A hold of a
+scope that the runtime already disposed no longer delays an ancestor.
 
 An acquisition reads another acquisition when its `create` received the value
 of the other, or when an earlier step of its node did. A reader of an
@@ -314,6 +330,10 @@ operator.
 | `ListenerFailure` | the listener that throws is not called after it threw, and `Scope.errors` reports exactly one `DiListenerException` whose `cause` is its tagged error | [R-UC-RT-LC-028](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-028) |
 | `UnavailableCause` | after each command, for each declared plain key of each initialized scope without a disposal request whose `maybeGet` gives null, `get` throws an `UnavailableKeyException` and leaves `revision` unchanged. Its `failedNodeStates` is empty when `findNode` gives null, and is the `NodeState` of that node alone when the node is in the phase `activationFailed`. Otherwise it equals the result of a search that the harness runs from that node over the `missing` keys in `nodeStates` and the generated reads, by the rules of [R-UC-RT-LC-030](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-030). For a map id without an `active` entry from the waiting node to the root, the search takes the nearest declared entry of that id, a rule that the use case does not state. Each element is in the phase `activationFailed` and occurs once | [R-UC-RT-LC-030](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-030) |
 | `RequiringPartition` | at the start of each case, for each module and the keys that the descriptor fixes, `requiring` holds the members that a fixed point of the harness over `requires` of each member selects, `withoutRequiring` holds the others, both keep the declaration order, the origins, and the label, no member of `withoutRequiring` requires a key of `keys`, and each key in its `requires` is in `requires` of the source or in `ancestorKeys` | [R-UC-RT-LC-031](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-031) |
+| `NoDisposalWhileHeld` | the listener of a scope never reads the phase `disposing` while a hold of that scope or of a descendant is open, unless a `DisposeIgnoringHolds` ended the wait of the owner of that disposal before; a release that a member `dispose()` or a withdrawal causes is not part of the disposal and MAY run | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `NoSetupAfterRequest` | no `create` of a first step starts for a member of a scope after the disposal of that scope or of an ancestor was requested | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008), [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `OpenHoldsCurrent` | after each command, `openHolds` of each scope whose lookups answer lists exactly the holds of that scope and of its descendants that the harness opened and did not close, with their labels | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
+| `IgnoredHoldsReported` | a `DisposeIgnoringHolds` that ends the wait for at least one open hold adds exactly one `IgnoredHoldsException` to `Scope.errors`, whose holds are the open holds of the owner of the call; a call with no open hold of the subtree, or whose owner no longer waits, adds none | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) |
 | `ExplainedOutcome` | every result is allowed for its command or call site, as the outcome table below states; an error at any depth that is not a tagged error or an allowed cancellation fails the case, including an `AssertionError` of a self-check | [R-UC-RT-LC-001](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-001), [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008), [R-UC-RT-LC-024](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-024) |
 
 | Source | Allowed results |
@@ -321,7 +341,7 @@ operator.
 | `initialize()`, also a retry | success; `ActivationException` whose `cause` is a tagged `create` error that a gate or the descriptor injected and whose `rollbackFailures` hold only tagged `dispose` errors; `ActivationCanceledException` when a disposal of the scope or an ancestor, or the withdrawal of one of its members or of a publisher they read, was requested before the future completed; the `cause` is null or a tagged `create` error, with the same rule for its `rollbackFailures` |
 | scope or member `dispose()` | success; `DisposeException` whose dispose failures hold only tagged `dispose` errors |
 | a call site | the results that `NestedCall` allows |
-| `Scope.errors` event | `ActivationException` or `DisposeException` with the same rules as above; `DiListenerException` whose `cause` is the tagged error of the listener that throws |
+| `Scope.errors` event | `ActivationException` or `DisposeException` with the same rules as above; `DiListenerException` whose `cause` is the tagged error of the listener that throws; `IgnoredHoldsException` that `IgnoredHoldsReported` explains |
 
 #### Traceability chain
 
@@ -350,6 +370,11 @@ difference.
 | `ListenerFailure` | [R-UC-RT-LC-028](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-028) | none; no model covers the listeners | none | [V-T-RT-LC-031](../../runtime/lifecycle/requirements.md#v-t-rt-lc-031) | V-T-VR-TEST-006: `RuntimeDefect.keepThrowingListener`, which has no formal counterpart |
 | `UnavailableCause` | [R-UC-RT-LC-030](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-030) | none; no model covers the error of `get` | none | [V-T-RT-LC-035](../../runtime/lifecycle/requirements.md#v-t-rt-lc-035) | V-T-VR-TEST-006: `RuntimeDefect.dropFailedNodes`, which has no formal counterpart |
 | `RequiringPartition` | [R-UC-RT-LC-031](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-031) | none; a module edit is a pure function of a value | none | [V-T-RT-LC-036](../../runtime/lifecycle/requirements.md#v-t-rt-lc-036) | none; the runtime holds no defect switch in its model code |
+| `NoDisposalWhileHeld` | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) | `NoDisposalWhileHeld` of `Disposal.tla`; the fuzz check reads the phase that a listener sees instead of a model state | `NoWait` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) | V-T-VR-TEST-006: `RuntimeDefect.queueWithHolds` |
+| `NoSetupAfterRequest` | [R-UC-RT-LC-008](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-008), [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) | `NoSetupAfterCancel` of `Cancellation.tla` and `NoActivationWhileRequested` of `Reconcile.tla`; the fuzz check covers the automatic activations that a withdrawal or a later `initialize` wakes during a wait | `SetupWhileHeld`, `ActivateWhileHeld` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) | V-T-VR-TEST-006: `RuntimeDefect.setupWhileHeld` |
+| `OpenHoldsCurrent` | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) | none; no model covers `openHolds` | none | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) | none; a wrong list shows in the check itself |
+| `IgnoredHoldsReported` | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) | none; no model covers `Scope.errors` for holds | none | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) | V-T-VR-TEST-006: `RuntimeDefect.dropIgnoredReport` |
+| `HeldFuturesComplete` for a waiting call of a descendant | [R-UC-RT-LC-034](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-034) | `HeldDisposalProgress` of `Disposal.tla` under fairness | `LoseDescendant` | [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) | V-T-VR-TEST-006: `RuntimeDefect.loseHeldCaller` |
 | Shape check | [R-UC-RT-LC-020](../../runtime/lifecycle/requirements.md#r-uc-rt-lc-020) | none | none | [V-T-RT-LC-022](../../runtime/lifecycle/requirements.md#v-t-rt-lc-022) | none |
 
 Each control of V-T-VR-TEST-006 sets one deliberate defect or self-check
@@ -376,8 +401,12 @@ initialized second child, a plain read that a nearer scope shadows, an
 optional read of `null` and of a value, a set read and a map read with at
 least one value each, a rejected mutation request from a `create`, an
 accepted request from another call site, a report of the listener that
-throws, a `get` with a non-empty `failedNodeStates`, and a teardown that
-`ReleaseOverlap` checked while a release waited on a gate. The harness counts
+throws, a `get` with a non-empty `failedNodeStates`, a teardown that
+`ReleaseOverlap` checked while a release waited on a gate, a disposal that
+waited for an open hold, a hold of a child that delayed the disposal of its
+parent, a `DisposeIgnoringHolds` over an open hold, and a second `close` of
+one hold. The graphs have no `Lazy`, so `Lazy.tla` and [V-T-RT-LC-041](../../runtime/lifecycle/requirements.md#v-t-rt-lc-041) cover
+the closing of a `Lazy` holder at the request. The harness counts
 each in `FuzzStats` and prints the counts.
 
 The histories do not reach every path of the search behind
@@ -472,7 +501,7 @@ those lifecycle IDs; these blocks own the test location and pass evidence.
 ### <a id="v-t-vr-test-005"></a>V-T-VR-TEST-005 — `[test]` Random lifecycle histories
 
 - **Layer:** Dart unit, stateful property test.
-- **Target:** `Scope` initialization and its retry, disposal, a tree of child scopes, member withdrawal, plain, optional, and collection reads, calls from callbacks and listeners, the error of `get`, and `Module.requiring`, under random gate completion and callbacks without a gate.
+- **Target:** `Scope` initialization and its retry, disposal, holds of a disposal and a disposal that ignores them, a tree of child scopes, member withdrawal, plain, optional, and collection reads, calls from callbacks and listeners, the error of `get`, and `Module.requiring`, under random gate completion and callbacks without a gate.
 - **Files:** `packages/fp_di/test/lifecycle_fuzz_test.dart` and the harness library `packages/fp_di/test/support/lifecycle_fuzz_harness.dart`; `kiri_check: ^1.4.0` as a dev dependency of `packages/fp_di`.
 - **Fixtures:** the seeded graph, callback modes, call sites, commands, and terminal phase of [Random lifecycle histories](#random-lifecycle-histories); a trace of start, end, and failure events; the values that each `create` received; held futures with completion flags; a listener on each scope, one of which throws; a subscription to `Scope.errors`.
 - **Commands:** `dart run agents/scripts/test_core.dart packages/fp_di/test/lifecycle_fuzz_test.dart`. The default run uses a fixed seed and a small `maxCycles`. The environment variables `FP_DI_FUZZ_SEED`, `FP_DI_FUZZ_CYCLES`, `FP_DI_FUZZ_GRAPHS`, and `FP_DI_FUZZ_STEPS` select another seed, cycle count, graph count, and step count.

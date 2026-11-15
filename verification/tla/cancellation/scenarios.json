@@ -53,11 +53,19 @@
       "expect": "pass"
     },
     {
+      "name": "CancelHeldConforming",
+      "expect": "pass"
+    },
+    {
       "name": "CancelProgress",
       "expect": "pass"
     },
     {
       "name": "CancelProgressChain3",
+      "expect": "pass"
+    },
+    {
+      "name": "CancelHeldProgress",
       "expect": "pass"
     },
     {
@@ -178,6 +186,12 @@
       "name": "CancelNegKeepEligible",
       "expect": {
         "invariant": "NoCancelLivelock"
+      }
+    },
+    {
+      "name": "CancelNegSetupWhileHeld",
+      "expect": {
+        "invariant": "NoSetupAfterCancel"
       }
     }
   ]
