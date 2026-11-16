@@ -3,7 +3,8 @@
   "source": [
     "packages/fp_di/lib/src/runtime/runtime_teardown.dart",
     "packages/fp_di/lib/src/runtime/runtime.dart",
-    "packages/fp_di/lib/src/runtime/runtime_cause.dart",
+    "packages/fp_di/lib/src/core/core_cause.dart",
+    "packages/fp_di/lib/src/core/core_plan.dart",
     "packages/fp_di/lib/src/runtime/runtime_state.dart"
   ],
   "scenarios": [

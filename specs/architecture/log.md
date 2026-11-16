@@ -389,3 +389,12 @@ structure is described in the spec; documenting it does not invent a historical 
 - Consequences: No spec states the contract of `fp_di_fpdart` or its evidence; its README and tests are the only description until its track adds a spec. The core still has no package dependency, and V-L-AR-DI-001 checks it. A host that uses the core with fpdart converts the results itself, and no spec states rules for that conversion.
 - Supersedes: [Ship fp_di_fpdart as the fpdart integration](#2026-11-09-decision--ship-fp_di_fpdart-as-the-fpdart-integration), [Keep fp_di_fpdart experimental and unpublished](#2026-11-14-decision--keep-fp_di_fpdart-experimental-and-unpublished), and [Keep fpdart interoperability at the host boundary](#2026-09-08-decision--keep-fpdart-interoperability-at-the-host-boundary).
 - References: [requirements](requirements.md), [spec](spec.md), [fp_di_fpdart README](../../packages/fp_di_fpdart/README.md).
+
+## [2026-11-16] decision | Split the pure rules of the runtime into core/
+
+- Context: The runtime mixed its rules, such as resolution, node phases, and the search for the cause of an unavailable key, with the code that changes the object graph and runs effects. `fp_di_fpdart` keeps its rules in a pure core over one immutable state value, but a change there costs logarithmic time. The core of `fp_di` MUST keep constant-time changes.
+- Decision: The folder `packages/fp_di/lib/src/core/` holds the pure rules as functions of read-only interfaces, which the runtime classes implement. The runtime keeps its object graph and changes it in place. A test checks that `core/` names no effect type.
+- Consequences: A rule can be tested without a running runtime, and the structure follows `fp_di_fpdart` without its copy cost. Interface calls replace direct field reads in the rules; a benchmark of resolution and teardown shows no difference within the noise. The defect switches stay in `runtime/`, and the rules take their effect as arguments.
+- Alternatives: Immutable records per node, replaced in place, were left for later. A table of ids instead of object references adds a lookup to each read.
+- References: [source folders](spec.md#source-folders-of-the-core), [R-UC-AR-DI-005](requirements.md#r-uc-ar-di-005).
+

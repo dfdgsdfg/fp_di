@@ -89,7 +89,7 @@ split, shared responsibilities, and paper adoption.
 
 - Runtime API: `packages/fp_di/lib/fp_di.dart`
 - Runtime implementation: `packages/fp_di/lib/src/`, with the declarations in
-  `model/` and the scope library in `runtime/`
+  `model/`, the pure rules in `core/`, and the scope library in `runtime/`
 - Flutter API: `packages/fp_di_flutter/lib/fp_di_flutter.dart`
 - Flutter integration: `packages/fp_di_flutter/lib/src/`
 - fpdart runtime: `packages/fp_di_fpdart/lib/fp_di_fpdart.dart`, with the

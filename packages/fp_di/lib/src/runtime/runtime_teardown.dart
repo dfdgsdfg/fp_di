@@ -4,11 +4,11 @@
 // read cycle.
 import 'dart:async';
 
-import 'runtime_cause.dart';
+import '../core/core_cause.dart';
 import 'runtime_faults.dart';
 
 /// The scheduler of a scope teardown over nodes of type [N], whose releases
-/// report dispose failures as a [RuntimeCause].
+/// report dispose failures as a [CoreCause].
 final class RuntimeTeardownScheduler<N extends Object> {
   /// Creates a scheduler that checks [ready], runs [release], and after a
   /// release checks again the nodes that [reads] gives.
@@ -29,7 +29,7 @@ final class RuntimeTeardownScheduler<N extends Object> {
   /// Releases one node and returns its dispose failures. It may first
   /// release the live dependents of the node, depth first, as the runtime's
   /// `deactivate` does.
-  final Future<RuntimeCause> Function(N node) release;
+  final Future<CoreCause> Function(N node) release;
 
   /// Releases [owned], ordered by descending creation order, along the
   /// reverse of their reads, and returns the causes of every release.
@@ -42,19 +42,19 @@ final class RuntimeTeardownScheduler<N extends Object> {
   ///
   /// The method returns after every started release has settled. If a
   /// [release] threw, the first error that threw, in the order the releases
-  /// finished, is a [RuntimeFail] at the start of the returned cause. The
+  /// finished, is a [CoreFail] at the start of the returned cause. The
   /// dispose failures follow [owned], whatever order the releases finished
   /// in; the dependents that one [release] released report at the place of
   /// that node.
-  Future<RuntimeCause> releaseAlongReads(List<N> owned) async {
-    final causeOf = <N, RuntimeCause>{};
+  Future<CoreCause> releaseAlongReads(List<N> owned) async {
+    final causeOf = <N, CoreCause>{};
     final position = <N, int>{
       for (var i = 0; i < owned.length; i++) owned[i]: i,
     };
     // Insertion order is [owned] order, and a removal costs constant time.
     final unstarted = <N>{...owned};
     final finished = Completer<void>();
-    RuntimeFail? thrown;
+    CoreFail? thrown;
     var inFlight = 0;
 
     late final void Function(Iterable<N>? woken) pump;
@@ -69,7 +69,7 @@ final class RuntimeTeardownScheduler<N extends Object> {
         try {
           causeOf[node] = await release(node);
         } on Object catch (error, stackTrace) {
-          thrown ??= RuntimeFail(error, stackTrace);
+          thrown ??= CoreFail(error, stackTrace);
         }
         inFlight--;
         // A fallback release also releases other nodes, so its end checks
@@ -123,9 +123,7 @@ final class RuntimeTeardownScheduler<N extends Object> {
 
     pump(null);
     await finished.future;
-    final releases = RuntimeCause.all([
-      for (final node in owned) ?causeOf[node],
-    ]);
+    final releases = CoreCause.all([for (final node in owned) ?causeOf[node]]);
     return thrown?.both(releases) ?? releases;
   }
 }

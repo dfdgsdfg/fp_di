@@ -82,19 +82,35 @@ runtime and core unit tests are Dart-only. Manifests own exact SDK constraints;
 
 ### Source folders of the core
 
-The core keeps its implementation in two folders under
+The core keeps its implementation in three folders under
 `packages/fp_di/lib/src/`.
 
 | Folder | Holds | Rule |
 |---|---|---|
-| `model/` | The declarations and values: keys, `Dependency`, `Component`, `Module`, `DiContext`, changes, errors, exceptions, cancellation, and `ShapeGraph` | A file MUST NOT import a file of `runtime/` |
-| `runtime/` | The scope library `scope.dart`, its part files, and the libraries that only the runtime and its tests import | A file other than `scope.dart` has a name that starts with `runtime` |
+| `model/` | The declarations and values: keys, `Dependency`, `Component`, `Module`, `DiContext`, changes, errors, exceptions, cancellation, and `ShapeGraph` | A file MUST NOT import a file of `core/` or `runtime/` |
+| `core/` | The pure rules of the runtime: queries over read-only views of scopes, nodes, and publishers, and the failure values with their projections | A file has a name that starts with `core`. A file MUST NOT import a file of `runtime/` or `dart:async`, and MUST NOT name `Future`, `Completer`, `Stream`, `Timer`, `Zone`, `async`, or `await` |
+| `runtime/` | The scope library `scope.dart`, its part files, and the libraries that only the runtime and its tests import. The runtime holds the objects of the state, changes them, and runs the effects | A file other than `scope.dart` has a name that starts with `runtime` |
+
+The runtime keeps its object graph: a scope, a node, and a publisher refer to
+each other directly, and the runtime changes their fields in place, so each
+change costs constant time. A rule of `core/` reads that graph through
+interfaces that the runtime classes implement, such as `CoreScope` and
+`CorePublisher`, and returns a value. It changes nothing. Some views return
+the collections of the runtime without a copy, to keep constant time, so the
+type system does not stop a rule from changing them; review and the purity
+test cover the rest. A deliberate defect
+or a fault of a self-check stays in `runtime/`; the runtime passes its effect
+to a rule as an argument.
+
+A type of `core/` starts with `Core`.
 
 A type of `runtime/` starts with `Runtime`, or with `_Runtime` when it is
 private to the scope library. `Scope` and the key type `_DiContributionKey`
 are the exceptions. A test MAY import a library of `runtime/` that no public
-library exports, such as `runtime_faults.dart`. The folder name `model/` is a
-path; in prose, the word model still means a formal model.
+library exports, such as `runtime_faults.dart`, and a library of `core/`. The
+folder name `model/` is a path; in prose, the word model still means a formal
+model. The folder name `core/` is a path too; in prose, the core still means
+the `fp_di` package.
 
 ## Runtime Ownership
 
@@ -534,7 +550,16 @@ an explicit contract extension and validation of its interaction with this profi
 - **Target:** package boundaries
 - **Files:** manifests plus all production imports
 - **Fixtures:** the boundary audit below and `dart analyze`
-- **Pass:** No prohibited dependency, no private cross-package import, and no import of `runtime/` from `model/`.
+- **Pass:** No prohibited dependency, no private cross-package import, and no import of `core/` or `runtime/` from `model/`.
+- **Evidence:** present
+
+### <a id="v-l-ar-di-004"></a>V-L-AR-DI-004 — `[lint]` Pure rules of the runtime
+
+- **Layer:** Static, as a core test
+- **Target:** the files of `packages/fp_di/lib/src/core/`
+- **Files:** [`core_purity_test.dart`](../../packages/fp_di/test/core_purity_test.dart)
+- **Fixtures:** the source text of each file of `core/`
+- **Pass:** `dart run agents/scripts/test_core.dart packages/fp_di/test/core_purity_test.dart`; the folder has files, no file imports `dart:async` or a file of `runtime/`, and no line names `Future`, `Completer`, `Stream`, `Timer`, `Zone`, `async`, or `await`
 - **Evidence:** present
 
 ### <a id="v-l-ar-di-003"></a>V-L-AR-DI-003 — `[lint]` Paper adoption claims

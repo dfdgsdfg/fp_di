@@ -3,7 +3,9 @@
   "source": [
     "packages/fp_di/lib/src/runtime/runtime.dart",
     "packages/fp_di/lib/src/runtime/scope.dart",
-    "packages/fp_di/lib/src/runtime/runtime_state.dart"
+    "packages/fp_di/lib/src/runtime/runtime_state.dart",
+    "packages/fp_di/lib/src/core/core_node.dart",
+    "packages/fp_di/lib/src/core/core_resolve.dart"
   ],
   "scenarios": [
     {

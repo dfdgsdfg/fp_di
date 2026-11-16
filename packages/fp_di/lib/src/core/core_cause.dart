@@ -4,45 +4,45 @@
 // where a failure leaves the runtime.
 //
 // The shape follows the `Cause` of `fp_di_fpdart`, without a dependency on
-// it. A `RuntimeCause` is a tree. Its leaves hold the objects that the
+// it. A `CoreCause` is a tree. Its leaves hold the objects that the
 // runtime threw before, so a caller that compares a thrown object with a
 // recorded object still sees the same object.
 import '../model/exception.dart';
 
 /// Why an operation of the runtime did not end in success, as a tree.
 ///
-/// [RuntimeEmpty] is the identity of [then] and of [both]. A [RuntimeThen]
-/// joins two causes that happened one after the other. A [RuntimeBoth] joins
+/// [CoreEmpty] is the identity of [then] and of [both]. A [CoreThen]
+/// joins two causes that happened one after the other. A [CoreBoth] joins
 /// two causes of work that ran at the same time. The traversal order of the
-/// leaves is the order of the tree, so a caller MUST build a [RuntimeBoth] in
+/// leaves is the order of the tree, so a caller MUST build a [CoreBoth] in
 /// declaration order, never in completion order.
-sealed class RuntimeCause {
-  const RuntimeCause();
+sealed class CoreCause {
+  const CoreCause();
 
   /// The cause of an operation that succeeded.
-  static const RuntimeCause empty = RuntimeEmpty();
+  static const CoreCause empty = CoreEmpty();
 
   /// Whether the cause has no leaf.
   bool get isEmpty;
 
   /// A cause that happened after this cause. An empty operand gives the
   /// other operand.
-  RuntimeCause then(RuntimeCause next) {
-    if (this is RuntimeEmpty) return next;
-    if (next is RuntimeEmpty) return this;
-    return RuntimeThen(this, next);
+  CoreCause then(CoreCause next) {
+    if (this is CoreEmpty) return next;
+    if (next is CoreEmpty) return this;
+    return CoreThen(this, next);
   }
 
   /// A cause that happened at the same time as this cause, with this cause
   /// first in the traversal. An empty operand gives the other operand.
-  RuntimeCause both(RuntimeCause other) {
-    if (this is RuntimeEmpty) return other;
-    if (other is RuntimeEmpty) return this;
-    return RuntimeBoth(this, other);
+  CoreCause both(CoreCause other) {
+    if (this is CoreEmpty) return other;
+    if (other is CoreEmpty) return this;
+    return CoreBoth(this, other);
   }
 
   /// [causes] joined with [both], in the order of [causes].
-  static RuntimeCause all(Iterable<RuntimeCause> causes) {
+  static CoreCause all(Iterable<CoreCause> causes) {
     var joined = empty;
     for (final cause in causes) {
       joined = joined.both(cause);
@@ -51,7 +51,7 @@ sealed class RuntimeCause {
   }
 
   /// [causes] joined with [then], in the order of [causes].
-  static RuntimeCause sequence(Iterable<RuntimeCause> causes) {
+  static CoreCause sequence(Iterable<CoreCause> causes) {
     var joined = empty;
     for (final cause in causes) {
       joined = joined.then(cause);
@@ -59,55 +59,55 @@ sealed class RuntimeCause {
     return joined;
   }
 
-  /// The failures of dispose functions as a sequence of [RuntimeDie] leaves.
-  static RuntimeCause dying(Iterable<DisposeFailure> failures) =>
-      sequence([for (final failure in failures) RuntimeDie(failure)]);
+  /// The failures of dispose functions as a sequence of [CoreDie] leaves.
+  static CoreCause dying(Iterable<DisposeFailure> failures) =>
+      sequence([for (final failure in failures) CoreDie(failure)]);
 
-  /// The leaves, [RuntimeFail], [RuntimeInterrupt], and [RuntimeDie], from
+  /// The leaves, [CoreFail], [CoreInterrupt], and [CoreDie], from
   /// left to right.
   ///
   /// The walk keeps its own stack, so a long chain of causes costs no
   /// recursion.
-  Iterable<RuntimeCause> get leaves sync* {
-    final pending = <RuntimeCause>[this];
+  Iterable<CoreCause> get leaves sync* {
+    final pending = <CoreCause>[this];
     while (pending.isNotEmpty) {
       switch (pending.removeLast()) {
-        case RuntimeEmpty():
+        case CoreEmpty():
           break;
-        case RuntimeThen(:final first, :final second):
+        case CoreThen(:final first, :final second):
           pending
             ..add(second)
             ..add(first);
-        case RuntimeBoth(:final left, :final right):
+        case CoreBoth(:final left, :final right):
           pending
             ..add(right)
             ..add(left);
-        case final RuntimeCause leaf:
+        case final CoreCause leaf:
           yield leaf;
       }
     }
   }
 
-  /// The failures of the [RuntimeDie] leaves, from left to right.
+  /// The failures of the [CoreDie] leaves, from left to right.
   List<DisposeFailure> get disposeFailures => [
     for (final leaf in leaves)
-      if (leaf is RuntimeDie) leaf.failure,
+      if (leaf is CoreDie) leaf.failure,
   ];
 
-  /// The first [RuntimeFail] leaf, or null.
-  RuntimeFail? get firstFail {
+  /// The first [CoreFail] leaf, or null.
+  CoreFail? get firstFail {
     for (final leaf in leaves) {
-      if (leaf is RuntimeFail) return leaf;
+      if (leaf is CoreFail) return leaf;
     }
     return null;
   }
 
   /// The error that `initialize` or an activation throws for this cause.
   ///
-  /// The cause MUST have a [RuntimeFail] or [RuntimeInterrupt] leaf. The
+  /// The cause MUST have a [CoreFail] or [CoreInterrupt] leaf. The
   /// first such leaf, the head, gives the error and its stack trace. The
   /// rollback failures of every other such leaf follow, in the order of the
-  /// tree, and then the failure of every [RuntimeDie] leaf. The error keeps
+  /// tree, and then the failure of every [CoreDie] leaf. The error keeps
   /// its kind, as [withDisposeFailures] describes.
   ///
   /// With [dropOthers], the rollback failures of the other leaves stay out.
@@ -133,8 +133,8 @@ sealed class RuntimeCause {
 
   /// The error that a disposal throws for this cause, or null for success.
   ///
-  /// A [RuntimeFail] leaf wins: its error is thrown with its stack trace, as
-  /// a release that threw. Otherwise the [RuntimeDie] leaves give one
+  /// A [CoreFail] leaf wins: its error is thrown with its stack trace, as
+  /// a release that threw. Otherwise the [CoreDie] leaves give one
   /// [DisposeException].
   ({Object error, StackTrace stackTrace})? disposeError() {
     final fail = firstFail;
@@ -153,14 +153,14 @@ sealed class RuntimeCause {
 
   /// What `Scope.errors` receives for this cause, or null for nothing.
   ///
-  /// - The head is a [RuntimeInterrupt]. A cancellation is not a failure, so
+  /// - The head is a [CoreInterrupt]. A cancellation is not a failure, so
   ///   only the dispose failures count: those of the interrupt, then those
-  ///   of the [RuntimeDie] leaves. They give one [DisposeException].
-  /// - The head is a [RuntimeFail] whose error is a [DiException], and no
+  ///   of the [CoreDie] leaves. They give one [DisposeException].
+  /// - The head is a [CoreFail] whose error is a [DiException], and no
   ///   rollback failure follows. The error itself.
-  /// - The head is any other [RuntimeFail]. An [ActivationException] of the
+  /// - The head is any other [CoreFail]. An [ActivationException] of the
   ///   error, with the rollback failures that follow.
-  /// - There is no head. The [RuntimeDie] leaves give one [DisposeException].
+  /// - There is no head. The [CoreDie] leaves give one [DisposeException].
   DiException? reportedError() {
     final heads = [for (final leaf in leaves) ?_headOf(leaf)];
     if (heads.isEmpty) {
@@ -220,15 +220,15 @@ sealed class RuntimeCause {
   }
 }
 
-/// The error and the stack trace of a [RuntimeFail] or a [RuntimeInterrupt],
+/// The error and the stack trace of a [CoreFail] or a [CoreInterrupt],
 /// or null for any other leaf.
-({Object error, StackTrace stackTrace})? _headOf(RuntimeCause leaf) =>
+({Object error, StackTrace stackTrace})? _headOf(CoreCause leaf) =>
     switch (leaf) {
-      RuntimeFail(:final error, :final stackTrace) => (
+      CoreFail(:final error, :final stackTrace) => (
         error: error,
         stackTrace: stackTrace,
       ),
-      RuntimeInterrupt(:final exception, :final stackTrace) => (
+      CoreInterrupt(:final exception, :final stackTrace) => (
         error: exception,
         stackTrace: stackTrace,
       ),
@@ -236,18 +236,18 @@ sealed class RuntimeCause {
     };
 
 /// The cause of an operation that succeeded. It has no leaf.
-final class RuntimeEmpty extends RuntimeCause {
-  /// Creates the empty cause. Use [RuntimeCause.empty].
-  const RuntimeEmpty();
+final class CoreEmpty extends CoreCause {
+  /// Creates the empty cause. Use [CoreCause.empty].
+  const CoreEmpty();
 
   @override
   bool get isEmpty => true;
 }
 
 /// A failure that an operation threw, with the object that it threw.
-final class RuntimeFail extends RuntimeCause {
+final class CoreFail extends CoreCause {
   /// Creates the failure of [error], which was thrown with [stackTrace].
-  const RuntimeFail(this.error, this.stackTrace);
+  const CoreFail(this.error, this.stackTrace);
 
   /// The object that was thrown.
   final Object error;
@@ -260,10 +260,10 @@ final class RuntimeFail extends RuntimeCause {
 }
 
 /// An activation that the disposal of its owner canceled.
-final class RuntimeInterrupt extends RuntimeCause {
+final class CoreInterrupt extends CoreCause {
   /// Creates the cancellation [exception], which was thrown with
   /// [stackTrace].
-  const RuntimeInterrupt(this.exception, this.stackTrace);
+  const CoreInterrupt(this.exception, this.stackTrace);
 
   /// The exception that carries the rollback failures of the activation.
   final ActivationCanceledException exception;
@@ -276,9 +276,9 @@ final class RuntimeInterrupt extends RuntimeCause {
 }
 
 /// A dispose function that failed.
-final class RuntimeDie extends RuntimeCause {
+final class CoreDie extends CoreCause {
   /// Creates the leaf of a dispose [failure].
-  const RuntimeDie(this.failure);
+  const CoreDie(this.failure);
 
   /// The dispose function that failed.
   final DisposeFailure failure;
@@ -288,32 +288,32 @@ final class RuntimeDie extends RuntimeCause {
 }
 
 /// Two causes that happened one after the other.
-final class RuntimeThen extends RuntimeCause {
-  /// Joins [first] and [second]. Use [RuntimeCause.then], which skips an
+final class CoreThen extends CoreCause {
+  /// Joins [first] and [second]. Use [CoreCause.then], which skips an
   /// empty operand.
-  const RuntimeThen(this.first, this.second);
+  const CoreThen(this.first, this.second);
 
   /// The cause that happened first.
-  final RuntimeCause first;
+  final CoreCause first;
 
   /// The cause that happened after [first].
-  final RuntimeCause second;
+  final CoreCause second;
 
   @override
   bool get isEmpty => leaves.isEmpty;
 }
 
 /// Two causes of work that ran at the same time.
-final class RuntimeBoth extends RuntimeCause {
-  /// Joins [left] and [right]. Use [RuntimeCause.both], which skips an empty
+final class CoreBoth extends CoreCause {
+  /// Joins [left] and [right]. Use [CoreCause.both], which skips an empty
   /// operand.
-  const RuntimeBoth(this.left, this.right);
+  const CoreBoth(this.left, this.right);
 
   /// The cause of the work that came first in declaration order.
-  final RuntimeCause left;
+  final CoreCause left;
 
   /// The cause of the work that came after [left] in declaration order.
-  final RuntimeCause right;
+  final CoreCause right;
 
   @override
   bool get isEmpty => leaves.isEmpty;

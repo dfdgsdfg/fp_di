@@ -1951,21 +1951,21 @@ The adapters keep no future across calls. `fp_di_flutter` calls neither
 ### Failure values inside the runtime
 
 Inside the runtime, a failure is a value and not a throw. The non-exported
-library [`runtime_cause.dart`](../../../packages/fp_di/lib/src/runtime/runtime_cause.dart)
-holds `RuntimeCause`, a tree with the shape of the `Cause` of `fp_di_fpdart`.
+library [`core_cause.dart`](../../../packages/fp_di/lib/src/core/core_cause.dart)
+holds `CoreCause`, a tree with the shape of the `Cause` of `fp_di_fpdart`.
 The core does not depend on that package.
 
 | Case | Meaning |
 |---|---|
-| `RuntimeEmpty` | no failure; the identity of `then` and `both` |
-| `RuntimeFail` | an error that an activation or the runtime threw, with its stack trace |
-| `RuntimeInterrupt` | an activation that a disposal or a withdrawal canceled, with its `ActivationCanceledException` |
-| `RuntimeDie` | a dispose function that failed, as a `DisposeFailure` |
-| `RuntimeThen` | one cause after another |
-| `RuntimeBoth` | causes of work that ran at the same time |
+| `CoreEmpty` | no failure; the identity of `then` and `both` |
+| `CoreFail` | an error that an activation or the runtime threw, with its stack trace |
+| `CoreInterrupt` | an activation that a disposal or a withdrawal canceled, with its `ActivationCanceledException` |
+| `CoreDie` | a dispose function that failed, as a `DisposeFailure` |
+| `CoreThen` | one cause after another |
+| `CoreBoth` | causes of work that ran at the same time |
 
 An activation, the members of an `initialize`, a release, and a teardown
-return a cause. The runtime MUST build a `RuntimeBoth` in declaration or
+return a cause. The runtime MUST build a `CoreBoth` in declaration or
 creation order, never in completion order, so that the public error does not
 depend on timing. A leaf holds the object that the public API throws or
 reports, so an error keeps its identity from the node state to `errors`.
@@ -1974,8 +1974,8 @@ Three projections make the public error where a failure leaves the runtime:
 
 | Projection | Boundary | Result |
 |---|---|---|
-| `activationError` | `initialize` | the error of the first `RuntimeFail` or `RuntimeInterrupt`, with the rollback failures of the others and then the failures of the `RuntimeDie` leaves attached |
-| `disposeError` | `Scope.dispose`, `ComponentNode.dispose` | the error of a release that threw, else one `DisposeException` of the `RuntimeDie` leaves, else success |
+| `activationError` | `initialize` | the error of the first `CoreFail` or `CoreInterrupt`, with the rollback failures of the others and then the failures of the `CoreDie` leaves attached |
+| `disposeError` | `Scope.dispose`, `ComponentNode.dispose` | the error of a release that threw, else one `DisposeException` of the `CoreDie` leaves, else success |
 | `reportedError` | `Scope.errors` | a `DiException` or nothing; a cancellation reports only its dispose failures |
 
 The public exceptions, their fields, and their orders are the contract of the
@@ -2251,7 +2251,7 @@ conforms.
 
 - **Layer:** Unit
 - **Target:** `Module`, `Scope.initialize`
-- **Files:** `packages/fp_di/test/module_concurrency_test.dart`, and the order of the rollback failures in [`runtime_cause_test.dart`](../../../packages/fp_di/test/runtime_cause_test.dart)
+- **Files:** `packages/fp_di/test/module_concurrency_test.dart`, and the order of the rollback failures in [`core_cause_test.dart`](../../../packages/fp_di/test/core_cause_test.dart)
 - **Fixtures:** Members that wait on `Completer` gates or delays and log `start`, `end`, `fail`, and `down`; chains and a diamond in all declaration orders; a member that requires a token key of a gated member; a failing member with a gated sibling and a dependent of that sibling; two failing members; a duplicate key; a two-member cycle of optional reads; a dormant publisher with a member that reads its key optionally; a seeded random graph of 150 members; a listener that reads `Scope.state`.
 - **Pass:** Five members with a 100 ms delay initialize in under 350 ms. All independent members log `start` before any logs `end`. A dependent logs `start` after the `end` of its publishers in every declaration order, and in the random graph. A fast member and its dependent are readable while a slow sibling is in flight, and the events list them first. A member that requires a token logs `start` after the `end` of the token publisher and `down` before its `down`. After a failure, the log shows no new `start`, no `down` before the sibling `end`, and then `down` in reverse declaration order. The first failure in declaration order is rethrown. A duplicate key fails `initialize` with both labels, and no member logs `start`. The cycle and the dormant publisher initialize without deadlock. A mutation after an await in a member raises `ReentrantMutationError`. Three members that fail in the reverse of their declaration order give their rollback failures in declaration order.
 - **Evidence:** present

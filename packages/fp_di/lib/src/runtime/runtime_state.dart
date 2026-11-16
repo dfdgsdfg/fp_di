@@ -1,9 +1,9 @@
 part of 'scope.dart';
 
-// The state that the runtime keeps for each node and publication, and the
-// key resolution that reads only that state. The state of a scope is
-// `_RuntimeScope` in scope.dart, and the context of one activation is
-// `_RuntimeContext` in runtime_context.dart.
+// The state that the runtime keeps for each node and publication. A member
+// that only reads the state delegates to a rule of `core/`. The state of a
+// scope is `_RuntimeScope` in scope.dart, and the context of one activation
+// is `_RuntimeContext` in runtime_context.dart.
 
 /// The key under which one declared set contribution publishes. Each
 /// declaration has its own key, so every contribution is one binding of one
@@ -36,18 +36,22 @@ bool _startRelease(_RuntimeContext? episode, int position) {
   return (_releaseStarts[episode] ??= <int>{}).add(position);
 }
 
-final class _RuntimePublisher {
+final class _RuntimePublisher implements CorePublisher<_RuntimeNode> {
   _RuntimePublisher(this.key, this.value, this.scope, this.owner);
 
   final DiKeyBase key;
   final Object? value;
   final _RuntimeScope scope;
+  @override
   final _RuntimeNode owner;
+  @override
   final Set<_RuntimeNode> dependents = <_RuntimeNode>{};
+  @override
   bool available = true;
 }
 
-final class _RuntimeNode {
+final class _RuntimeNode
+    implements CoreNode<_RuntimeScope, _RuntimePublisher, _RuntimeNode> {
   _RuntimeNode({
     required this.id,
     required this.scope,
@@ -63,31 +67,44 @@ final class _RuntimeNode {
     this.contributionKey,
   });
 
+  @override
   final int id;
+  @override
   final _RuntimeScope scope;
+  @override
   final String label;
   final Future<Object?> Function(DiContext context) run;
 
+  @override
   final Set<DiKeyBase> declaredRequires;
 
   /// Every key whose publisher identity this node is bound to.
+  @override
   final Set<DiKeyBase> declaredPlainReads;
+  @override
   final Set<DiKeyBase> declaredPublishes;
 
   /// The position of the component of this node in the module of its scope.
+  @override
   final int declarationIndex;
 
   /// The collection keys that this node reads strictly and optionally. Their
   /// contribution keys are expanded against the current membership each time,
   /// not captured here, because a disposal removes a contribution.
+  @override
   final Set<DiCollectionKey<Object?>> collectionKeys;
+  @override
   final Set<DiCollectionKey<Object?>> optionalCollectionKeys;
 
   /// The contribution key of a set contribution, or null.
   final _DiContributionKey? contributionKey;
 
+  @override
+  DiSetKey<Object?>? get contributionSet => contributionKey?.set;
+
   /// The key of the component, which `NodeState.key` shows, or null. A
   /// contribution key is never one.
+  @override
   final DiKeyBase? publicKey;
 
   /// The collection that this node contributes to, as a set contribution or
@@ -105,6 +122,7 @@ final class _RuntimeNode {
   /// position in [membership]. The state of this node cannot lose that
   /// collection key before this contribution key resolves or leaves, so the
   /// runtime refreshes the node only then. Only `_Runtime._track` writes it.
+  @override
   Map<DiCollectionKey<Object?>, ({DiKeyBase key, int index})> witnesses =
       const {};
 
@@ -118,17 +136,21 @@ final class _RuntimeNode {
   /// The state of this node in the state of the runtime. Only
   /// `_Runtime.refresh` replaces it, so each public read of a node agrees
   /// with `Scope.state`.
+  @override
   late NodeState state;
 
   /// The number of activations that this node committed.
+  @override
   int commits = 0;
 
   /// An activation of this node failed while `initialize` of its scope runs.
   /// The rollback of that call disposes the node, so its phase stays
   /// `activating` until then.
+  @override
   bool doomed = false;
   Object? value;
   List<DisposeFunction> cleanups = <DisposeFunction>[];
+  @override
   Set<_RuntimePublisher> dependencies = <_RuntimePublisher>{};
 
   /// The number of entries in the committed `dependencies` of all nodes whose
@@ -137,17 +159,23 @@ final class _RuntimeNode {
   /// Only `_Runtime.commitDependencies` and `_Runtime.clearDependencies`
   /// change it.
   int committedReaders = 0;
+  @override
   Set<_RuntimePublisher> publishers = <_RuntimePublisher>{};
+  @override
   Map<DiKeyBase, _RuntimePublisher> committed =
       <DiKeyBase, _RuntimePublisher>{};
 
   /// The membership of each collection read at the committed activation.
+  @override
   Map<DiCollectionKey<Object?>, List<DiKeyBase>> committedMembership =
       <DiCollectionKey<Object?>, List<DiKeyBase>>{};
   _RuntimeContext? activationContext;
 
   /// The activation that is running now, or null.
   _RuntimeContext? inFlight;
+
+  @override
+  bool get activationInFlight => inFlight != null;
 
   /// `ComponentNode.dispose` was called for this node.
   bool disposeRequested = false;
@@ -165,14 +193,19 @@ final class _RuntimeNode {
   /// Whether the disposal of this node, its scope, or an ancestor was
   /// requested.
   bool get disposalRequested => disposeRequested || scope.disposalRequested;
+  @override
   bool removed = false;
+  @override
   bool active = false;
+  @override
   bool reactivationBlocked = false;
 
   /// The failure of the last activation of this node, when that activation
   /// failed and was not canceled. Only `_Runtime.stateOf` and
   /// `_Runtime.activationExceptionOf` read it; no decision of the runtime does.
+  @override
   ActivationException? activationException;
+  @override
   bool deactivating = false;
 
   /// The next commit that `ComponentNode.whenActive` callers wait for.
@@ -182,102 +215,30 @@ final class _RuntimeNode {
   Map<Zone, Completer<Object?>>? activationWaiters;
 
   /// The nearest available publisher of [key] that this node does not own.
+  @override
   _RuntimePublisher? resolve(DiKeyBase key) =>
       scope.resolve(key, excludeOwner: this);
 
-  /// The contribution keys of [key] that this node reads: the declared and
-  /// undisposed contributions to a set key, or the declared ids of a map key,
-  /// in the scope of this node and its ancestors. Ancestors come first, then
-  /// declaration order; an id keeps the position of its first declaration.
-  ///
-  /// It is computed from declarations each time, so a contribution of a
-  /// scope that is not initialized counts, and a contribution that is
-  /// disposed by itself leaves. The own contribution of this node does not
-  /// count.
-  List<DiKeyBase> contributionKeysOf(DiCollectionKey<Object?> key) {
-    final chain = <_RuntimeScope>[];
-    for (
-      _RuntimeScope? scope = this.scope;
-      scope != null;
-      scope = scope.parent
-    ) {
-      chain.add(scope);
-    }
-    final result = <DiKeyBase>[];
-    final seen = <DiKeyBase>{};
-    for (final scope in chain.reversed) {
-      final components = scope.declared.components;
-      for (var i = 0; i < components.length; i++) {
-        final DiKeyBase? contribution = switch (key) {
-          DiSetKey() =>
-            components[i].contributesTo == key
-                ? scope.contributionKeys[i]
-                : null,
-          DiMapKey() => switch (components[i].key) {
-            final DiMapEntryKey<Object?> entry when entry.mapKey == key =>
-              entry,
-            _ => null,
-          },
-        };
-        if (contribution == null) continue;
-        if (identical(scope, this.scope) && i == declarationIndex) continue;
-        if (scope.initialized && scope.nodes[i].removed) continue;
-        if (seen.add(contribution)) result.add(contribution);
-      }
-    }
-    return result;
-  }
-
-  /// The contribution keys of the strict collection reads of this node.
-  Iterable<DiKeyBase> get _strictContributionKeys sync* {
-    for (final key in collectionKeys) {
-      yield* contributionKeysOf(key);
-    }
-  }
+  /// The contribution keys of [key] that this node reads, as
+  /// [coreContributionKeysOf] computes them.
+  List<DiKeyBase> contributionKeysOf(DiCollectionKey<Object?> key) =>
+      coreContributionKeysOf(this, key);
 
   /// Every key whose publisher identity this node is bound to now: its plain
   /// reads and the contribution keys of its collection reads.
-  Iterable<DiKeyBase> get plainReads sync* {
-    yield* declaredPlainReads;
-    for (final key in collectionKeys) {
-      yield* contributionKeysOf(key);
-    }
-    for (final key in optionalCollectionKeys) {
-      yield* contributionKeysOf(key);
-    }
-  }
+  Iterable<DiKeyBase> get plainReads => corePlainReads(this);
 
   /// Whether every declared requirement of this node resolves now, and
   /// every contribution key of each of its strict collection reads.
-  bool get satisfied =>
-      declaredRequires.every((key) => resolve(key) != null) &&
-      _strictContributionKeys.every((key) => resolve(key) != null);
+  bool get satisfied => coreSatisfied(this);
 
   /// For each strict collection read with a contribution key that does not
-  /// resolve now, the last such contribution key. Members activate in
-  /// declaration order when nothing else orders them, so the last key is
-  /// the one that resolves last.
-  Map<DiCollectionKey<Object?>, DiKeyBase> get unresolvedContributions {
-    if (collectionKeys.isEmpty) return const {};
-    final result = <DiCollectionKey<Object?>, DiKeyBase>{};
-    for (final key in collectionKeys) {
-      final contributions = contributionKeysOf(key);
-      for (var i = contributions.length - 1; i >= 0; i--) {
-        if (resolve(contributions[i]) == null) {
-          result[key] = contributions[i];
-          break;
-        }
-      }
-    }
-    return result;
-  }
+  /// resolve now, the last such contribution key.
+  Map<DiCollectionKey<Object?>, DiKeyBase> get unresolvedContributions =>
+      coreUnresolvedContributions(this);
 
   /// The keys gating this node that do not resolve now, in a stable order:
   /// its required keys, then each strict collection key with a contribution
   /// key that does not resolve.
-  List<DiKeyBase> get unmet => [
-    for (final key in declaredRequires)
-      if (resolve(key) == null) key,
-    ...unresolvedContributions.keys,
-  ];
+  List<DiKeyBase> get unmet => coreUnmet(this);
 }

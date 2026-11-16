@@ -388,7 +388,7 @@ final class _RuntimeInspector {
       'reads': _reads(root._runtime, node),
       'readers': _readers(node),
       'failure': failureJson,
-      'cause': _causeSteps(root._runtime, node),
+      'cause': _causeSteps(node),
       if (values) ..._valueFields(node),
     });
   }
@@ -454,44 +454,20 @@ final class _RuntimeInspector {
   }
 
   /// The search of R-UC-RT-LC-030 as steps, or null when the key of [first]
-  /// has a value. It visits the nodes in the order of `_Runtime.unavailable`
-  /// and changes nothing.
-  static List<Map<String, Object?>>? _causeSteps(
-    _Runtime runtime,
-    _RuntimeNode first,
-  ) {
+  /// has a value. It visits the nodes in the order of [coreCauseSearch], as
+  /// `_Runtime.unavailable` does.
+  static List<Map<String, Object?>>? _causeSteps(_RuntimeNode first) {
     if (first.publicKey == null || first.state.phase == NodePhase.active) {
       return null;
     }
-    final steps = <Map<String, Object?>>[];
-    final seen = <_RuntimeNode>{};
-    final pending = <_RuntimeNode>[first];
-    while (pending.isNotEmpty) {
-      final node = pending.removeLast();
-      if (!seen.add(node)) continue;
-      final state = node.state;
-      steps.add(<String, Object?>{
-        'node': node.id,
-        'phase': state.phase.name,
-        'waitsFor': [for (final key in state.missing) '$key'],
-      });
-      if (state.phase != NodePhase.waiting) continue;
-      final next = <_RuntimeNode>[];
-      for (final missing in state.missing) {
-        if (missing is DiCollectionKey<Object?>) {
-          for (final contribution in node.contributionKeysOf(missing)) {
-            if (node.resolve(contribution) != null) continue;
-            if (runtime._nodeBehind(node, contribution) case final behind?) {
-              next.add(behind);
-            }
-          }
-        } else if (runtime._nodeBehind(node, missing) case final behind?) {
-          next.add(behind);
-        }
-      }
-      pending.addAll(next.reversed);
-    }
-    return steps;
+    return [
+      for (final node in coreCauseSearch(first))
+        <String, Object?>{
+          'node': node.id,
+          'phase': node.state.phase.name,
+          'waitsFor': [for (final key in node.state.missing) '$key'],
+        },
+    ];
   }
 
   Map<String, Object?> _shapeAnswer(Map<String, String> parameters) {

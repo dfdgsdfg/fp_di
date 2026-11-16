@@ -80,7 +80,7 @@ final class _RuntimeChangeBroadcaster {
 
   /// Reports what [cause] projects to for [errors], and nothing when the
   /// projection is null. Every report of a runtime failure goes through here.
-  void reportCause(RuntimeCause cause) {
+  void reportCause(CoreCause cause) {
     if (cause.reportedError() case final error?) report(error);
   }
 

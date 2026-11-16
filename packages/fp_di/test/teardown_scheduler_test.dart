@@ -5,7 +5,7 @@
 import 'dart:async';
 
 import 'package:fp_di/fp_di.dart';
-import 'package:fp_di/src/runtime/runtime_cause.dart';
+import 'package:fp_di/src/core/core_cause.dart';
 import 'package:fp_di/src/runtime/runtime_teardown.dart';
 import 'package:test/test.dart';
 
@@ -41,10 +41,10 @@ final class _Graph {
     node,
   ).every((d) => identical(d, node) || d.state == 'released');
 
-  Future<RuntimeCause> release(_Node node) async {
-    if (node.state != 'live') return RuntimeCause.empty;
+  Future<CoreCause> release(_Node node) async {
+    if (node.state != 'live') return CoreCause.empty;
     node.state = 'deactivating';
-    var disposeFailures = RuntimeCause.empty;
+    var disposeFailures = CoreCause.empty;
     final dependents = dependentsOf(node).toList()
       ..sort((a, b) => b.id.compareTo(a.id));
     for (final dependent in dependents) {
@@ -60,7 +60,7 @@ final class _Graph {
     node.state = 'released';
     if (fail.contains(node.id)) {
       disposeFailures = disposeFailures.then(
-        RuntimeDie(
+        CoreDie(
           DisposeFailure('${node.id}', StateError('x'), StackTrace.empty),
         ),
       );
@@ -151,7 +151,7 @@ void main() {
       release: (node) async {
         released++;
         if (node.id == 2) throw StateError('release');
-        return RuntimeCause.empty;
+        return CoreCause.empty;
       },
     ).releaseAlongReads(graph.nodes.reversed.toList());
     // The scheduler returns the thrown error as the first failure of the

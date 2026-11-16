@@ -1,6 +1,14 @@
 import 'dart:async';
 import 'dart:collection';
 
+import '../core/core_cause.dart';
+import '../core/core_describe.dart';
+import '../core/core_graph.dart';
+import '../core/core_node.dart';
+import '../core/core_plan.dart';
+import '../core/core_resolve.dart';
+import '../core/core_scope.dart';
+import '../core/core_search.dart';
 import '../model/cancellation.dart';
 import '../model/change.dart';
 import '../model/component.dart';
@@ -12,7 +20,6 @@ import '../model/lease.dart';
 import '../model/module.dart';
 import '../model/shape_graph.dart';
 import '../model/state.dart';
-import 'runtime_cause.dart';
 import 'runtime_faults.dart';
 import 'runtime_inspector_hooks.dart';
 import 'runtime_teardown.dart';
@@ -127,16 +134,16 @@ final class Scope {
         throw StateError('The scope is already initialized.');
       }
       final module = _scope.declared;
-      final duplicate = _duplicate(module);
+      final duplicate = coreDuplicate(module);
       if (duplicate != null) {
         throw DuplicateKeyError(duplicate.key, labels: duplicate.labels);
       }
-      final unresolvable = _unresolvable(module);
+      final unresolvable = coreUnresolvable(_scope, module);
       if (unresolvable.isNotEmpty) {
         throw UndeclaredKeyError(unresolvable);
       }
       final nodes = <_RuntimeNode>[];
-      var failure = RuntimeCause.empty;
+      var failure = CoreCause.empty;
       try {
         for (var i = 0; i < module.components.length; i++) {
           nodes.add(
@@ -159,7 +166,7 @@ final class Scope {
           // that fails during the scheduling above.
           final sink = _RuntimeFailureSink(nodes.toSet());
           await _runtime.reconcile(sink: sink);
-          failure = RuntimeCause.all([
+          failure = CoreCause.all([
             for (final node
                 in sink.failures.keys.toList()
                   ..sort((a, b) => a.id.compareTo(b.id)))
@@ -168,10 +175,10 @@ final class Scope {
         }
       } on Object catch (error, stackTrace) {
         // A throw of the runtime itself fails the call like a member.
-        failure = RuntimeFail(error, stackTrace);
+        failure = CoreFail(error, stackTrace);
       }
       if (!failure.isEmpty) {
-        var rollback = RuntimeCause.empty;
+        var rollback = CoreCause.empty;
         for (final node in nodes.reversed) {
           rollback = rollback.then(
             await _runtime.deactivate(node, permanent: true),
@@ -593,7 +600,8 @@ final class Scope {
         return true;
       }
       final unavailable = _runtime.unavailable(_scope, actual);
-      if (unavailable.failedNodeStates.isNotEmpty || !_canPublish(actual)) {
+      if (unavailable.failedNodeStates.isNotEmpty ||
+          !coreCanPublish(_scope, actual)) {
         completer.completeError(unavailable, StackTrace.current);
         return true;
       }
@@ -609,23 +617,6 @@ final class Scope {
     };
     _runtime.changes.add(_scope, listener);
     return completer.future;
-  }
-
-  /// Whether a scope from this scope to the root can still publish [key].
-  ///
-  /// A scope can when it declares [key], its disposal is not requested, and
-  /// it has no nodes yet, runs [initialize], or has a node of [key] that is
-  /// not disposed and not in [NodePhase.disposeFailed].
-  bool _canPublish(DiKeyBase key) {
-    for (_RuntimeScope? s = _scope; s != null; s = s.parent) {
-      if (s.disposalRequested || !s.declared.publishes.contains(key)) continue;
-      if (s.initializing || s.nodes.isEmpty) return true;
-      final node = _runtime.nodeOf(s, key);
-      if (node != null && _runtime.phaseOf(node) != NodePhase.disposeFailed) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /// The node that publishes [key] for this scope, or null when this scope
@@ -652,11 +643,8 @@ final class Scope {
     final actual = key ?? DiKey<T>();
     final publisher = _scope.resolve(actual);
     if (publisher != null) return _handleOf<T>(publisher.owner);
-    for (_RuntimeScope? scope = _scope; scope != null; scope = scope.parent) {
-      final node = _runtime.nodeOf(scope, actual);
-      if (node != null) return _handleOf<T>(node);
-    }
-    return null;
+    final node = coreNearestNode(_scope, actual);
+    return node == null ? null : _handleOf<T>(node);
   }
 
   /// A text that lists each node of this scope and its descendants, for
@@ -673,64 +661,14 @@ final class Scope {
   /// is for people and can change; do not parse it.
   String describe() {
     _checkActive();
-    final lines = <String>[];
-    void write(_RuntimeScope scope, String path, int depth) {
-      final indent = '  ' * depth;
-      final title = path.isEmpty ? 'scope' : '${indent}child scope $path';
-      var heading = scope.initialized ? title : '$title (not initialized)';
-      if (scope.queueDisposal != null) {
-        final labels = [
-          for (final hold in _runtime.holdStatesOf(scope))
-            hold.debugLabel ?? 'hold',
-        ];
-        final count = labels.length == 1 ? '1 hold' : '${labels.length} holds';
-        heading = '$heading (disposal waits for $count: ${labels.join(', ')})';
-      }
-      lines.add(heading);
-      String entryOf(_RuntimeNode node) {
-        final parts = <String>[_Runtime.stateWord(_runtime.phaseOf(node))];
-        final missing = _missingOf(node);
-        if (missing.isNotEmpty) parts.add('missing ${missing.join(', ')}');
-        final key = node.declaredPublishes
-            .where((key) => key is! _DiContributionKey)
-            .firstOrNull;
-        if (node.contributionKey case final contribution?) {
-          parts.add('contributes to ${contribution.set}');
-        }
-        return '$indent  - ${_describedLabel(node.label, key)}: '
-            '${parts.join('; ')}';
-      }
-
-      final nodes = [
-        for (final node in _runtime.nodes)
-          if (identical(node.scope, scope)) node,
-      ];
-      if (scope.initialized) {
-        lines.addAll(nodes.map(entryOf));
-      } else {
-        // A running `initialize` has created nodes. Each component has one
-        // entry: its node, or `declared` when it has no node.
-        final created = <int, _RuntimeNode>{
-          for (final node in nodes) node.declarationIndex: node,
-        };
-        final components = scope.declared.components;
-        for (var i = 0; i < components.length; i++) {
-          final node = created[i];
-          final label = _describedLabel(components[i].label, components[i].key);
-          lines.add(
-            node == null ? '$indent  - $label: declared' : entryOf(node),
-          );
-        }
-      }
-      var index = 0;
-      for (final child in scope.children) {
-        index++;
-        write(child, path.isEmpty ? '$index' : '$path.$index', depth + 1);
-      }
-    }
-
-    write(_scope, '', 0);
-    return lines.join('\n');
+    return coreDescribe<_RuntimeScope, _RuntimePublisher, _RuntimeNode>(
+      _scope,
+      _runtime.nodes,
+      (scope) => [
+        for (final hold in _runtime.holdStatesOf(scope))
+          hold.debugLabel ?? 'hold',
+      ],
+    );
   }
 
   /// The number of transitions of the state of the root. Two reads that
@@ -777,47 +715,6 @@ final class Scope {
     if (_scope.disposed || _scope.disposing) throw DisposedScopeError();
   }
 
-  /// The first key that more than one member of [module] publishes, with the
-  /// labels of those members, or null.
-  ({DiKeyBase key, List<String> labels})? _duplicate(Module module) {
-    final publishers = <DiKeyBase, List<String>>{};
-    for (final member in module.components) {
-      final key = member.key;
-      if (key != null) {
-        publishers.putIfAbsent(key, () => <String>[]).add(member.label);
-      }
-    }
-    for (final MapEntry(:key, value: members) in publishers.entries) {
-      if (members.length > 1) return (key: key, labels: members);
-    }
-    return null;
-  }
-
-  /// The required keys of [module] that no other member and no member
-  /// declared by an ancestor publishes, in declaration order.
-  ///
-  /// The declarations are fixed, so such a member could never activate. An
-  /// ancestor counts whether or not it is initialized, so a child may still
-  /// initialize before its parent.
-  List<({String label, DiKeyBase key})> _unresolvable(Module module) {
-    if (module.requires.isEmpty) return const [];
-    final declared = <DiKeyBase>{};
-    for (var scope = _scope.parent; scope != null; scope = scope.parent) {
-      declared.addAll(scope.declared.publishes);
-    }
-    final members = module.components;
-    final result = <({String label, DiKeyBase key})>[];
-    for (final member in members) {
-      for (final key in member.requires) {
-        if (declared.contains(key)) continue;
-        if (!publishedByOtherMember(module, member, key)) {
-          result.add((label: member.label, key: key));
-        }
-      }
-    }
-    return result;
-  }
-
   /// The public view of [node], listed in `nodes`.
   ComponentNode<A> _handleOf<A>(_RuntimeNode node) => createComponentNode<A>(
     dispose: () => _disposeNode(node),
@@ -841,19 +738,6 @@ final class Scope {
     },
     state: () => node.state,
   );
-
-  /// The keys that `describe` lists as missing, computed from the fields of
-  /// [node]. `describe` does not read the held state, so the two can be
-  /// compared.
-  List<DiKeyBase> _missingOf(_RuntimeNode node) =>
-      !node.removed && (!node.active || node.deactivating)
-      ? List<DiKeyBase>.unmodifiable(node.unmet)
-      : const <DiKeyBase>[];
-
-  /// The label of a member in `describe`, followed by its key when the label
-  /// is not the key.
-  static String _describedLabel(String label, DiKeyBase? key) =>
-      key == null || label == '$key' ? label : '$label ($key)';
 
   Future<void> _disposeNode(_RuntimeNode node) {
     final pending = node.disposal;
@@ -936,18 +820,22 @@ final class _RuntimeHold {
   );
 }
 
-final class _RuntimeScope {
+final class _RuntimeScope
+    implements CoreScope<_RuntimeScope, _RuntimePublisher, _RuntimeNode> {
   _RuntimeScope(this.parent, this.declared);
 
+  @override
   final _RuntimeScope? parent;
 
   /// The components that `initialize` creates.
+  @override
   final Module declared;
 
   /// The internal contribution key of each declared set contribution, by
   /// declaration index, or null for another component. It exists before any
   /// node, so a reader can count a contribution of a scope that is not
   /// initialized.
+  @override
   late final List<_DiContributionKey?> contributionKeys = [
     for (final component in declared.components)
       if (component.contributesTo case final set?)
@@ -958,6 +846,7 @@ final class _RuntimeScope {
 
   /// The declaration index of the component that publishes a key, and of
   /// the set contribution that has an internal contribution key.
+  @override
   late final Map<DiKeyBase, int> declarationIndexes = () {
     final result = <DiKeyBase, int>{};
     final components = declared.components;
@@ -967,19 +856,23 @@ final class _RuntimeScope {
     }
     return result;
   }();
+  @override
   bool initialized = false;
 
   /// The `initialize` mutation of this scope runs.
+  @override
   bool initializing = false;
 
   /// The nodes of this scope in declaration order, from their creation by
   /// `initialize`. A disposed node stays at its position. Empty before
   /// `initialize` and after an `initialize` that failed without a disposal
   /// request.
+  @override
   List<_RuntimeNode> nodes = const [];
 
   /// The phase of this scope in the state of the runtime. Only
   /// `_Runtime.scopeTransition` and `_Runtime.childCreated` write it.
+  @override
   ScopePhase phase = ScopePhase.declared;
 
   /// The last `ScopeState` that the runtime built for this scope, or null.
@@ -990,27 +883,24 @@ final class _RuntimeScope {
   bool changed = false;
 
   /// The phase that the fields of this scope give.
-  ScopePhase get currentPhase {
-    if (disposed) return ScopePhase.disposed;
-    if (disposing) return ScopePhase.disposing;
-    if (disposalRequested) return ScopePhase.disposeRequested;
-    if (initialized) return ScopePhase.initialized;
-    if (initializing) return ScopePhase.initializing;
-    return ScopePhase.declared;
-  }
+  ScopePhase get currentPhase => coreScopePhase(this);
 
   List<ComponentNode<Object?>> handles = const [];
+  @override
   final Set<_RuntimeScope> children = <_RuntimeScope>{};
   final Map<DiKeyBase, _RuntimePublisher> bindings =
       <DiKeyBase, _RuntimePublisher>{};
 
   /// The public scope of this state.
   Scope? public;
+  @override
   bool disposing = false;
+  @override
   bool disposed = false;
 
   /// `dispose` was called, and its mutation has not finished. Set at the
   /// call, before the mutation reaches the queue.
+  @override
   bool disposeRequested = false;
 
   /// The result of the first `dispose` call, which a repeated call shares.
@@ -1029,35 +919,30 @@ final class _RuntimeScope {
   /// for holds, or null. The argument lists the holds that a call ignores.
   void Function([List<HoldState> ignored])? queueDisposal;
 
+  @override
+  bool get waitsForHolds => queueDisposal != null;
+
+  @override
+  int get holdCount => holds.length;
+
   /// The result of the disposal of this scope while it waits for holds. A
   /// disposal of an ancestor that releases this scope completes it.
   Completer<void>? heldResult;
 
   /// Whether the disposal of this scope or an ancestor was requested.
-  bool get disposalRequested {
-    for (_RuntimeScope? scope = this; scope != null; scope = scope.parent) {
-      if (scope.disposeRequested || scope.disposing || scope.disposed) {
-        return true;
-      }
-    }
-    return false;
-  }
+  bool get disposalRequested => coreDisposalRequested(this);
 
   /// The nearest available publisher of [key], from this scope to the root.
   /// A publisher that [excludeOwner] owns does not count.
-  _RuntimePublisher? resolve(DiKeyBase key, {_RuntimeNode? excludeOwner}) {
-    // The defect keeps walking and returns the farthest binding.
-    final farthest = RuntimeFaults.injects(RuntimeDefect.farthestBinding);
-    _RuntimePublisher? found;
-    for (_RuntimeScope? scope = this; scope != null; scope = scope.parent) {
-      final publisher = scope.bindings[key];
-      if (publisher != null &&
-          publisher.available &&
-          (excludeOwner == null || publisher.owner != excludeOwner)) {
-        if (!farthest) return publisher;
-        found = publisher;
-      }
-    }
-    return found;
-  }
+  _RuntimePublisher? resolve(DiKeyBase key, {_RuntimeNode? excludeOwner}) =>
+      coreResolve(
+        this,
+        key,
+        excludeOwner: excludeOwner,
+        // The defect keeps walking and returns the farthest binding.
+        farthest: RuntimeFaults.injects(RuntimeDefect.farthestBinding),
+      );
+
+  @override
+  _RuntimePublisher? bindingOf(DiKeyBase key) => bindings[key];
 }

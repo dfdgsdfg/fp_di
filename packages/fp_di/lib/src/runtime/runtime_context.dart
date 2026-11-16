@@ -22,7 +22,7 @@ final class _RuntimeContext implements DiContext {
 
   /// Releases that failed after their activation was gone, which the
   /// cleanup list never saw and so cannot report on its own.
-  RuntimeCause rollback = RuntimeCause.empty;
+  CoreCause rollback = CoreCause.empty;
 
   bool tearingDown = false;
 
@@ -56,8 +56,7 @@ final class _RuntimeContext implements DiContext {
   }
 
   bool _reads(_RuntimeNode owner) =>
-      dependencies.any((publisher) => identical(publisher.owner, owner)) ||
-      node.plainReads.any((key) => identical(node.resolve(key)?.owner, owner));
+      coreReadsOwner(node, dependencies, (other) => identical(other, owner));
 
   /// A read of a publisher whose withdrawal is pending cancels this
   /// activation, so it never commits against a departing value.
@@ -199,7 +198,7 @@ final class _RuntimeContext implements DiContext {
         await lease.dispose();
       } on Object catch (error, stackTrace) {
         rollback = rollback.then(
-          RuntimeDie(DisposeFailure('acquire', error, stackTrace)),
+          CoreDie(DisposeFailure('acquire', error, stackTrace)),
         );
       }
       throw OutsideActivationError('acquire');

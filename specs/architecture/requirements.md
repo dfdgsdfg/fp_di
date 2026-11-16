@@ -65,6 +65,14 @@ AR-UI is a retained identifier namespace, not a separate document domain.
   - Alternative flows: verified divergence belongs in the owning topic's gap document.
   - Postcondition: tool instructions and indexes link to those owners instead of defining a second contract.
 
+- <a id="r-uc-ar-di-005"></a>**R-UC-AR-DI-005** — Keep the rules of the runtime pure
+  - Actor: maintainer of the core
+  - Trigger: a change of a lifecycle rule, such as resolution, the phase of a node, or the cause of an unavailable key
+  - Preconditions: the rule reads the state of scopes, nodes, and publishers
+  - Main flow: a rule that only reads the state MUST live in `core/` as a function of read-only views, and MUST return a value. The runtime MUST keep its object graph and MUST change it in place, so a change costs constant time.
+  - Alternative flows: a rule that must wait, complete a future, or run user code stays in `runtime/`.
+  - Postcondition: a rule can be tested without a running runtime, and the change of a rule does not change the cost of a lifecycle operation.
+
 - <a id="r-uc-ar-di-004"></a>**R-UC-AR-DI-004** — Interpret paper-derived claims
   - Actor: maintainer
   - Trigger: design or documentation change
@@ -127,6 +135,7 @@ AR-UI is a retained identifier namespace, not a separate document domain.
 - <a id="v-l-ar-di-001"></a>**V-L-AR-DI-001** `[lint]` Given manifests and source imports, when boundary checks run, then the core has no Flutter/adapter dependency and the adapter uses no core src import. Covers: R-UC-AR-DI-001.
 - <a id="v-l-ar-di-002"></a>**V-L-AR-DI-002** `[lint]` Given canonical topics, when documentation validation runs, then topic triads, IDs, and cross-links are valid. Covers: R-UC-AR-DI-002.
 
+- <a id="v-l-ar-di-004"></a>**V-L-AR-DI-004** `[lint]` Given the files of `packages/fp_di/lib/src/core/`, when the purity check runs, then the folder has files, no file imports `dart:async` or a file of `runtime/`, and no line names `Future`, `Completer`, `Stream`, `Timer`, `Zone`, `async`, or `await`. Covers: R-UC-AR-DI-005.
 - <a id="v-l-ar-di-003"></a>**V-L-AR-DI-003** `[lint]` Given architectural claims, when the topic is validated, then paper adoption rows link their source and owning contract without asserting an unexecuted proof. Covers: R-UC-AR-DI-004.
 - <a id="v-t-ar-ui-001"></a>**V-T-AR-UI-001** `[test]` Given a caller-owned context published by `ScopeProvider`, when a publisher changes, then non-listening `di` widgets do not rebuild while `watchDi` rebuilds for the selected publisher identity and ignores an unrelated key. Covers: R-US-AR-UI-001, R-US-AR-UI-003, R-UC-AR-UI-001, R-UC-AR-UI-003.
 - <a id="v-t-ar-ui-004"></a>**V-T-AR-UI-004** `[test]` Given two caller-owned scopes, when the parent rebuilds a fixed `ScopeProvider` with the other scope, then each listening lookup moves to that scope, a non-listening widget does not rebuild, and both scopes stay usable after the provider is removed. Covers: R-US-AR-UI-001, R-UC-AR-UI-001, R-UC-AR-UI-003.

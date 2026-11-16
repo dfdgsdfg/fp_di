@@ -101,122 +101,26 @@ final class _Runtime {
   ///
   /// A scope has nodes from its `initialize` call, also before that call
   /// completes.
-  _RuntimeNode? nodeOf(_RuntimeScope scope, DiKeyBase key) {
-    if (!scope.declared.publishes.contains(key)) return null;
-    return _declaredNode(scope, key);
-  }
-
-  /// The node of [scope] whose component publishes [key] or has the
-  /// internal contribution key [key], or null.
-  _RuntimeNode? _declaredNode(_RuntimeScope scope, DiKeyBase key) {
-    if (scope.nodes.isEmpty) return null;
-    final index = scope.declarationIndexes[key];
-    if (index == null) return null;
-    final node = scope.nodes[index];
-    return node.removed ? null : node;
-  }
+  _RuntimeNode? nodeOf(_RuntimeScope scope, DiKeyBase key) =>
+      coreNodeOf(scope, key);
 
   /// The nearest node, other than [reader], that publishes [key] or has
   /// the contribution key [key], from the scope of [reader] to the root.
-  _RuntimeNode? _nodeBehind(_RuntimeNode reader, DiKeyBase key) {
-    for (
-      _RuntimeScope? scope = reader.scope;
-      scope != null;
-      scope = scope.parent
-    ) {
-      final node = _declaredNode(scope, key);
-      if (node != null && !identical(node, reader)) return node;
-    }
-    return null;
-  }
+  _RuntimeNode? _nodeBehind(_RuntimeNode reader, DiKeyBase key) =>
+      coreNodeBehind(reader, key);
 
   /// The error of a `Scope.get` call for [key] from [scope], when the key
   /// has no value (specs/runtime/lifecycle, "The cause of an unavailable
-  /// key").
-  ///
-  /// The search starts at the node that `findNode` returns. A failed node
-  /// ends its path. A waiting node continues at the nodes of its missing
-  /// keys: the nearest node of a required key, and each contributing node
-  /// of a collection key whose contribution does not resolve. The search
-  /// is depth-first, visits each node one time, and changes no state.
-  UnavailableKeyException unavailable(_RuntimeScope scope, DiKey<Object?> key) {
-    _RuntimeNode? first;
-    var declaredOnly = false;
-    for (_RuntimeScope? s = scope; s != null; s = s.parent) {
-      first = nodeOf(s, key);
-      if (first != null) break;
-      declaredOnly |=
-          s.phase == ScopePhase.declared && s.declared.publishes.contains(key);
-    }
-    if (first == null) {
-      return UnavailableKeyException(
-        key,
-        message: declaredOnly
-            ? 'No node publishes $key: a scope declares the key and is not '
-                  'initialized.'
-            : 'No node publishes $key.',
-      );
-    }
-
-    final failed = <NodeState>[];
-    final seen = <_RuntimeNode>{};
-    final pending = <_RuntimeNode>[first];
-    while (pending.isNotEmpty) {
-      final node = pending.removeLast();
-      if (!seen.add(node)) continue;
-      final state = node.state;
-      if (state.phase == NodePhase.activationFailed) {
-        failed.add(state);
-        continue;
-      }
-      if (state.phase != NodePhase.waiting) continue;
-      final next = <_RuntimeNode>[];
-      for (final missing in state.missing) {
-        if (missing is DiCollectionKey<Object?>) {
-          for (final contribution in node.contributionKeysOf(missing)) {
-            if (node.resolve(contribution) != null) continue;
-            if (_nodeBehind(node, contribution) case final behind?) {
-              next.add(behind);
-            }
-          }
-        } else if (_nodeBehind(node, missing) case final behind?) {
-          next.add(behind);
-        }
-      }
-      // The last node of the stack is the next one, so the first node
-      // behind this node goes on last.
-      pending.addAll(next.reversed);
-    }
-
-    final state = first.state;
-    final buffer = StringBuffer('No value is available for $key');
-    switch (state.phase) {
-      case NodePhase.waiting:
-        buffer.write(
-          ': the node ${state.label} waits for ${state.missing.join(', ')}.',
-        );
-      case NodePhase.activationFailed:
-        buffer.write('.');
-      case final phase:
-        buffer.write(': the node ${state.label} is ${stateWord(phase)}.');
-    }
-    if (failed.isNotEmpty) {
-      final cause = failed.first;
-      buffer.write(' The activation of ${cause.label} failed');
-      if (failed.length > 1) {
-        buffer.write(', and ${failed.length - 1} more failed');
-      }
-      buffer.write(': ${cause.activationException!.cause}');
-    }
-    return UnavailableKeyException(
-      key,
-      message: buffer.toString(),
-      // The defect drops the failed nodes and keeps the message.
-      failedNodeStates: RuntimeFaults.injects(RuntimeDefect.dropFailedNodes)
-          ? const <NodeState>[]
-          : List<NodeState>.unmodifiable(failed),
-    );
-  }
+  /// key"). The search is [coreUnavailable].
+  UnavailableKeyException unavailable(
+    _RuntimeScope scope,
+    DiKey<Object?> key,
+  ) => coreUnavailable(
+    scope,
+    key,
+    // The defect drops the failed nodes and keeps the message.
+    dropFailedNodes: RuntimeFaults.injects(RuntimeDefect.dropFailedNodes),
+  );
 
   /// Removes [node] from the runtime for good and fails its waiters.
   void removeNode(_RuntimeNode node) {
@@ -241,40 +145,7 @@ final class _Runtime {
   }
 
   /// The phase of [node], computed from the fields of the node.
-  ///
-  /// `active` is before `activating`, because a listener runs at the commit,
-  /// before the activation leaves `inFlight`. `inactive` is the word for a
-  /// node that is not active when no narrower word applies, such as a node
-  /// whose activation was canceled and that waits for a withdrawal or its
-  /// removal.
-  NodePhase phaseOf(_RuntimeNode node) {
-    if (node.removed) return NodePhase.disposed;
-    if (node.active && !node.deactivating) return NodePhase.active;
-    return _phaseOf(node, waits: node.unmet.isNotEmpty);
-  }
-
-  /// The phase of a node that is neither disposed nor active. [waits] states
-  /// that a required key of the node does not resolve.
-  static NodePhase _phaseOf(_RuntimeNode node, {required bool waits}) {
-    if (node.deactivating) return NodePhase.deactivating;
-    if (node.inFlight != null || node.doomed) return NodePhase.activating;
-    if (node.reactivationBlocked) return NodePhase.disposeFailed;
-    if (waits) return NodePhase.waiting;
-    if (node.activationException != null) return NodePhase.activationFailed;
-    return NodePhase.inactive;
-  }
-
-  /// The word of `Scope.describe` for [phase].
-  static String stateWord(NodePhase phase) => switch (phase) {
-    NodePhase.active => 'active',
-    NodePhase.activating => 'activating',
-    NodePhase.deactivating => 'deactivating',
-    NodePhase.waiting => 'waiting',
-    NodePhase.activationFailed => 'activation failed',
-    NodePhase.disposeFailed => 'dispose failed',
-    NodePhase.inactive => 'inactive',
-    NodePhase.disposed => 'disposed',
-  };
+  NodePhase phaseOf(_RuntimeNode node) => coreNodePhase(node);
 
   // ---- The state of the runtime (specs/runtime/lifecycle, "State of the
   // runtime"). A node holds its `NodeState`, which `refresh` replaces at a
@@ -366,42 +237,10 @@ final class _Runtime {
     node.witnesses = next;
   }
 
-  /// The `NodeState` of [node], computed from the fields of the node.
-  ///
-  /// With [tracked], the missing collection keys are those of
-  /// `_RuntimeNode.witnesses`, which `_track` has just written. Without it,
-  /// the method reads every contribution key again, as the `StateCurrent`
-  /// self-check needs.
-  NodeState _stateOf(_RuntimeNode node, {bool tracked = false}) {
-    var missing = const <DiKeyBase>[];
-    final NodePhase phase;
-    if (node.removed) {
-      phase = NodePhase.disposed;
-    } else if (node.active && !node.deactivating) {
-      phase = NodePhase.active;
-    } else {
-      missing = tracked
-          ? [
-              for (final key in node.declaredRequires)
-                if (node.resolve(key) == null) key,
-              for (final key in node.collectionKeys)
-                if (node.witnesses.containsKey(key)) key,
-            ]
-          : node.unmet;
-      phase = _phaseOf(node, waits: missing.isNotEmpty);
-    }
-    return createNodeState(
-      id: node.id,
-      label: node.label,
-      key: node.publicKey,
-      phase: phase,
-      missing: missing,
-      activationException: phase == NodePhase.activationFailed
-          ? node.activationException
-          : null,
-      commits: node.commits,
-    );
-  }
+  /// The `NodeState` of [node], computed from the fields of the node. See
+  /// [coreNodeState] for [tracked].
+  NodeState _stateOf(_RuntimeNode node, {bool tracked = false}) =>
+      coreNodeState(node, tracked: tracked);
 
   /// Replaces the `NodeState` of [node] when its fields give another value.
   /// Returns whether it did.
@@ -555,16 +394,8 @@ final class _Runtime {
   }
 
   /// [scope] and its descendants, parents first.
-  List<_RuntimeScope> subtreeOf(_RuntimeScope scope) {
-    final subtree = <_RuntimeScope>[];
-    void collect(_RuntimeScope current) {
-      subtree.add(current);
-      current.children.forEach(collect);
-    }
-
-    collect(scope);
-    return subtree;
-  }
+  List<_RuntimeScope> subtreeOf(_RuntimeScope scope) =>
+      coreSubtree<_RuntimeScope, _RuntimePublisher, _RuntimeNode>(scope);
 
   /// The transition that creates the child scope [child].
   void childCreated(_RuntimeScope child) {
@@ -599,25 +430,22 @@ final class _Runtime {
 
   /// Activates [node] and returns why it did not commit: empty after a commit
   /// and when the node stays dormant or waits for a withdrawal, a
-  /// [RuntimeInterrupt] after a cancellation, and a [RuntimeFail] after a
+  /// [CoreInterrupt] after a cancellation, and a [CoreFail] after a
   /// failure. A throw of the runtime itself still throws.
-  Future<RuntimeCause> activate(_RuntimeNode node) async {
+  Future<CoreCause> activate(_RuntimeNode node) async {
     if (node.removed || node.active || node.scope.disposing) {
-      return RuntimeCause.empty;
+      return CoreCause.empty;
     }
     // Setup never starts for an owner whose disposal was requested.
     if (_setupRefused(node)) {
-      return RuntimeInterrupt(
-        ActivationCanceledException(),
-        StackTrace.current,
-      );
+      return CoreInterrupt(ActivationCanceledException(), StackTrace.current);
     }
     // A component never runs against an unsatisfied environment, so
     // `Dependency.require` inside it cannot fail and no partial effect is ever
     // staged.
-    if (!node.satisfied) return RuntimeCause.empty;
+    if (!node.satisfied) return CoreCause.empty;
     // A node whose reads a pending withdrawal removes waits for it.
-    if (node.awaiting.isNotEmpty) return RuntimeCause.empty;
+    if (node.awaiting.isNotEmpty) return CoreCause.empty;
     final activation = _RuntimeContext(this, node);
     node
       ..inFlight = activation
@@ -660,7 +488,7 @@ final class _Runtime {
           waiter.complete(node.value);
         }
       }
-      return RuntimeCause.empty;
+      return CoreCause.empty;
     } on Object catch (error, stackTrace) {
       // A step failure is local to this region: cancel its token before the
       // first dispose function, so a worker of a completed step can stop.
@@ -701,7 +529,7 @@ final class _Runtime {
       // The defect `DropLate` drops the rollback failures of a canceled
       // activation.
       if (canceledBy != null && RuntimeFaults.injects(RuntimeDefect.dropLate)) {
-        rollback = RuntimeCause.empty;
+        rollback = CoreCause.empty;
       }
       final rollbackFailures = rollback.disposeFailures;
       // The activation ended without a commit. A member of a running
@@ -718,14 +546,14 @@ final class _Runtime {
         // withdrawal. Releases that failed during the rollback still count.
         end(failed: false);
         changes.reportCause(rollback);
-        return RuntimeCause.empty;
+        return CoreCause.empty;
       }
       if (canceledBy != null) {
         end(failed: true);
         final cause = error is ActivationCanceledException
             ? error.cause
             : error;
-        return RuntimeInterrupt(
+        return CoreInterrupt(
           ActivationCanceledException(
             cause: cause,
             stackTrace: cause == null ? null : stackTrace,
@@ -743,12 +571,12 @@ final class _Runtime {
             ? error
             : ActivationException(error, stackTrace);
         end(failed: true);
-        return RuntimeFail(error, stackTrace);
+        return CoreFail(error, stackTrace);
       }
       final failure = ActivationException(error, stackTrace, rollbackFailures);
       node.activationException = failure;
       end(failed: true);
-      return RuntimeFail(failure, StackTrace.current);
+      return CoreFail(failure, StackTrace.current);
     } finally {
       if (identical(node.inFlight, activation)) node.inFlight = null;
     }
@@ -766,13 +594,7 @@ final class _Runtime {
   }
 
   /// The open holds of [scope] and of its descendants.
-  int subtreeHolds(_RuntimeScope scope) {
-    var count = scope.holds.length;
-    for (final child in scope.children) {
-      count += subtreeHolds(child);
-    }
-    return count;
-  }
+  int subtreeHolds(_RuntimeScope scope) => coreSubtreeHolds(scope);
 
   /// The state of each open hold of [scope] and of its descendants.
   List<HoldState> holdStatesOf(_RuntimeScope scope) => [
@@ -781,18 +603,7 @@ final class _Runtime {
   ];
 
   /// [scope] as `describe` of its root names it.
-  String pathOf(_RuntimeScope scope) {
-    final indexes = <int>[];
-    for (
-      var current = scope;
-      current.parent != null;
-      current = current.parent!
-    ) {
-      indexes.add(current.parent!.children.toList().indexOf(current) + 1);
-    }
-    if (indexes.isEmpty) return 'scope';
-    return 'child scope ${indexes.reversed.join('.')}';
-  }
+  String pathOf(_RuntimeScope scope) => corePathOf(scope);
 
   /// A hold of [scope] closed. Queues each waiting disposal of [scope] or of
   /// an ancestor whose subtree has no open hold any more.
@@ -822,16 +633,10 @@ final class _Runtime {
   /// Records the withdrawal of [root] and cancels the activations in flight
   /// that read a value it withdraws, at the `dispose` call.
   void _requestWithdrawal(_RuntimeNode root) {
-    final reach = <_RuntimeNode>{root};
-    final queue = <_RuntimeNode>[root];
-    while (queue.isNotEmpty) {
-      final next = queue.removeLast();
-      for (final publisher in next.publishers) {
-        for (final dependent in publisher.dependents) {
-          if (dependent.active && reach.add(dependent)) queue.add(dependent);
-        }
-      }
-    }
+    final reach =
+        coreWithdrawalReach<_RuntimeScope, _RuntimePublisher, _RuntimeNode>(
+          root,
+        );
     pendingWithdrawals.add((root: root, reach: reach));
     for (final node in nodes) {
       final activation = node.inFlight;
@@ -848,16 +653,7 @@ final class _Runtime {
     _RuntimeNode node,
     _RuntimeContext activation,
     Set<_RuntimeNode> reach,
-  ) {
-    for (final publisher in activation.dependencies) {
-      if (reach.contains(publisher.owner)) return true;
-    }
-    for (final key in node.plainReads) {
-      final publisher = node.resolve(key);
-      if (publisher != null && reach.contains(publisher.owner)) return true;
-    }
-    return false;
-  }
+  ) => coreReadsOwner(node, activation.dependencies, reach.contains);
 
   /// The pending withdrawals that withdraw [publisher], or none.
   Iterable<_RuntimeNode> withdrawalsOf(_RuntimePublisher publisher) => [
@@ -888,26 +684,9 @@ final class _Runtime {
   /// disposed node would leak its bindings. It then returns the causes of
   /// the members in declaration order, so the first failure of the cause is
   /// the failure of the failed member that is first in creation order.
-  Future<RuntimeCause> activateMembers(List<_RuntimeNode> nodes) async {
+  Future<CoreCause> activateMembers(List<_RuntimeNode> nodes) async {
     final count = nodes.length;
-    // `initialize` has rejected duplicate keys, so each key has one member.
-    final publisherOf = <DiKeyBase, int>{
-      for (var i = 0; i < count; i++)
-        for (final key in nodes[i].declaredPublishes) key: i,
-    };
-    final waitingFor = List<int>.filled(count, 0);
-    final dependents = List<List<int>>.generate(count, (_) => <int>[]);
-    for (var i = 0; i < count; i++) {
-      final prerequisites = <int>{
-        for (final key in nodes[i].plainReads)
-          if (publisherOf[key] case final publisher? when publisher != i)
-            publisher,
-      };
-      waitingFor[i] = prerequisites.length;
-      for (final prerequisite in prerequisites) {
-        dependents[prerequisite].add(i);
-      }
-    }
+    final (:waitingFor, :dependents) = coreActivationPlan(nodes);
 
     final started = List<bool>.filled(count, false);
     final ready = SplayTreeSet<int>()
@@ -915,7 +694,7 @@ final class _Runtime {
         for (var i = 0; i < count; i++)
           if (waitingFor[i] == 0) i,
       ]);
-    final causes = List<RuntimeCause>.filled(count, RuntimeCause.empty);
+    final causes = List<CoreCause>.filled(count, CoreCause.empty);
     var failed = false;
     final finished = Completer<void>();
     var inFlight = 0;
@@ -939,7 +718,7 @@ final class _Runtime {
           causes[index] = await activate(nodes[index]);
         } on Object catch (error, stackTrace) {
           // A throw of the runtime itself fails the member.
-          causes[index] = RuntimeFail(error, stackTrace);
+          causes[index] = CoreFail(error, stackTrace);
         }
         if (!causes[index].isEmpty) failed = true;
         inFlight--;
@@ -966,23 +745,23 @@ final class _Runtime {
 
     pump();
     await finished.future;
-    return RuntimeCause.all(causes);
+    return CoreCause.all(causes);
   }
 
   /// Deactivates [node], after its live dependents, and returns the dispose
   /// failures of the dependents, then those of the node.
-  Future<RuntimeCause> deactivate(
+  Future<CoreCause> deactivate(
     _RuntimeNode node, {
     required bool permanent,
   }) async {
-    if (node.removed) return RuntimeCause.empty;
+    if (node.removed) return CoreCause.empty;
     if (!node.active || node.deactivating) {
       if (permanent && !node.deactivating) {
         removeNode(node);
         // A removed contributor leaves its collection.
         nodeTransition(node, keys: node.declaredPublishes);
       }
-      return RuntimeCause.empty;
+      return CoreCause.empty;
     }
 
     node.deactivating = true;
@@ -1007,17 +786,12 @@ final class _Runtime {
       silent: RuntimeFaults.injects(RuntimeDefect.silentReleaseStart),
     );
 
-    final dependents = <_RuntimeNode>{};
-    for (final publisher in node.publishers) {
-      dependents.addAll(publisher.dependents);
-    }
-    final orderedDependents = dependents.toList()
-      ..sort((left, right) => right.id.compareTo(left.id));
+    final orderedDependents = coreDependentsOf(node);
 
     // Dependent failures are reported to the caller but must not be charged
     // to this node: only its own dispose functions can leave *its* effects
     // half released, and only that justifies blocking its reactivation.
-    var dependentCause = RuntimeCause.empty;
+    var dependentCause = CoreCause.empty;
     // The fault skips the release of the dependents.
     if (!RuntimeFaults.breaks(RuntimeSelfCheckFault.dependentFirst)) {
       for (final dependent in orderedDependents) {
@@ -1035,7 +809,7 @@ final class _Runtime {
           if (!dependent.active && !dependent.deactivating) continue;
           // In a read cycle each node is a dependent of the next, so the
           // fallback of the teardown releases them in a ring.
-          if (_path(node, dependent, <_RuntimeNode>{}) != null) continue;
+          if (_path(node, dependent) != null) continue;
           throw AssertionError(
             'SelfCheck DependentFirst: ${node.label} starts its release '
             'while its dependent ${dependent.label} is still '
@@ -1118,9 +892,9 @@ final class _Runtime {
                   if (sink.members.contains(node)) node,
               ];
         if (own.isNotEmpty) {
-          sink!.failures[own.first] = RuntimeFail(error, StackTrace.current);
+          sink!.failures[own.first] = CoreFail(error, StackTrace.current);
         } else {
-          changes.reportCause(RuntimeFail(error, StackTrace.current));
+          changes.reportCause(CoreFail(error, StackTrace.current));
         }
         return;
       }
@@ -1180,32 +954,7 @@ final class _Runtime {
     }
   }
 
-  bool _targetChanged(_RuntimeNode node) {
-    for (final key in node.declaredPlainReads) {
-      final next = node.resolve(key);
-      if (!identical(next, node.committed[key])) return true;
-    }
-    for (final collection in node.collectionKeys.followedBy(
-      node.optionalCollectionKeys,
-    )) {
-      final keys = node.contributionKeysOf(collection);
-      final previous = node.committedMembership[collection];
-      if (previous == null || !_sameKeys(previous, keys)) return true;
-      for (final key in keys) {
-        final next = node.resolve(key);
-        if (!identical(next, node.committed[key])) return true;
-      }
-    }
-    return false;
-  }
-
-  static bool _sameKeys(List<DiKeyBase> a, List<DiKeyBase> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
+  bool _targetChanged(_RuntimeNode node) => coreTargetChanged(node);
 
   /// Releases [owned], ordered by descending id, along the reverse of their
   /// committed read graph, through `RuntimeTeardownScheduler`
@@ -1227,21 +976,11 @@ final class _Runtime {
   /// releases finished in.
   /// Inside the cycle fallback, the dependents that a `deactivate` released
   /// report with that node, in its depth-first order.
-  Future<RuntimeCause> _releaseOwned(List<_RuntimeNode> owned) =>
+  Future<CoreCause> _releaseOwned(List<_RuntimeNode> owned) =>
       RuntimeTeardownScheduler<_RuntimeNode>(
         // A dependent is done when it is neither active nor releasing. A
         // finished dependent also leaves the publisher's dependents.
-        ready: (node) {
-          for (final publisher in node.publishers) {
-            for (final dependent in publisher.dependents) {
-              if (!identical(dependent, node) &&
-                  (dependent.active || dependent.deactivating)) {
-                return false;
-              }
-            }
-          }
-          return true;
-        },
+        ready: coreReleaseReady,
         release: (node) => deactivate(node, permanent: true),
         // A node is a dependent of a publisher through a read of its
         // committed activation or of its running activation.
@@ -1256,7 +995,7 @@ final class _Runtime {
 
   /// [started] runs after the transition that starts the disposal, while
   /// the error stream of the root is still open.
-  Future<RuntimeCause> disposeScope(
+  Future<CoreCause> disposeScope(
     _RuntimeScope scope, {
     void Function()? started,
   }) async {
@@ -1310,19 +1049,19 @@ final class _Runtime {
 
   /// Releases the journal [cleanups] of [owner], last entry first. [episode]
   /// is the activation that owns the journal, or null.
-  Future<RuntimeCause> runCleanups(
+  Future<CoreCause> runCleanups(
     Iterable<DisposeFunction> cleanups,
     String owner, {
     _RuntimeContext? episode,
   }) async {
-    var failures = RuntimeCause.empty;
-    // A dispose function that threw is a [RuntimeDie]. A [DisposeException]
+    var failures = CoreCause.empty;
+    // A dispose function that threw is a [CoreDie]. A [DisposeException]
     // expands to its failures.
     void record(Object error, StackTrace stackTrace) {
       failures = failures.then(
         error is DisposeException
-            ? RuntimeCause.dying(error.disposeFailures)
-            : RuntimeDie(DisposeFailure(owner, error, stackTrace)),
+            ? CoreCause.dying(error.disposeFailures)
+            : CoreDie(DisposeFailure(owner, error, stackTrace)),
       );
     }
 
@@ -1385,7 +1124,7 @@ final class _Runtime {
     // [node] owns, so it cannot find a cycle while no node reads a value of
     // [node] (R-UC-RT-LC-023).
     if (node.committedReaders > 0) {
-      final path = _path(owner, node, <_RuntimeNode>{});
+      final path = _path(owner, node);
       if (path != null) {
         throw DependencyCycleError([
           node.label,
@@ -1416,19 +1155,13 @@ final class _Runtime {
     node.dependencies.clear();
   }
 
-  List<_RuntimeNode>? _path(
-    _RuntimeNode from,
-    _RuntimeNode target,
-    Set<_RuntimeNode> seen,
-  ) {
-    if (!seen.add(from)) return null;
-    if (identical(from, target)) return [from];
-    for (final dependency in from.dependencies) {
-      final suffix = _path(dependency.owner, target, seen);
-      if (suffix != null) return [from, ...suffix];
-    }
-    return null;
-  }
+  /// The path of committed reads from [from] to [target], or null.
+  List<_RuntimeNode>? _path(_RuntimeNode from, _RuntimeNode target) =>
+      corePath<_RuntimeScope, _RuntimePublisher, _RuntimeNode>(
+        from,
+        target,
+        <_RuntimeNode>{},
+      );
 }
 
 /// Collects the reconciliation failures of selected nodes.
@@ -1439,5 +1172,5 @@ final class _RuntimeFailureSink {
   _RuntimeFailureSink(this.members);
 
   final Set<_RuntimeNode> members;
-  final Map<_RuntimeNode, RuntimeCause> failures = {};
+  final Map<_RuntimeNode, CoreCause> failures = {};
 }
