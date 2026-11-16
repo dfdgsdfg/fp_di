@@ -428,164 +428,226 @@ final class _Runtime {
       ? node.disposeRequested
       : node.disposalRequested;
 
-  /// Activates [node] and returns why it did not commit: empty after a commit
-  /// and when the node stays dormant or waits for a withdrawal, a
-  /// [CoreInterrupt] after a cancellation, and a [CoreFail] after a
-  /// failure. A throw of the runtime itself still throws.
-  Future<CoreCause> activate(_RuntimeNode node) async {
-    if (node.removed || node.active || node.scope.disposing) {
-      return CoreCause.empty;
+  /// Tries to activate [node] and tells what came of the attempt (see
+  /// [CoreActivationOutcome]). A throw of the runtime itself still throws.
+  ///
+  /// The attempt has three steps. [_beginActivation] opens the episode,
+  /// [_commitActivation] publishes it, and [_failActivation] ends it without
+  /// a commit. Each step is the only writer of its node fields. Only the
+  /// rollback of a failed activation waits here, between two of them.
+  Future<CoreActivationOutcome> activate(_RuntimeNode node) async {
+    if (node.removed) return const CoreNotStarted(CoreNotStartedReason.removed);
+    if (node.active) return const CoreNotStarted(CoreNotStartedReason.active);
+    if (node.scope.disposing) {
+      return const CoreNotStarted(CoreNotStartedReason.scopeDisposing);
     }
     // Setup never starts for an owner whose disposal was requested.
     if (_setupRefused(node)) {
-      return CoreInterrupt(ActivationCanceledException(), StackTrace.current);
+      return CoreInterrupted(
+        CoreInterrupt(ActivationCanceledException(), StackTrace.current),
+      );
     }
     // A component never runs against an unsatisfied environment, so
     // `Dependency.require` inside it cannot fail and no partial effect is ever
     // staged.
-    if (!node.satisfied) return CoreCause.empty;
+    if (!node.satisfied) {
+      return const CoreNotStarted(CoreNotStartedReason.unsatisfied);
+    }
     // A node whose reads a pending withdrawal removes waits for it.
-    if (node.awaiting.isNotEmpty) return CoreCause.empty;
-    final activation = _RuntimeContext(this, node);
-    node
-      ..inFlight = activation
-      ..doomed = false
-      ..activationException = null;
-    nodeTransition(node);
+    if (node.awaiting.isNotEmpty) {
+      return const CoreNotStarted(CoreNotStartedReason.withdrawalPending);
+    }
+    final activation = _beginActivation(node);
     try {
       node.value = await node.run(activation);
       // A canceled activation never commits, even when its last step settled
       // after the cancellation.
       activation.checkpoint();
-      final stagedKeys = <DiKeyBase>{};
-      for (final publisher in activation.staged) {
-        if (!stagedKeys.add(publisher.key) ||
-            node.scope.bindings.containsKey(publisher.key)) {
-          throw DuplicateKeyError(publisher.key);
-        }
-      }
-      for (final publisher in activation.staged) {
-        node.scope.bindings[publisher.key] = publisher;
-        node.publishers.add(publisher);
-      }
-      commitDependencies(node, activation.dependencies);
-      node
-        ..cleanups = List<DisposeFunction>.of(activation.cleanups)
-        ..committed = Map<DiKeyBase, _RuntimePublisher>.of(activation.committed)
-        ..committedMembership = Map.of(activation.committedMembership)
-        ..active = true
-        ..reactivationBlocked = false
-        ..commits += 1;
-      // One transition: the keys resolve, and the node is active.
-      nodeTransition(
-        node,
-        keys: [for (final publisher in activation.staged) publisher.key],
-      );
-      final waiters = node.activationWaiters?.values.toList();
-      if (waiters != null) {
-        node.activationWaiters = null;
-        for (final waiter in waiters) {
-          waiter.complete(node.value);
-        }
-      }
-      return CoreCause.empty;
+      _commitActivation(node, activation);
+      return const CoreCommitted();
     } on Object catch (error, stackTrace) {
       // A step failure is local to this region: cancel its token before the
       // first dispose function, so a worker of a completed step can stop.
-      final canceledBy = activation.token.reason;
-      if (canceledBy == null) activation.token.cancel(CancelReason.failure);
-      for (final dependency in activation.dependencies) {
-        dependency.dependents.remove(node);
-      }
+      final canceledBy = _cancelFailedActivation(node, activation);
       var rollback = activation.rollback;
       // The defect `DropLease` skips the release of the journal.
       if (!RuntimeFaults.injects(RuntimeDefect.dropLease)) {
         rollback = rollback.then(
           await runCleanups(
-            activation.cleanups.reversed,
+            activation.cleanups,
             '${node.label} activation rollback',
             episode: activation,
           ),
         );
       }
-      node
-        ..value = null
-        ..active = false;
-      // The fault publishes the staged values of the failed activation.
-      if (RuntimeFaults.breaks(RuntimeSelfCheckFault.atomicPublication)) {
-        for (final publisher in activation.staged) {
-          node.scope.bindings[publisher.key] = publisher;
-        }
-      }
-      assert(
-        RuntimeFaults.selfChecksMuted ||
-            activation.staged.every(
-              (publisher) =>
-                  !identical(node.scope.bindings[publisher.key], publisher),
-            ),
-        'SelfCheck AtomicPublication: ${node.label} failed, and a staged '
-        'publisher of it is in a scope binding',
+      return _failActivation(
+        node,
+        activation,
+        error,
+        stackTrace,
+        canceledBy: canceledBy,
+        rollback: rollback,
       );
-      // The defect `DropLate` drops the rollback failures of a canceled
-      // activation.
-      if (canceledBy != null && RuntimeFaults.injects(RuntimeDefect.dropLate)) {
-        rollback = CoreCause.empty;
-      }
-      final rollbackFailures = rollback.disposeFailures;
-      // The activation ended without a commit. A member of a running
-      // `initialize` whose activation failed keeps the phase `activating`:
-      // the rollback of that call disposes it.
-      void end({required bool failed}) {
-        if (identical(node.inFlight, activation)) node.inFlight = null;
-        if (failed && !node.scope.initialized) node.doomed = true;
-        nodeTransition(node);
-      }
+    } finally {
+      if (identical(node.inFlight, activation)) node.inFlight = null;
+    }
+  }
 
-      if (canceledBy == CancelReason.withdrawal && !node.disposalRequested) {
-        // Not a failure: the node stays inactive and waits for the
-        // withdrawal. Releases that failed during the rollback still count.
-        end(failed: false);
-        changes.reportCause(rollback);
-        return CoreCause.empty;
+  /// Opens the activation episode of [node]. The only writer of the fields
+  /// `inFlight` and `doomed` at the start of an activation.
+  _RuntimeActivation _beginActivation(_RuntimeNode node) {
+    final activation = _RuntimeActivation(this, node);
+    node
+      ..inFlight = activation
+      ..doomed = false
+      ..activationException = null;
+    nodeTransition(node);
+    return activation;
+  }
+
+  /// Publishes the staged values of [activation] and makes [node] active.
+  /// The only writer of the committed fields of a node. Throws
+  /// [DuplicateKeyError] before it writes anything.
+  void _commitActivation(_RuntimeNode node, _RuntimeActivation activation) {
+    final stagedKeys = <DiKeyBase>{};
+    for (final publisher in activation.staged) {
+      if (!stagedKeys.add(publisher.key) ||
+          node.scope.bindings.containsKey(publisher.key)) {
+        throw DuplicateKeyError(publisher.key);
       }
-      if (canceledBy != null) {
-        end(failed: true);
-        final cause = error is ActivationCanceledException
-            ? error.cause
-            : error;
-        return CoreInterrupt(
+    }
+    for (final publisher in activation.staged) {
+      node.scope.bindings[publisher.key] = publisher;
+      node.publishers.add(publisher);
+    }
+    commitDependencies(node, activation.dependencies);
+    node
+      ..cleanups = _RuntimeJournal.copyOf(activation.cleanups)
+      ..committed = Map<DiKeyBase, _RuntimePublisher>.of(activation.committed)
+      ..committedMembership = Map.of(activation.committedMembership)
+      ..active = true
+      ..reactivationBlocked = false
+      ..commits += 1;
+    // One transition: the keys resolve, and the node is active.
+    nodeTransition(
+      node,
+      keys: [for (final publisher in activation.staged) publisher.key],
+    );
+    final waiters = node.activationWaiters?.values.toList();
+    if (waiters != null) {
+      node.activationWaiters = null;
+      for (final waiter in waiters) {
+        waiter.complete(node.value);
+      }
+    }
+  }
+
+  /// The first step of a failed activation: cancels the token, when no
+  /// cancellation came first, and unlinks the reads. Returns the reason of
+  /// the cancellation that came first, or null.
+  CancelReason? _cancelFailedActivation(
+    _RuntimeNode node,
+    _RuntimeActivation activation,
+  ) {
+    final canceledBy = activation.token.reason;
+    if (canceledBy == null) activation.token.cancel(CancelReason.failure);
+    for (final dependency in activation.dependencies) {
+      dependency.dependents.remove(node);
+    }
+    return canceledBy;
+  }
+
+  /// The last step of an activation that did not commit, after its journal
+  /// was released. [rollback] holds the release failures of the rollback.
+  /// The only writer of the fields of a node that a failed activation
+  /// changes.
+  CoreActivationOutcome _failActivation(
+    _RuntimeNode node,
+    _RuntimeActivation activation,
+    Object error,
+    StackTrace stackTrace, {
+    required CancelReason? canceledBy,
+    required CoreCause rollback,
+  }) {
+    node
+      ..value = null
+      ..active = false;
+    // The fault publishes the staged values of the failed activation.
+    if (RuntimeFaults.breaks(RuntimeSelfCheckFault.atomicPublication)) {
+      for (final publisher in activation.staged) {
+        node.scope.bindings[publisher.key] = publisher;
+      }
+    }
+    assert(
+      RuntimeFaults.selfChecksMuted ||
+          activation.staged.every(
+            (publisher) =>
+                !identical(node.scope.bindings[publisher.key], publisher),
+          ),
+      'SelfCheck AtomicPublication: ${node.label} failed, and a staged '
+      'publisher of it is in a scope binding',
+    );
+    // The defect `DropLate` drops the rollback failures of a canceled
+    // activation.
+    if (canceledBy != null && RuntimeFaults.injects(RuntimeDefect.dropLate)) {
+      rollback = CoreCause.empty;
+    }
+    final rollbackFailures = rollback.disposeFailures;
+    if (canceledBy == CancelReason.withdrawal && !node.disposalRequested) {
+      // Not a failure: the node stays inactive and waits for the
+      // withdrawal. Releases that failed during the rollback still count.
+      _endActivation(node, activation, failed: false);
+      changes.reportCause(rollback);
+      return const CoreWithdrawn();
+    }
+    if (canceledBy != null) {
+      _endActivation(node, activation, failed: true);
+      final cause = error is ActivationCanceledException ? error.cause : error;
+      return CoreInterrupted(
+        CoreInterrupt(
           ActivationCanceledException(
             cause: cause,
             stackTrace: cause == null ? null : stackTrace,
             rollbackFailures: rollbackFailures,
           ),
           StackTrace.current,
-        );
-      }
-      // A canceled activation is not a failure, so only this path records
-      // one. The record keeps the cause and its stack trace for
-      // `ComponentNode.activationException`.
-      if ((error is DiError || error is DiException) &&
-          rollbackFailures.isEmpty) {
-        node.activationException = error is ActivationException
-            ? error
-            : ActivationException(error, stackTrace);
-        end(failed: true);
-        return CoreFail(error, stackTrace);
-      }
-      final failure = ActivationException(error, stackTrace, rollbackFailures);
-      node.activationException = failure;
-      end(failed: true);
-      return CoreFail(failure, StackTrace.current);
-    } finally {
-      if (identical(node.inFlight, activation)) node.inFlight = null;
+        ),
+      );
     }
+    // A canceled activation is not a failure, so only this path records
+    // one. The record keeps the cause and its stack trace for
+    // `ComponentNode.activationException`.
+    if ((error is DiError || error is DiException) &&
+        rollbackFailures.isEmpty) {
+      node.activationException = error is ActivationException
+          ? error
+          : ActivationException(error, stackTrace);
+      _endActivation(node, activation, failed: true);
+      return CoreFailed(CoreFail(error, stackTrace));
+    }
+    final failure = ActivationException(error, stackTrace, rollbackFailures);
+    node.activationException = failure;
+    _endActivation(node, activation, failed: true);
+    return CoreFailed(CoreFail(failure, StackTrace.current));
+  }
+
+  /// The activation ended without a commit. A member of a running
+  /// `initialize` whose activation failed keeps the phase `activating`: the
+  /// rollback of that call disposes it.
+  void _endActivation(
+    _RuntimeNode node,
+    _RuntimeActivation activation, {
+    required bool failed,
+  }) {
+    if (identical(node.inFlight, activation)) node.inFlight = null;
+    if (failed && !node.scope.initialized) node.doomed = true;
+    nodeTransition(node);
   }
 
   /// Cancels the activations in flight in [scope] and its descendants, at
   /// the `dispose` call and before its mutation reaches the queue.
   void requestScopeDisposal(_RuntimeScope scope) {
-    scope.disposeRequested = true;
+    scope.requestDisposal();
     for (final node in nodes) {
       if (node.scope.disposalRequested) {
         node.inFlight?.token.cancel(CancelReason.owner);
@@ -613,8 +675,8 @@ final class _Runtime {
       current != null;
       current = current.parent
     ) {
-      final queue = current.queueDisposal;
-      if (queue != null && subtreeHolds(current) == 0) queue();
+      final parked = current.parked;
+      if (parked != null && subtreeHolds(current) == 0) parked.queue();
     }
   }
 
@@ -627,8 +689,7 @@ final class _Runtime {
 
   /// The withdrawals requested and not yet finished: the disposed node, and
   /// every node that its withdrawal deactivates.
-  final List<({_RuntimeNode root, Set<_RuntimeNode> reach})>
-  pendingWithdrawals = [];
+  final List<_RuntimeWithdrawal> pendingWithdrawals = [];
 
   /// Records the withdrawal of [root] and cancels the activations in flight
   /// that read a value it withdraws, at the `dispose` call.
@@ -637,7 +698,7 @@ final class _Runtime {
         coreWithdrawalReach<_RuntimeScope, _RuntimePublisher, _RuntimeNode>(
           root,
         );
-    pendingWithdrawals.add((root: root, reach: reach));
+    pendingWithdrawals.add(_RuntimeWithdrawal(root, reach));
     for (final node in nodes) {
       final activation = node.inFlight;
       if (activation == null || node.disposalRequested) continue;
@@ -651,14 +712,14 @@ final class _Runtime {
   /// value that a node in [reach] publishes.
   bool _readsAny(
     _RuntimeNode node,
-    _RuntimeContext activation,
+    _RuntimeActivation activation,
     Set<_RuntimeNode> reach,
   ) => coreReadsOwner(node, activation.dependencies, reach.contains);
 
   /// The pending withdrawals that withdraw [publisher], or none.
   Iterable<_RuntimeNode> withdrawalsOf(_RuntimePublisher publisher) => [
     for (final pending in pendingWithdrawals)
-      if (pending.reach.contains(publisher.owner)) pending.root,
+      if (pending.reaches(publisher.owner)) pending.root,
   ];
 
   /// The withdrawal of [root] finished: nodes that waited for it may
@@ -715,12 +776,22 @@ final class _Runtime {
       unstarted--;
       unawaited(() async {
         try {
-          causes[index] = await activate(nodes[index]);
+          switch (await activate(nodes[index])) {
+            case CoreInterrupted(:final interrupt):
+              causes[index] = interrupt;
+              failed = true;
+            case CoreFailed(:final failure):
+              causes[index] = failure;
+              failed = true;
+            // A member that did not commit, and did not fail, stops no one.
+            case CoreCommitted() || CoreNotStarted() || CoreWithdrawn():
+              break;
+          }
         } on Object catch (error, stackTrace) {
           // A throw of the runtime itself fails the member.
           causes[index] = CoreFail(error, stackTrace);
+          failed = true;
         }
-        if (!causes[index].isEmpty) failed = true;
         inFlight--;
         settle(index);
         pump();
@@ -764,27 +835,7 @@ final class _Runtime {
       return CoreCause.empty;
     }
 
-    node.deactivating = true;
-    // The token of an activation lives as long as the activation.
-    node.activationContext?.token.cancel(CancelReason.deactivation);
-
-    // Leave the publisher set before waiting on dependents. Their releases
-    // run first, while this node's values are still alive.
-    final withdrawn = <DiKeyBase>[];
-    for (final publisher in node.publishers) {
-      if (publisher.available) {
-        publisher.available = false;
-        withdrawn.add(publisher.key);
-      }
-    }
-    // One transition: the keys do not resolve to the node, and its release
-    // runs. The defect `SilentReleaseStart` calls no listener for it.
-    nodeTransition(
-      node,
-      keys: withdrawn,
-      withdrawal: true,
-      silent: RuntimeFaults.injects(RuntimeDefect.silentReleaseStart),
-    );
+    _beginRelease(node);
 
     final orderedDependents = coreDependentsOf(node);
 
@@ -822,11 +873,50 @@ final class _Runtime {
 
     node.activationContext?.tearingDown = true;
     final ownCause = await runCleanups(
-      node.cleanups.reversed,
+      node.cleanups,
       node.label,
       episode: node.activationContext,
     );
 
+    _endRelease(node, ownCause, permanent: permanent);
+    return dependentCause.then(ownCause);
+  }
+
+  /// Starts the release of [node]: marks it as deactivating and withdraws its
+  /// publishers. [_endRelease] ends the release. The two methods are the only
+  /// writers of `deactivating`.
+  void _beginRelease(_RuntimeNode node) {
+    node.deactivating = true;
+    // The token of an activation lives as long as the activation.
+    node.activationContext?.token.cancel(CancelReason.deactivation);
+
+    // Leave the publisher set before waiting on dependents. Their releases
+    // run first, while this node's values are still alive.
+    final withdrawn = <DiKeyBase>[];
+    for (final publisher in node.publishers) {
+      if (publisher.available) {
+        publisher.available = false;
+        withdrawn.add(publisher.key);
+      }
+    }
+    // One transition: the keys do not resolve to the node, and its release
+    // runs. The defect `SilentReleaseStart` calls no listener for it.
+    nodeTransition(
+      node,
+      keys: withdrawn,
+      withdrawal: true,
+      silent: RuntimeFaults.injects(RuntimeDefect.silentReleaseStart),
+    );
+  }
+
+  /// Ends the release of [node], after its journal ran. [ownCause] holds the
+  /// dispose failures of the node. A permanent release removes the node. The
+  /// only writer of the fields that a release clears.
+  void _endRelease(
+    _RuntimeNode node,
+    CoreCause ownCause, {
+    required bool permanent,
+  }) {
     for (final publisher in node.publishers) {
       if (identical(node.scope.bindings[publisher.key], publisher)) {
         node.scope.bindings.remove(publisher.key);
@@ -854,7 +944,6 @@ final class _Runtime {
       node,
       keys: permanent ? node.declaredPublishes : const <DiKeyBase>[],
     );
-    return dependentCause.then(ownCause);
   }
 
   /// Brings every node to its target: rebuilds active nodes whose resolved
@@ -935,10 +1024,17 @@ final class _Runtime {
               .toList()
             ..sort((left, right) => left.id.compareTo(right.id));
       for (final node in dormant) {
-        final cause = await activate(node);
-        if (cause.isEmpty) {
-          progressed = true;
-          continue;
+        final CoreCause cause;
+        switch (await activate(node)) {
+          // The pass made no failure, so it can make more nodes ready. A node
+          // that did not start, or that waits for a withdrawal, counts too.
+          case CoreCommitted() || CoreNotStarted() || CoreWithdrawn():
+            progressed = true;
+            continue;
+          case CoreInterrupted(:final interrupt):
+            cause = interrupt;
+          case CoreFailed(:final failure):
+            cause = failure;
         }
         failed.add(node);
         if (sink != null && sink.members.contains(node)) {
@@ -1001,7 +1097,7 @@ final class _Runtime {
   }) async {
     final subtree = <_RuntimeScope>[];
     void collect(_RuntimeScope current) {
-      current.disposing = true;
+      current.markDisposing();
       subtree.add(current);
       for (final child in current.children) {
         collect(child);
@@ -1024,9 +1120,7 @@ final class _Runtime {
 
     for (final current in subtree.reversed) {
       current.bindings.clear();
-      current
-        ..disposed = true
-        ..disposing = false;
+      current.markDisposed();
       current.parent?.children.remove(current);
       final public = current.public;
       if (public != null) scopes.remove(public);
@@ -1050,9 +1144,9 @@ final class _Runtime {
   /// Releases the journal [cleanups] of [owner], last entry first. [episode]
   /// is the activation that owns the journal, or null.
   Future<CoreCause> runCleanups(
-    Iterable<DisposeFunction> cleanups,
+    _RuntimeJournal cleanups,
     String owner, {
-    _RuntimeContext? episode,
+    _RuntimeActivation? episode,
   }) async {
     var failures = CoreCause.empty;
     // A dispose function that threw is a [CoreDie]. A [DisposeException]
@@ -1071,8 +1165,8 @@ final class _Runtime {
         : 1;
     // The defect `AcqOrder` releases the journal first entry first.
     final ordered = RuntimeFaults.injects(RuntimeDefect.acqOrder)
-        ? cleanups.toList().reversed
-        : cleanups;
+        ? cleanups.lastFirst.toList().reversed
+        : cleanups.lastFirst;
     Future<void> release(DisposeFunction cleanup) async {
       try {
         await cleanup();
@@ -1114,7 +1208,7 @@ final class _Runtime {
   void addDependency(
     _RuntimeNode node,
     _RuntimePublisher publisher,
-    _RuntimeContext activation,
+    _RuntimeActivation activation,
   ) {
     final owner = publisher.owner;
     if (identical(owner, node)) {

@@ -473,14 +473,14 @@ tags: [runtime, lifecycle, decisions]
 - Context: `runtime_state.dart` held the state of a scope, the internal key of a set contribution, the state of a node, and the activation context. A reader who looked for the scope state or for a key type did not find it in `scope.dart` or `key.dart`.
 - Decision: `_Scope` is in `scope.dart`, next to `DiScope`. The key of a set contribution is `DiContributionKey` in `key.dart`, with the other key types. `key.dart` is a library of its own, so the type cannot have a private name; the package library hides it, as it hides `Lease` and `CancellationSource`. `_ActivationContext` is in `runtime_context.dart`, a part of the scope library. It cannot move to `context.dart`, because it reads the private state of the runtime, and the dependency layer imports `context.dart`.
 - Consequences: No behavior and no public API changes. `runtime_state.dart` keeps `_Publisher` and `_Node`. Every key type, internal or public, has the form `Di` plus a kind plus `Key`. The scenario manifests list the files that now hold the code that their models name.
-- References: [building blocks](spec.md#building-blocks), [key.dart](../../../packages/fp_di/lib/src/model/key.dart), [scope.dart](../../../packages/fp_di/lib/src/runtime/scope.dart), [runtime_context.dart](../../../packages/fp_di/lib/src/runtime/runtime_context.dart).
+- References: [building blocks](spec.md#building-blocks), [key.dart](../../../packages/fp_di/lib/src/model/key.dart), [scope.dart](../../../packages/fp_di/lib/src/runtime/scope.dart), [runtime_context.dart](../../../packages/fp_di/lib/src/runtime/runtime_activation.dart).
 
 ## [2026-11-11] decision | Name the activation context _RuntimeContext
 
 - Context: The runtime implementation of `DiContext` was `_ActivationContext` in `runtime_context.dart`. The file and the class had two names.
 - Decision: The class is `_RuntimeContext`. The runtime still creates one for each activation of a node.
 - Consequences: No behavior changes. Earlier entries and the research notes keep the name `_ActivationContext`.
-- References: [runtime_context.dart](../../../packages/fp_di/lib/src/runtime/runtime_context.dart).
+- References: [runtime_context.dart](../../../packages/fp_di/lib/src/runtime/runtime_activation.dart).
 
 ## [2026-11-11] decision | Give the internal types of the runtime the prefix Runtime
 
@@ -769,4 +769,18 @@ tags: [runtime, lifecycle, decisions]
 - Decision: Activations, the members of an `initialize`, releases, and teardowns return a `RuntimeCause` with the shape of that `Cause`, in a library that is not exported. A projection at each boundary makes the exception that the public API throws or reports. A `RuntimeBoth` follows declaration order, so the rollback failures of the other failed members now attach in declaration order.
 - Consequences: The public API keeps its types and objects. One observable change: the order of those rollback failures no longer depends on timing. The internal cause keeps every failure, so a later public field can expose them without a change of the runtime paths. The core still has no dependency on fpdart.
 - References: [failure values](spec.md#failure-values-inside-the-runtime), [R-UC-RT-LC-014](requirements.md#r-uc-rt-lc-014), `fp_di_fpdart` `Cause`.
+
+## [2026-11-16] decision | Name the concepts of the runtime as types
+
+- Context: The runtime expressed an activation, a release, a withdrawal, the shared result of a disposal, a disposal that waits for holds, and the lifecycle of a scope through fields, anonymous records, and booleans that several methods wrote. `activate` returned an empty cause for a commit, for an attempt that did not start, and for a cancellation by a withdrawal. `fp_di_fpdart` names each of these concepts as a type.
+- Decision: The runtime has a type or a named transition for each concept: `_RuntimeActivation`, `CoreActivationOutcome`, `_RuntimeJournal`, `_beginRelease` and `_endRelease`, `_RuntimeWithdrawal`, `_RuntimeDisposal`, `_RuntimeParkedDisposal`, and the scope transitions with the table `coreScopeTransition`. Each transition is the only writer of its fields. The object graph and its changes in place stay.
+- Consequences: A caller of `activate` sees why an attempt did not commit. The new self-check `ScopeTransition` rejects a write of the scope flags that the table does not allow. The table allows a second disposal request, which only the defect `lateReentrancyCheck` makes, so the self-check does not catch a repeated request. The public behavior and the costs do not change.
+- References: [named concepts](spec.md#named-concepts-inside-the-runtime), `fp_di_fpdart` `Activation`, `Withdrawal`, `Disposal`, `Parked`.
+
+## [2026-11-16] decision | Hold the program of a Dependency as data
+
+- Context: A `Dependency` held one closure for its program and computed its shape beside it. The program could not be read, and the shape and the program were two descriptions of one value. `fp_di_fpdart` holds its program as a free applicative with interpreters.
+- Decision: A `Dependency` holds a tree of private step nodes. One interpreter runs the tree, and another derives the shape, which the `Dependency` keeps from its construction. A trace test fixes the suspensions, checkpoints, and context calls of each step to their values before the change.
+- Consequences: The public API, the shape, and the order of suspensions do not change. A new reading of the program, such as a static check or an export, can add an interpreter without a new closure. The user functions of `create`, `dispose`, and `map` stay functions.
+- References: [named concepts](spec.md#named-concepts-inside-the-runtime), [dependency.dart](../../../packages/fp_di/lib/src/model/dependency.dart), `fp_di_fpdart` `DependencyNode`.
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import '../core/core_activation.dart';
 import '../core/core_cause.dart';
 import '../core/core_describe.dart';
 import '../core/core_graph.dart';
@@ -9,6 +10,7 @@ import '../core/core_plan.dart';
 import '../core/core_resolve.dart';
 import '../core/core_scope.dart';
 import '../core/core_search.dart';
+import '../core/core_transition.dart';
 import '../model/cancellation.dart';
 import '../model/change.dart';
 import '../model/component.dart';
@@ -24,11 +26,12 @@ import 'runtime_faults.dart';
 import 'runtime_inspector_hooks.dart';
 import 'runtime_teardown.dart';
 
-part 'runtime_change_broadcaster.dart';
-part 'runtime_mutation_queue.dart';
 part 'runtime.dart';
-part 'runtime_context.dart';
+part 'runtime_activation.dart';
+part 'runtime_change_broadcaster.dart';
 part 'runtime_inspector.dart';
+part 'runtime_journal.dart';
+part 'runtime_mutation_queue.dart';
 part 'runtime_state.dart';
 
 /// A hierarchical dependency environment and lifecycle owner.
@@ -171,7 +174,7 @@ final class Scope {
         // One transition: the scope has its nodes, and `initialize` runs.
         _scope
           ..nodes = List<_RuntimeNode>.unmodifiable(nodes)
-          ..initializing = true;
+          ..beginInitialize();
         _runtime
           ..markChanged(_scope)
           ..scopeTransition([_scope]);
@@ -203,7 +206,7 @@ final class Scope {
         // The rollback ended. The scope is `declared` again, without nodes,
         // only when no disposal was requested. Otherwise the phase stays
         // `disposeRequested`, and the state keeps the disposed nodes.
-        _scope.initializing = false;
+        _scope.rollbackInitialize();
         if (!_scope.disposalRequested) {
           _scope.nodes = const [];
           _runtime.markChanged(_scope);
@@ -225,8 +228,7 @@ final class Scope {
         ..handles = List<ComponentNode<Object?>>.unmodifiable([
           for (final node in nodes) _handleOf<Object?>(node),
         ])
-        ..initialized = true
-        ..initializing = false;
+        ..finishInitialize();
       _runtime.scopeTransition([_scope]);
       return this;
     });
@@ -262,10 +264,11 @@ final class Scope {
     }
     // After the disposal finished, a later call does nothing; its result
     // went to the calls made while it ran.
-    if (owner != null && owner.disposalFinished) {
+    final joined = owner?.disposal;
+    if (joined != null && joined.finished) {
       // The defect replays the result of the finished disposal.
       if (RuntimeFaults.injects(RuntimeDefect.replayAfterEnd)) {
-        return owner.disposal!;
+        return joined.result;
       }
       return Future.value();
     }
@@ -289,16 +292,19 @@ final class Scope {
     // completes with the disposal that is in progress.
     if (owner != null) {
       // A call that ignores the holds ends the wait of the disposal it joins.
-      final queue = owner.queueDisposal;
-      if (ignoreHolds && queue != null) {
+      final parked = owner.parked;
+      if (ignoreHolds && parked != null) {
         // The disposal reports the ignored holds after its start transition.
-        queue(_runtime.holdStatesOf(owner));
+        parked.queue(_runtime.holdStatesOf(owner));
       }
       // The defect `SecondCallerOk` hides the result from a joining call.
       if (RuntimeFaults.injects(RuntimeDefect.secondCallerOk)) {
-        return owner.disposal!.then<void>((_) {}, onError: (Object _) {});
+        return owner.disposal!.result.then<void>(
+          (_) {},
+          onError: (Object _) {},
+        );
       }
-      return owner.disposal!;
+      return owner.disposal!.result;
     }
     // Cancel the setup in flight now, before the disposal waits in the queue.
     _runtime.requestScopeDisposal(_scope);
@@ -310,16 +316,12 @@ final class Scope {
     void queue([List<HoldState> ignored = const []]) {
       if (queued) return;
       queued = true;
-      _scope.holdTimer?.cancel();
-      _scope
-        ..queueDisposal = null
-        ..heldResult = null
-        ..holdTimer = null;
+      _scope.endWaitForHolds();
       // A waiting disposal of a descendant completes with this one, which
       // releases its nodes.
       final waiting = [
         for (final scope in _runtime.subtreeOf(_scope))
-          if (!identical(scope, _scope) && scope.queueDisposal != null) scope,
+          if (!identical(scope, _scope) && scope.parked != null) scope,
       ];
       final zone = _runtime.mutations.inMutation ? callerZone : Zone.current;
       final disposal = zone.run(
@@ -332,7 +334,7 @@ final class Scope {
               scope = scope.parent
             ) {
               final ancestor = scope.disposal;
-              if (ancestor != null) return ancestor;
+              if (ancestor != null) return ancestor.result;
             }
             return;
           }
@@ -350,12 +352,7 @@ final class Scope {
       );
       result.complete(disposal);
       for (final scope in waiting) {
-        final held = scope.heldResult;
-        scope.holdTimer?.cancel();
-        scope
-          ..queueDisposal = null
-          ..heldResult = null
-          ..holdTimer = null;
+        final held = scope.endWaitForHolds()?.result;
         // The defect `loseHeldCaller` leaves the waiting call incomplete.
         if (!RuntimeFaults.injects(RuntimeDefect.loseHeldCaller)) {
           held?.complete(disposal);
@@ -364,11 +361,7 @@ final class Scope {
     }
 
     final disposal = result.future;
-    _scope.disposal = disposal;
-    disposal.then<void>(
-      (_) => _scope.disposalFinished = true,
-      onError: (Object _) => _scope.disposalFinished = true,
-    );
+    _scope.disposal = _RuntimeDisposal(disposal);
     final ignored = ignoreHolds
         ? _runtime.holdStatesOf(_scope)
         : const <HoldState>[];
@@ -378,10 +371,11 @@ final class Scope {
         _runtime.subtreeHolds(_scope) == 0) {
       queue(ignored);
     } else {
-      _scope
-        ..queueDisposal = queue
-        ..heldResult = result
-        ..holdTimer = _watchHolds(callerZone);
+      _scope.parked = _RuntimeParkedDisposal(
+        queue: queue,
+        result: result,
+        timer: _watchHolds(callerZone),
+      );
     }
     // The call is accepted: the disposal is recorded, and queued or waiting
     // for holds. A listener of this transition that calls `dispose` joins
@@ -757,7 +751,7 @@ final class Scope {
 
   Future<void> _disposeNode(_RuntimeNode node) {
     final pending = node.disposal;
-    if (pending != null && node.disposalFinished) return Future.value();
+    if (pending != null && pending.finished) return Future.value();
     if (pending == null && node.removed) return Future.value();
     // As for a scope: reject a reentrant call before sharing a disposal.
     if (_runtime.mutations.inMutation) {
@@ -766,7 +760,7 @@ final class Scope {
         StackTrace.current,
       );
     }
-    if (pending != null) return pending;
+    if (pending != null) return pending.result;
     _runtime.requestNodeDisposal(node);
     final disposal = _runtime.mutate('ComponentNode.dispose', () async {
       if (node.removed) {
@@ -779,11 +773,7 @@ final class Scope {
       await _runtime.reconcile();
       released.throwDisposeError();
     });
-    node.disposal = disposal;
-    disposal.then<void>(
-      (_) => node.disposalFinished = true,
-      onError: (Object _) => node.disposalFinished = true,
-    );
+    node.disposal = _RuntimeDisposal(disposal);
     return disposal;
   }
 }
@@ -872,12 +862,23 @@ final class _RuntimeScope
     }
     return result;
   }();
+
+  // The flags `initialized`, `initializing`, `disposeRequested`, `disposing`,
+  // and `disposed` hold the lifecycle of this scope. Only the transition
+  // methods `beginInitialize` to `markDisposed` write them, and each method
+  // asks the table of `core_transition.dart` first.
+
+  /// `initialize` completed for this scope.
+  bool _initialized = false;
+
   @override
-  bool initialized = false;
+  bool get initialized => _initialized;
 
   /// The `initialize` mutation of this scope runs.
+  bool _initializing = false;
+
   @override
-  bool initializing = false;
+  bool get initializing => _initializing;
 
   /// The nodes of this scope in declaration order, from their creation by
   /// `initialize`. A disposed node stays at its position. Empty before
@@ -909,41 +910,128 @@ final class _RuntimeScope
 
   /// The public scope of this state.
   Scope? public;
+
+  /// The disposal mutation of this scope or of an ancestor runs.
+  bool _disposing = false;
+
   @override
-  bool disposing = false;
+  bool get disposing => _disposing;
+
+  /// The disposal mutation released the nodes of this scope.
+  bool _disposed = false;
+
   @override
-  bool disposed = false;
+  bool get disposed => _disposed;
 
   /// `dispose` was called, and its mutation has not finished. Set at the
   /// call, before the mutation reaches the queue.
+  bool _disposeRequested = false;
+
   @override
-  bool disposeRequested = false;
+  bool get disposeRequested => _disposeRequested;
 
-  /// The result of the first `dispose` call, which a repeated call shares.
-  Future<void>? disposal;
+  /// `initialize` creates the nodes and starts to run.
+  void beginInitialize() {
+    final next = _expect(CoreScopeEvent.beginInitialize);
+    _initializing = true;
+    _confirm(CoreScopeEvent.beginInitialize, next);
+  }
 
-  /// Whether [disposal] completed. The scope is marked disposed earlier.
-  bool disposalFinished = false;
+  /// `initialize` ended with success.
+  void finishInitialize() {
+    final next = _expect(CoreScopeEvent.finishInitialize);
+    _initialized = true;
+    _initializing = false;
+    _confirm(CoreScopeEvent.finishInitialize, next);
+  }
+
+  /// `initialize` ended with a rollback.
+  void rollbackInitialize() {
+    final next = _expect(CoreScopeEvent.rollbackInitialize);
+    // The fault leaves the flag set.
+    if (!RuntimeFaults.breaks(RuntimeSelfCheckFault.scopeTransition)) {
+      _initializing = false;
+    }
+    _confirm(CoreScopeEvent.rollbackInitialize, next);
+  }
+
+  /// A `dispose` call was accepted for this scope.
+  void requestDisposal() {
+    final next = _expect(CoreScopeEvent.requestDisposal);
+    _disposeRequested = true;
+    _confirm(CoreScopeEvent.requestDisposal, next);
+  }
+
+  /// The disposal mutation of this scope, or of an ancestor, starts.
+  void markDisposing() {
+    final next = _expect(CoreScopeEvent.markDisposing);
+    _disposing = true;
+    _confirm(CoreScopeEvent.markDisposing, next);
+  }
+
+  /// The disposal mutation released the nodes of this scope.
+  void markDisposed() {
+    final next = _expect(CoreScopeEvent.markDisposed);
+    _disposed = true;
+    _disposing = false;
+    _confirm(CoreScopeEvent.markDisposed, next);
+  }
+
+  /// The own phase that [event] gives from the own phase now. The method
+  /// reads the table only inside an `assert`, so it returns null when the
+  /// self-checks are off or muted. It throws when the table forbids [event].
+  ScopePhase? _expect(CoreScopeEvent event) {
+    ScopePhase? next;
+    assert(() {
+      if (RuntimeFaults.selfChecksMuted) return true;
+      next = coreScopeTransition(coreOwnScopePhase(this), event);
+      if (next == null) {
+        throw AssertionError(
+          'SelfCheck ScopeTransition: ${event.name} is not allowed in the '
+          'phase ${coreOwnScopePhase(this).name}',
+        );
+      }
+      return true;
+    }());
+    return next;
+  }
+
+  /// Checks that the flags after [event] give the phase that [expected]
+  /// names. [expected] is null when [_expect] did not run.
+  void _confirm(CoreScopeEvent event, ScopePhase? expected) {
+    assert(
+      RuntimeFaults.selfChecksMuted ||
+          expected == null ||
+          coreOwnScopePhase(this) == expected,
+      'SelfCheck ScopeTransition: ${event.name} leaves the phase '
+      '${coreOwnScopePhase(this).name}, not ${expected.name}',
+    );
+  }
+
+  /// The disposal that the first `dispose` call started, which a repeated
+  /// call shares. The scope is marked disposed before the disposal finishes.
+  _RuntimeDisposal? disposal;
 
   /// The open holds of the disposal of this scope.
   final Set<_RuntimeHold> holds = <_RuntimeHold>{};
 
-  /// Reports a long wait for holds to the listener of slow work, or null.
-  Timer? holdTimer;
+  /// The disposal of this scope while it waits for holds, or null.
+  _RuntimeParkedDisposal? parked;
 
-  /// Queues the disposal mutation of this scope while its disposal waits
-  /// for holds, or null. The argument lists the holds that a call ignores.
-  void Function([List<HoldState> ignored])? queueDisposal;
+  /// Ends the wait of the disposal of this scope: stops its timer and
+  /// forgets it. Returns the disposal that waited, or null.
+  _RuntimeParkedDisposal? endWaitForHolds() {
+    final waiting = parked;
+    waiting?.timer?.cancel();
+    parked = null;
+    return waiting;
+  }
 
   @override
-  bool get waitsForHolds => queueDisposal != null;
+  bool get waitsForHolds => parked != null;
 
   @override
   int get holdCount => holds.length;
-
-  /// The result of the disposal of this scope while it waits for holds. A
-  /// disposal of an ancestor that releases this scope completes it.
-  Completer<void>? heldResult;
 
   /// Whether the disposal of this scope or an ancestor was requested.
   bool get disposalRequested => coreDisposalRequested(this);

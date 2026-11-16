@@ -94,8 +94,8 @@ flowchart LR
 |---|---|
 | Typed binding identity, collection keys, and entry keys | [DiKey, DiMapEntryKey, DiSetKey, DiMapKey](../../../packages/fp_di/lib/src/model/key.dart) |
 | Component, publication, and live nodes | [Component](../../../packages/fp_di/lib/src/model/component.dart) |
-| Key reads and their shape | [Dependency](../../../packages/fp_di/lib/src/model/dependency.dart) |
-| Scope API, interpreter, staging, graph | [Scope](../../../packages/fp_di/lib/src/runtime/scope.dart), [runtime](../../../packages/fp_di/lib/src/runtime/runtime.dart), [runtime mutation queue](../../../packages/fp_di/lib/src/runtime/runtime_mutation_queue.dart), [runtime change broadcaster](../../../packages/fp_di/lib/src/runtime/runtime_change_broadcaster.dart), [runtime state](../../../packages/fp_di/lib/src/runtime/runtime_state.dart), [runtime context](../../../packages/fp_di/lib/src/runtime/runtime_context.dart), [state values](../../../packages/fp_di/lib/src/model/state.dart), [slow-mutation report](../../../packages/fp_di/lib/src/model/change.dart) |
+| Key reads, their shape, and the program of steps | [Dependency](../../../packages/fp_di/lib/src/model/dependency.dart) |
+| Scope API, interpreter, staging, graph | [Scope](../../../packages/fp_di/lib/src/runtime/scope.dart), [runtime](../../../packages/fp_di/lib/src/runtime/runtime.dart), [runtime mutation queue](../../../packages/fp_di/lib/src/runtime/runtime_mutation_queue.dart), [runtime change broadcaster](../../../packages/fp_di/lib/src/runtime/runtime_change_broadcaster.dart), [runtime state](../../../packages/fp_di/lib/src/runtime/runtime_state.dart), [runtime activation](../../../packages/fp_di/lib/src/runtime/runtime_activation.dart), [runtime journal](../../../packages/fp_di/lib/src/runtime/runtime_journal.dart), [state values](../../../packages/fp_di/lib/src/model/state.dart), [slow-mutation report](../../../packages/fp_di/lib/src/model/change.dart) |
 | Module value, edits, and shape | [Module](../../../packages/fp_di/lib/src/model/module.dart) |
 | Order exploration for tests (designed, not implemented; G-RT-LC-014) | `package:fp_di/testing.dart` |
 | Shape export for tool scripts | [ShapeGraph](../../../packages/fp_di/lib/src/model/shape_graph.dart), through [tooling.dart](../../../packages/fp_di/lib/tooling.dart) |
@@ -1982,6 +1982,30 @@ The public exceptions, their fields, and their orders are the contract of the
 sections above. The cause keeps every failure of the operation, also those
 that the public error leaves out.
 
+### Named concepts inside the runtime
+
+The runtime names each concept of the lifecycle as a type, as `fp_di_fpdart`
+does. It keeps its object graph and changes fields in place, so a change costs
+constant time.
+
+| Concept | Type | Rule |
+|---|---|---|
+| One activation of a node | `_RuntimeActivation`, which also implements `DiContext` | `activate` begins, commits, fails, and ends it in named steps; each step is the only writer of its node fields |
+| The result of one attempt to activate | `CoreActivationOutcome`: `CoreCommitted`, `CoreNotStarted` with a reason, `CoreWithdrawn`, `CoreInterrupted`, `CoreFailed` | a caller switches on the outcome; a cancellation by a withdrawal is not a failure |
+| The dispose functions of an activation | `_RuntimeJournal` | a release runs the newest entry first; a commit copies the journal |
+| The release of a node | `_beginRelease` and `_endRelease` of `deactivate` | each is the only writer of its node fields |
+| A pending withdrawal | `_RuntimeWithdrawal`: the node and the nodes that its release deactivates | the runtime takes the reach when it accepts the request |
+| The shared result of a disposal | `_RuntimeDisposal`, for a scope and for a node | every caller of one disposal receives its result |
+| A disposal that waits for holds | `_RuntimeParkedDisposal` | it leaves the queue of mutations until the last hold closes or `ignoreHolds` ends the wait |
+| The lifecycle flags of a scope | the transitions `beginInitialize`, `finishInitialize`, `rollbackInitialize`, `requestDisposal`, `markDisposing`, `markDisposed` | each is the only writer of its flags; the self-check `ScopeTransition` asks the table `coreScopeTransition` |
+
+A `Dependency` holds its program as data: a tree of steps for a creation, a
+cancellation token, a read of a key or a collection, a read of several keys,
+a step of `map`, a `zip`, and `lazy`. One interpreter runs the tree at
+activation, with the same suspensions and checkpoints as the closures before
+it. Another interpreter derives the shape, and the `Dependency` keeps that
+shape from its construction. The functions of the user stay functions.
+
 ### Self-checks and runtime cost
 
 The runtime keeps two kinds of checks. A public check rejects a misuse by the
@@ -2000,6 +2024,7 @@ whenever the runtime is correct. Self-checks run only inside `assert`
 | `AtomicPublication` | after a failed activation, no staged publisher of it is in a scope binding | `AtomicPublication` |
 | `ReadsWithinShape` | each key that an activation reads is in the shape of its `Dependency`: `requires`, `optional`, `collectionKeys`, or `optionalCollectionKeys` | none; R-UC-RT-LC-001 |
 | `SerialMutations` | at most one mutation of a runtime runs at a time | none; R-UC-RT-LC-002 |
+| `ScopeTransition` | before and after each write of the lifecycle flags of a scope, the table `coreScopeTransition` allows the event in the phase that the own flags of the scope give | none; R-UC-RT-LC-028 |
 | `StateCurrent` | at each transition and at the end of each mutation, the `NodeState` of each node is the value that the fields of the node give, and the phase of each scope is the phase that its fields give. No index of the state holds an entry without a node, or a disposed node. A runtime of more than 512 nodes skips the check. | none; R-UC-RT-LC-028 |
 
 A self-check MUST NOT change runtime state, call user code, or complete a

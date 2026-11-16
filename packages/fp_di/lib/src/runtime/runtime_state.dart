@@ -3,7 +3,7 @@ part of 'scope.dart';
 // The state that the runtime keeps for each node and publication. A member
 // that only reads the state delegates to a rule of `core/`. The state of a
 // scope is `_RuntimeScope` in scope.dart, and the context of one activation
-// is `_RuntimeContext` in runtime_context.dart.
+// is `_RuntimeActivation` in runtime_activation.dart.
 
 /// The key under which one declared set contribution publishes. Each
 /// declaration has its own key, so every contribution is one binding of one
@@ -31,9 +31,69 @@ final Expando<Set<int>> _releaseStarts = Expando<Set<int>>('release starts');
 /// Records that the release of journal entry [position] of [episode] starts,
 /// and tells whether it is the first start. A release without an episode has
 /// nothing to record.
-bool _startRelease(_RuntimeContext? episode, int position) {
+bool _startRelease(_RuntimeActivation? episode, int position) {
   if (episode == null) return true;
   return (_releaseStarts[episode] ??= <int>{}).add(position);
+}
+
+/// The shared result of a disposal, and whether it completed.
+///
+/// Each call that joins the disposal of a scope or of a node gets [result].
+/// A call after [finished] gets nothing.
+final class _RuntimeDisposal {
+  /// Records that [result] completed, with a value or with an error, when it
+  /// does. The constructor registers the record before any caller reads
+  /// [result].
+  _RuntimeDisposal(this.result) {
+    result.then<void>(
+      (_) => finished = true,
+      onError: (Object _) => finished = true,
+    );
+  }
+
+  /// The result of the disposal. It completes after the whole mutation, which
+  /// can still run after the scope is marked disposed.
+  final Future<void> result;
+
+  /// Whether [result] completed.
+  bool finished = false;
+}
+
+/// A scope disposal that was requested and waits for the open holds of its
+/// subtree. The disposal mutation is not on the queue yet.
+final class _RuntimeParkedDisposal {
+  _RuntimeParkedDisposal({
+    required this.queue,
+    required this.result,
+    required this.timer,
+  });
+
+  /// Puts the disposal mutation on the queue. The argument lists the holds
+  /// that a call ignores.
+  final void Function([List<HoldState> ignored]) queue;
+
+  /// The result that the waiting `dispose` call returned. A disposal of an
+  /// ancestor that releases the scope completes it.
+  final Completer<void> result;
+
+  /// Reports a long wait to the listener of slow work, or null.
+  final Timer? timer;
+}
+
+/// A withdrawal that was requested and has not finished: the disposal of
+/// [root], and the nodes that the disposal deactivates.
+final class _RuntimeWithdrawal {
+  _RuntimeWithdrawal(this.root, this.reach);
+
+  /// The node whose disposal was requested.
+  final _RuntimeNode root;
+
+  /// [root] and every node that its withdrawal deactivates, as of the
+  /// request.
+  final Set<_RuntimeNode> reach;
+
+  /// Whether this withdrawal withdraws the values that [owner] published.
+  bool reaches(_RuntimeNode owner) => reach.contains(owner);
 }
 
 final class _RuntimePublisher implements CorePublisher<_RuntimeNode> {
@@ -149,7 +209,7 @@ final class _RuntimeNode
   @override
   bool doomed = false;
   Object? value;
-  List<DisposeFunction> cleanups = <DisposeFunction>[];
+  _RuntimeJournal cleanups = _RuntimeJournal();
   @override
   Set<_RuntimePublisher> dependencies = <_RuntimePublisher>{};
 
@@ -169,10 +229,10 @@ final class _RuntimeNode
   @override
   Map<DiCollectionKey<Object?>, List<DiKeyBase>> committedMembership =
       <DiCollectionKey<Object?>, List<DiKeyBase>>{};
-  _RuntimeContext? activationContext;
+  _RuntimeActivation? activationContext;
 
   /// The activation that is running now, or null.
-  _RuntimeContext? inFlight;
+  _RuntimeActivation? inFlight;
 
   @override
   bool get activationInFlight => inFlight != null;
@@ -180,11 +240,8 @@ final class _RuntimeNode
   /// `ComponentNode.dispose` was called for this node.
   bool disposeRequested = false;
 
-  /// The result of the first `ComponentNode.dispose` call.
-  Future<void>? disposal;
-
-  /// Whether [disposal] completed.
-  bool disposalFinished = false;
+  /// The disposal that the first `ComponentNode.dispose` call started.
+  _RuntimeDisposal? disposal;
 
   /// The withdrawals that canceled an activation of this node and have not
   /// finished. The node stays inactive until the set is empty.

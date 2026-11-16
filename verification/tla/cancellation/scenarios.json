@@ -5,7 +5,7 @@
     "packages/fp_di/lib/src/runtime/runtime_mutation_queue.dart",
     "packages/fp_di/lib/src/runtime/runtime.dart",
     "packages/fp_di/lib/src/runtime/runtime_state.dart",
-    "packages/fp_di/lib/src/runtime/runtime_context.dart",
+    "packages/fp_di/lib/src/runtime/runtime_activation.dart",
     "packages/fp_di/lib/src/runtime/scope.dart",
     "packages/fp_di/lib/src/model/dependency.dart",
     "packages/fp_di/lib/src/model/lease.dart",

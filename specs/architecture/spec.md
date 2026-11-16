@@ -88,7 +88,7 @@ The core keeps its implementation in three folders under
 | Folder | Holds | Rule |
 |---|---|---|
 | `model/` | The declarations and values: keys, `Dependency`, `Component`, `Module`, `DiContext`, changes, errors, exceptions, cancellation, and `ShapeGraph` | A file MUST NOT import a file of `core/` or `runtime/` |
-| `core/` | The pure rules of the runtime: queries over read-only views of scopes, nodes, and publishers, and the failure values with their projections | A file has a name that starts with `core`. A file MUST NOT import a file of `runtime/` or `dart:async`, and MUST NOT name `Future`, `Completer`, `Stream`, `Timer`, `Zone`, `async`, or `await` |
+| `core/` | The pure rules of the runtime: queries over read-only views of scopes, nodes, and publishers, the failure values with their projections, the outcomes of an activation, and the table of scope transitions | A file has a name that starts with `core`. A file MUST NOT import a file of `runtime/` or `dart:async`, and MUST NOT name `Future`, `Completer`, `Stream`, `Timer`, `Zone`, `async`, or `await` |
 | `runtime/` | The scope library `scope.dart`, its part files, and the libraries that only the runtime and its tests import. The runtime holds the objects of the state, changes them, and runs the effects | A file other than `scope.dart` has a name that starts with `runtime` |
 
 The runtime keeps its object graph: a scope, a node, and a publisher refer to

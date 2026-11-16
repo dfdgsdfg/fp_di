@@ -132,6 +132,27 @@ final Map<RuntimeSelfCheckFault, Future<void> Function()> _scenarios = {
       await _quietly(di.dispose());
     }
   },
+  RuntimeSelfCheckFault.scopeTransition: () async {
+    final di = Scope(
+      module: Module(
+        components: [
+          Component<int>(
+            dependency: Dependency<int>(create: () => throw StateError('no')),
+            key: _a,
+          ),
+        ],
+      ),
+    );
+    // The member fails, so `initialize` rolls back. The fault keeps the
+    // scope in `initializing` after the rollback.
+    try {
+      await di.initialize();
+    } on ActivationException {
+      // The failure of the member is the expected result.
+    } finally {
+      await _quietly(di.dispose());
+    }
+  },
   RuntimeSelfCheckFault.serialMutations: () async {
     final started = Completer<void>();
     final gate = Completer<void>();

@@ -34,6 +34,10 @@ enum RuntimeSelfCheckFault {
   /// The start of a release does not refresh the state of the nodes that
   /// wait for a withdrawn key.
   stateCurrent,
+
+  /// The rollback of `initialize` leaves the flag `initializing` of the
+  /// scope set.
+  scopeTransition,
 }
 
 /// A deliberate defect of the runtime, named after the formal defect that it

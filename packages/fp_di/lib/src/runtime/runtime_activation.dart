@@ -4,8 +4,8 @@ part of 'scope.dart';
 // implementation of `DiContext` from context.dart. It reads the private
 // state of the runtime, so it is a part of this library.
 
-final class _RuntimeContext implements DiContext {
-  _RuntimeContext(this.runtime, this.node) {
+final class _RuntimeActivation implements DiContext {
+  _RuntimeActivation(this.runtime, this.node) {
     node.activationContext = this;
   }
 
@@ -13,7 +13,7 @@ final class _RuntimeContext implements DiContext {
   final _RuntimeNode node;
 
   final List<_RuntimePublisher> staged = <_RuntimePublisher>[];
-  final List<DisposeFunction> cleanups = <DisposeFunction>[];
+  final _RuntimeJournal cleanups = _RuntimeJournal();
   final Set<_RuntimePublisher> dependencies = <_RuntimePublisher>{};
   final Map<DiKeyBase, _RuntimePublisher> committed =
       <DiKeyBase, _RuntimePublisher>{};
@@ -208,7 +208,7 @@ final class _RuntimeContext implements DiContext {
       'SelfCheck ClosedActivation: an acquisition of ${node.label} joins the '
       'journal of a closed activation',
     );
-    cleanups.add(lease.dispose);
+    cleanups.record(lease.dispose);
     return lease.value;
   }
 

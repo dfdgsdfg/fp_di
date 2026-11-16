@@ -11,15 +11,20 @@ part of 'lease.dart';
 /// [collectionKeys] and [optionalCollectionKeys] hold the collection keys that
 /// are read strictly and optionally.
 ///
+/// A [Dependency] holds a program, a tree of steps, and does not run it. The
+/// runtime interprets the program in one place, and the shape is derived from
+/// the same tree.
+///
 /// {@category Dependency}
 final class Dependency<A> {
-  Dependency._(
-    this.requires,
-    this.optional,
-    this._run, {
-    this.collectionKeys = _noCollections,
-    this.optionalCollectionKeys = _noCollections,
-  });
+  // The shape is cached here from the memo of the root step, so reading it
+  // stays constant time.
+  Dependency._(_Step<A> step)
+    : _step = step,
+      requires = step.shape.requires,
+      optional = step.shape.optional,
+      collectionKeys = step.shape.collectionKeys,
+      optionalCollectionKeys = step.shape.optionalCollectionKeys;
 
   /// Keys that must resolve before the component may activate.
   final Set<DiKeyBase> requires;
@@ -36,7 +41,7 @@ final class Dependency<A> {
   /// are read, and the component never waits for one.
   final Set<DiCollectionKey<Object?>> optionalCollectionKeys;
 
-  final Future<A> Function(DiContext context) _run;
+  final _Step<A> _step;
 
   /// A [Dependency] that reads no key and creates its value with [create] on
   /// each activation.
@@ -47,12 +52,7 @@ final class Dependency<A> {
   factory Dependency({
     required FutureOr<A> Function() create,
     FutureOr<void> Function(A value)? dispose,
-  }) => Dependency<A>._(_noKeys, _noKeys, (context) async {
-    context.checkpoint();
-    return dispose == null
-        ? await create()
-        : context.acquire(create, dispose: dispose);
-  });
+  }) => Dependency<A>._(_CreateStep<A>(create, dispose));
 
   /// Reads the [CancellationToken] of the activation. It reads no key, so the
   /// shape is unchanged.
@@ -63,11 +63,7 @@ final class Dependency<A> {
   /// The token stays valid as long as the activation: it is canceled when the
   /// disposal of the owner is requested and when the activation deactivates.
   static Dependency<CancellationToken> cancellation() =>
-      Dependency<CancellationToken>._(
-        _noKeys,
-        _noKeys,
-        (context) async => context.cancellation,
-      );
+      Dependency<CancellationToken>._(_CancellationStep());
 
   /// Reads [T]. The component waits while the key is unbound.
   ///
@@ -75,21 +71,13 @@ final class Dependency<A> {
   /// at once; there is no `require1`.
   static Dependency<T> require<T>({DiKey<T>? key}) {
     final actual = key ?? DiKey<T>();
-    return Dependency<T>._(
-      Set<DiKeyBase>.unmodifiable(<DiKeyBase>{actual}),
-      _noKeys,
-      (context) async => context.require<T>(key: actual),
-    );
+    return Dependency<T>._(_ReadStep<T>(actual));
   }
 
   /// Reads [T] if it is bound, and reloads when that changes either way.
   static Dependency<T?> maybe<T>({DiKey<T>? key}) {
     final actual = key ?? DiKey<T>();
-    return Dependency<T?>._(
-      _noKeys,
-      Set<DiKeyBase>.unmodifiable(<DiKeyBase>{actual}),
-      (context) async => context.maybeGet<T>(key: actual),
-    );
+    return Dependency<T?>._(_MaybeStep<T>(actual));
   }
 
   /// Reads every contribution to the set [key], in declaration order,
@@ -97,47 +85,23 @@ final class Dependency<A> {
   /// resolve, and activates again when the contributions change. Equal values
   /// are one element. A set without contributions is empty.
   static Dependency<Set<T>> requireSet<T>({required DiSetKey<T> key}) =>
-      Dependency<Set<T>>._(
-        _noKeys,
-        _noKeys,
-        (context) async => context.readSet<T>(key, strict: true),
-        collectionKeys: Set<DiCollectionKey<Object?>>.unmodifiable({key}),
-      );
+      Dependency<Set<T>>._(_ReadSetStep<T>(key, strict: true));
 
   /// Reads the active contributions to the set [key] and never waits. The
   /// component activates again when a contributor activates or deactivates.
   static Dependency<Set<T>> maybeSet<T>({required DiSetKey<T> key}) =>
-      Dependency<Set<T>>._(
-        _noKeys,
-        _noKeys,
-        (context) async => context.readSet<T>(key, strict: false),
-        optionalCollectionKeys: Set<DiCollectionKey<Object?>>.unmodifiable({
-          key,
-        }),
-      );
+      Dependency<Set<T>>._(_ReadSetStep<T>(key, strict: false));
 
   /// Reads the entry of every id of the map [key]. Each id selects the
   /// nearest active entry, as `Dependency.require` of `key.entryKey(id)` does.
   /// The component waits while one id does not resolve.
   static Dependency<Map<String, T>> requireMap<T>({required DiMapKey<T> key}) =>
-      Dependency<Map<String, T>>._(
-        _noKeys,
-        _noKeys,
-        (context) async => context.readMap<T>(key, strict: true),
-        collectionKeys: Set<DiCollectionKey<Object?>>.unmodifiable({key}),
-      );
+      Dependency<Map<String, T>>._(_ReadMapStep<T>(key, strict: true));
 
   /// Reads the entries of the ids of the map [key] that resolve, and never
   /// waits.
   static Dependency<Map<String, T>> maybeMap<T>({required DiMapKey<T> key}) =>
-      Dependency<Map<String, T>>._(
-        _noKeys,
-        _noKeys,
-        (context) async => context.readMap<T>(key, strict: false),
-        optionalCollectionKeys: Set<DiCollectionKey<Object?>>.unmodifiable({
-          key,
-        }),
-      );
+      Dependency<Map<String, T>>._(_ReadMapStep<T>(key, strict: false));
 
   /// Reads two keys and yields their values as a record, in order.
   ///
@@ -289,13 +253,7 @@ final class Dependency<A> {
   static Dependency<R> _requireAll<R>(
     List<DiKey<Object?>> keys,
     R Function(List<Object?> values) build,
-  ) => Dependency<R>._(
-    Set<DiKeyBase>.unmodifiable(keys),
-    _noKeys,
-    (context) async => build(<Object?>[
-      for (final key in keys) context.require<Object?>(key: key),
-    ]),
-  );
+  ) => Dependency<R>._(_ReadAllStep<R>(keys, build));
 
   /// Creates the next value from this one. The shape is unchanged.
   ///
@@ -308,23 +266,7 @@ final class Dependency<A> {
   Dependency<B> map<B>(
     FutureOr<B> Function(A value) create, {
     FutureOr<void> Function(B value)? dispose,
-  }) => Dependency<B>._(
-    requires,
-    optional,
-    collectionKeys: collectionKeys,
-    optionalCollectionKeys: optionalCollectionKeys,
-    dispose == null
-        ? (context) async {
-            final value = await _run(context);
-            context.checkpoint();
-            return create(value);
-          }
-        : (context) async {
-            final value = await _run(context);
-            context.checkpoint();
-            return context.acquire(() => create(value), dispose: dispose);
-          },
-  );
+  }) => Dependency<B>._(_MapStep<A, B>(_step, create, dispose));
 
   /// Creates the value on the first `Lazy.force`, not at activation.
   ///
@@ -333,51 +275,7 @@ final class Dependency<A> {
   /// first `force`, against the values read at activation. What they create is
   /// disposed with the owner, only if it was created, and before the earlier
   /// creations of the same component. The shape is unchanged.
-  Dependency<Lazy<A>> lazy() => Dependency<Lazy<A>>._(
-    requires,
-    optional,
-    collectionKeys: collectionKeys,
-    optionalCollectionKeys: optionalCollectionKeys,
-    (context) async {
-      final values = <DiKeyBase, Object?>{
-        for (final key in requires)
-          key: context.require<Object?>(key: key as DiKey<Object?>),
-        for (final key in optional)
-          key: context.maybeGet<Object?>(key: key as DiKey<Object?>),
-        for (final key in collectionKeys)
-          key: _readCollection(context, key, true),
-        for (final key in optionalCollectionKeys)
-          key: _readCollection(context, key, false),
-      };
-      Future<Lease<A>> createDeferred() async {
-        // Each creation is a child region of the owner: the owner's
-        // cancellation reaches it, and its own failure stays in it.
-        final snapshot = _SnapshotContext(
-          values,
-          CancellationSource.child(context.cancellation),
-          () => context.ownerDisposalRequested,
-        );
-        try {
-          final value = await _run(snapshot);
-          return Lease<A>(value: value, dispose: snapshot.releaseAll);
-        } on Object catch (error, stackTrace) {
-          snapshot.cancellation.cancel(CancelReason.failure);
-          // Keep the cause, and the releases that failed after it.
-          final disposeFailures = await snapshot.releaseFailures();
-          if (disposeFailures.isEmpty) rethrow;
-          Error.throwWithStackTrace(
-            _withRollbackFailures(error, stackTrace, disposeFailures),
-            stackTrace,
-          );
-        }
-      }
-
-      return context.acquire(
-        () => Lazy<A>._(createDeferred, () => context.ownerDisposalRequested),
-        dispose: (holder) => holder._release(),
-      );
-    },
-  );
+  Dependency<Lazy<A>> lazy() => Dependency<Lazy<A>>._(_LazyStep<A>(_step));
 
   @override
   String toString() => 'Dependency<$A>';
@@ -416,27 +314,274 @@ Set<DiKeyBase> _union(Set<DiKeyBase> a, Set<DiKeyBase> b) {
 
 /// Runs [dependency] in an activation. Only the runtime calls it.
 Future<A> runDependency<A>(Dependency<A> dependency, DiContext context) =>
-    dependency._run(context);
+    _run<A>(dependency._step, context);
+
+/// A step of the program of a [Dependency]. The tree of steps is the whole
+/// definition: [_run] interprets it at activation, and [_deriveShape] reads
+/// the keys from it.
+///
+/// A step that has children erases their value types to `Object?`. A step
+/// keeps its own type parameters, and its methods put the values back in
+/// their types, so the interpreter never builds a closure.
+sealed class _Step<A> {
+  /// The shape of this step, derived once from the data of the tree. A
+  /// composite step reads the memo of its children, so the cost stays
+  /// constant for each step.
+  late final _Shape shape = _deriveShape(this);
+}
+
+/// The four sets of keys that a program reads.
+final class _Shape {
+  const _Shape(
+    this.requires,
+    this.optional,
+    this.collectionKeys,
+    this.optionalCollectionKeys,
+  );
+
+  final Set<DiKeyBase> requires;
+  final Set<DiKeyBase> optional;
+  final Set<DiCollectionKey<Object?>> collectionKeys;
+  final Set<DiCollectionKey<Object?>> optionalCollectionKeys;
+}
+
+const _Shape _noShape = _Shape(
+  _noKeys,
+  _noKeys,
+  _noCollections,
+  _noCollections,
+);
+
+/// Creates a value from no key, with an optional release.
+final class _CreateStep<A> extends _Step<A> {
+  _CreateStep(this.create, this.dispose);
+
+  final FutureOr<A> Function() create;
+  final FutureOr<void> Function(A value)? dispose;
+
+  bool get hasDispose => dispose != null;
+
+  Future<A> acquire(DiContext context) =>
+      context.acquire(create, dispose: dispose);
+}
+
+/// Reads the [CancellationToken] of the activation.
+final class _CancellationStep extends _Step<CancellationToken> {
+  _CancellationStep();
+}
+
+/// Reads one key, and the activation waits while it is unbound.
+final class _ReadStep<A> extends _Step<A> {
+  _ReadStep(this.key);
+
+  final DiKey<A> key;
+}
+
+/// Reads one key if it is bound.
+final class _MaybeStep<A> extends _Step<A?> {
+  _MaybeStep(this.key);
+
+  final DiKey<A> key;
+
+  A? read(DiContext context) => context.maybeGet<A>(key: key);
+}
+
+/// Reads every contribution to a set key.
+final class _ReadSetStep<A> extends _Step<Set<A>> {
+  _ReadSetStep(this.key, {required this.strict});
+
+  final DiSetKey<A> key;
+  final bool strict;
+
+  Set<A> read(DiContext context) => context.readSet<A>(key, strict: strict);
+}
+
+/// Reads every entry of a map key.
+final class _ReadMapStep<A> extends _Step<Map<String, A>> {
+  _ReadMapStep(this.key, {required this.strict});
+
+  final DiMapKey<A> key;
+  final bool strict;
+
+  Map<String, A> read(DiContext context) =>
+      context.readMap<A>(key, strict: strict);
+}
+
+/// Reads [keys] in order and builds one value from them.
+final class _ReadAllStep<A> extends _Step<A> {
+  _ReadAllStep(this.keys, this.build);
+
+  final List<DiKey<Object?>> keys;
+  final A Function(List<Object?> values) build;
+}
+
+/// Creates the next value from the value of [source], with an optional
+/// release.
+final class _MapStep<X, A> extends _Step<A> {
+  _MapStep(this.source, this.create, this.dispose);
+
+  final _Step<X> source;
+  final FutureOr<A> Function(X value) create;
+  final FutureOr<void> Function(A value)? dispose;
+
+  bool get hasDispose => dispose != null;
+
+  FutureOr<A> apply(Object? value) => create(value as X);
+
+  Future<A> acquire(DiContext context, Object? value) =>
+      context.acquire(() => create(value as X), dispose: dispose);
+}
+
+/// Runs [left], then [right], and pairs their values.
+final class _ZipStep<A, B> extends _Step<(A, B)> {
+  _ZipStep(this.left, this.right);
+
+  final _Step<A> left;
+  final _Step<B> right;
+}
+
+/// Reads the keys of [source] at activation and runs [source] on the first
+/// `Lazy.force`.
+final class _LazyStep<A> extends _Step<Lazy<A>> {
+  _LazyStep(this.source);
+
+  final _Step<A> source;
+
+  /// Reads the keys of [source] now, and acquires the holder.
+  Future<Lazy<A>> start(DiContext context) {
+    final shape = source.shape;
+    final values = <DiKeyBase, Object?>{
+      for (final key in shape.requires)
+        key: context.require<Object?>(key: key as DiKey<Object?>),
+      for (final key in shape.optional)
+        key: context.maybeGet<Object?>(key: key as DiKey<Object?>),
+      for (final key in shape.collectionKeys)
+        key: _readCollection(context, key, true),
+      for (final key in shape.optionalCollectionKeys)
+        key: _readCollection(context, key, false),
+    };
+    Future<Lease<A>> createDeferred() async {
+      // Each creation is a child region of the owner: the owner's
+      // cancellation reaches it, and its own failure stays in it.
+      final snapshot = _SnapshotContext(
+        values,
+        CancellationSource.child(context.cancellation),
+        () => context.ownerDisposalRequested,
+      );
+      try {
+        final value = await _run<A>(source, snapshot);
+        return Lease<A>(value: value, dispose: snapshot.releaseAll);
+      } on Object catch (error, stackTrace) {
+        snapshot.cancellation.cancel(CancelReason.failure);
+        // Keep the cause, and the releases that failed after it.
+        final disposeFailures = await snapshot.releaseFailures();
+        if (disposeFailures.isEmpty) rethrow;
+        Error.throwWithStackTrace(
+          _withRollbackFailures(error, stackTrace, disposeFailures),
+          stackTrace,
+        );
+      }
+    }
+
+    return context.acquire(
+      () => Lazy<A>._(createDeferred, () => context.ownerDisposalRequested),
+      dispose: (holder) => holder._release(),
+    );
+  }
+}
+
+/// The reads interpreter: the shape of [step], from its own data and the
+/// memo of its children.
+_Shape _deriveShape(_Step<Object?> step) => switch (step) {
+  _CreateStep<Object?>() || _CancellationStep() => _noShape,
+  final _ReadStep<Object?> n => _Shape(
+    Set<DiKeyBase>.unmodifiable(<DiKeyBase>{n.key}),
+    _noKeys,
+    _noCollections,
+    _noCollections,
+  ),
+  final _MaybeStep<Object?> n => _Shape(
+    _noKeys,
+    Set<DiKeyBase>.unmodifiable(<DiKeyBase>{n.key}),
+    _noCollections,
+    _noCollections,
+  ),
+  final _ReadSetStep<Object?> n => _collectionShape(n.key, n.strict),
+  final _ReadMapStep<Object?> n => _collectionShape(n.key, n.strict),
+  final _ReadAllStep<Object?> n => _Shape(
+    Set<DiKeyBase>.unmodifiable(n.keys),
+    _noKeys,
+    _noCollections,
+    _noCollections,
+  ),
+  final _MapStep<Object?, Object?> n => n.source.shape,
+  final _ZipStep<Object?, Object?> n => _zipShape(n.left.shape, n.right.shape),
+  final _LazyStep<Object?> n => n.source.shape,
+};
+
+_Shape _collectionShape(DiCollectionKey<Object?> key, bool strict) => strict
+    ? _Shape(
+        _noKeys,
+        _noKeys,
+        Set<DiCollectionKey<Object?>>.unmodifiable({key}),
+        _noCollections,
+      )
+    : _Shape(
+        _noKeys,
+        _noKeys,
+        _noCollections,
+        Set<DiCollectionKey<Object?>>.unmodifiable({key}),
+      );
+
+_Shape _zipShape(_Shape left, _Shape right) => _Shape(
+  _union(left.requires, right.requires),
+  _union(left.optional, right.optional),
+  _unionCollections(left.collectionKeys, right.collectionKeys),
+  _unionCollections(left.optionalCollectionKeys, right.optionalCollectionKeys),
+);
+
+/// The runner interpreter: runs [step] in an activation.
+///
+/// Each step is one `async` frame, and each child is one `await`, as the
+/// closures of the former form were. A change of a suspension, a
+/// `checkpoint`, or an `acquire` here moves a call to another microtask turn;
+/// `dependency_program_test.dart` pins the history.
+Future<A> _run<A>(_Step<A> step, DiContext context) async {
+  switch (step) {
+    case final _MapStep<Object?, Object?> n:
+      final value = await _run<Object?>(n.source, context);
+      context.checkpoint();
+      return (n.hasDispose ? n.acquire(context, value) : n.apply(value))
+          as FutureOr<A>;
+    case final _ZipStep<Object?, Object?> n:
+      final a = await _run<Object?>(n.left, context);
+      context.checkpoint();
+      final b = await _run<Object?>(n.right, context);
+      return (a, b) as A;
+    case _ReadStep<A>():
+      return context.require<A>(key: step.key);
+    case _CreateStep<A>():
+      context.checkpoint();
+      return step.hasDispose ? step.acquire(context) : await step.create();
+    case _ReadAllStep<A>():
+      return step.build(<Object?>[
+        for (final key in step.keys) context.require<Object?>(key: key),
+      ]);
+    case final _MaybeStep<Object?> n:
+      return n.read(context) as A;
+    case final _ReadSetStep<Object?> n:
+      return n.read(context) as A;
+    case final _ReadMapStep<Object?> n:
+      return n.read(context) as A;
+    case _CancellationStep():
+      return context.cancellation as A;
+    case final _LazyStep<Object?> n:
+      return n.start(context) as Future<A>;
+  }
+}
 
 Dependency<(A, B)> _zip2<A, B>(Dependency<A> left, Dependency<B> right) =>
-    Dependency<(A, B)>._(
-      _union(left.requires, right.requires),
-      _union(left.optional, right.optional),
-      collectionKeys: _unionCollections(
-        left.collectionKeys,
-        right.collectionKeys,
-      ),
-      optionalCollectionKeys: _unionCollections(
-        left.optionalCollectionKeys,
-        right.optionalCollectionKeys,
-      ),
-      (context) async {
-        final a = await left._run(context);
-        context.checkpoint();
-        final b = await right._run(context);
-        return (a, b);
-      },
-    );
+    Dependency<(A, B)>._(_ZipStep<A, B>(left._step, right._step));
 
 /// Applies a function to the values of a `Dependency.require2` or `zip` record.
 ///
@@ -704,14 +849,7 @@ final class Dependency1<A, R> extends Dependency<R> {
          _built(Dependency.require<A>(key: key1), (v) => create(v), dispose),
        );
 
-  Dependency1._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency1._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads two keys and builds its value from
@@ -740,14 +878,7 @@ final class Dependency2<A, B, R> extends Dependency<R> {
          ),
        );
 
-  Dependency2._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency2._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads three keys and builds its value from
@@ -777,14 +908,7 @@ final class Dependency3<A, B, C, R> extends Dependency<R> {
          ),
        );
 
-  Dependency3._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency3._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads four keys and builds its value from
@@ -820,14 +944,7 @@ final class Dependency4<A, B, C, D, R> extends Dependency<R> {
          ),
        );
 
-  Dependency4._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency4._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads five keys and builds its value from
@@ -865,14 +982,7 @@ final class Dependency5<A, B, C, D, E, R> extends Dependency<R> {
          ),
        );
 
-  Dependency5._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency5._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads six keys and builds its value from
@@ -912,14 +1022,7 @@ final class Dependency6<A, B, C, D, E, F, R> extends Dependency<R> {
          ),
        );
 
-  Dependency6._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency6._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads seven keys and builds its value from
@@ -961,14 +1064,7 @@ final class Dependency7<A, B, C, D, E, F, G, R> extends Dependency<R> {
          ),
        );
 
-  Dependency7._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency7._from(Dependency<R> built) : super._(built._step);
 }
 
 /// A [Dependency] that reads eight keys and builds its value from
@@ -1012,14 +1108,7 @@ final class Dependency8<A, B, C, D, E, F, G, H, R> extends Dependency<R> {
          ),
        );
 
-  Dependency8._from(Dependency<R> built)
-    : super._(
-        built.requires,
-        built.optional,
-        built._run,
-        collectionKeys: built.collectionKeys,
-        optionalCollectionKeys: built.optionalCollectionKeys,
-      );
+  Dependency8._from(Dependency<R> built) : super._(built._step);
 }
 
 /// Serves the values read at activation to the deferred steps of a lazy

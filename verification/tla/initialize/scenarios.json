@@ -7,7 +7,7 @@
     "packages/fp_di/lib/src/core/core_plan.dart",
     "packages/fp_di/lib/src/core/core_scope.dart",
     "packages/fp_di/lib/src/runtime/runtime_state.dart",
-    "packages/fp_di/lib/src/runtime/runtime_context.dart",
+    "packages/fp_di/lib/src/runtime/runtime_activation.dart",
     "packages/fp_di/lib/src/model/exception.dart"
   ],
   "scenarios": [
