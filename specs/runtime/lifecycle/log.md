@@ -763,3 +763,10 @@ tags: [runtime, lifecycle, decisions]
 - Consequences: The contract matches the runtime and the model, and the published behavior does not change. A failed activation is retried at the next reconciliation of an `initialize` or of the disposal of a member, not at the disposal of an unrelated scope.
 - References: [disposal](spec.md#scope-declaration-and-initialization), [R-UC-RT-LC-009](requirements.md#r-uc-rt-lc-009), [Cancellation.tla](../../../verification/tla/cancellation/Cancellation.tla).
 
+## [2026-11-16] decision | Keep failures as cause values inside the runtime
+
+- Context: The runtime carried failures as throws, `(Object, StackTrace)` tuples, and lists of dispose failures, joined by helpers at each boundary. `initialize` kept the first failed member and attached the rollback failures of the other failed members in the order in which they failed, so the attached list depended on timing. `fp_di_fpdart` keeps every failure in a `Cause` tree.
+- Decision: Activations, the members of an `initialize`, releases, and teardowns return a `RuntimeCause` with the shape of that `Cause`, in a library that is not exported. A projection at each boundary makes the exception that the public API throws or reports. A `RuntimeBoth` follows declaration order, so the rollback failures of the other failed members now attach in declaration order.
+- Consequences: The public API keeps its types and objects. One observable change: the order of those rollback failures no longer depends on timing. The internal cause keeps every failure, so a later public field can expose them without a change of the runtime paths. The core still has no dependency on fpdart.
+- References: [failure values](spec.md#failure-values-inside-the-runtime), [R-UC-RT-LC-014](requirements.md#r-uc-rt-lc-014), `fp_di_fpdart` `Cause`.
+

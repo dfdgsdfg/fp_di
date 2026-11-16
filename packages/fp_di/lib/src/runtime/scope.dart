@@ -12,6 +12,7 @@ import '../model/lease.dart';
 import '../model/module.dart';
 import '../model/shape_graph.dart';
 import '../model/state.dart';
+import 'runtime_cause.dart';
 import 'runtime_faults.dart';
 import 'runtime_inspector_hooks.dart';
 import 'runtime_teardown.dart';
@@ -135,6 +136,7 @@ final class Scope {
         throw UndeclaredKeyError(unresolvable);
       }
       final nodes = <_RuntimeNode>[];
+      var failure = RuntimeCause.empty;
       try {
         for (var i = 0; i < module.components.length; i++) {
           nodes.add(
@@ -150,32 +152,28 @@ final class Scope {
         _runtime
           ..markChanged(_scope)
           ..scopeTransition([_scope]);
-        await _runtime.activateMembers(nodes);
-        // A member can first activate here, after a node that the module woke
-        // publishes a key it needs. It fails the call like a member that
-        // fails during the scheduling above.
-        final sink = _RuntimeFailureSink(nodes.toSet());
-        await _runtime.reconcile(sink: sink);
-        final failed = sink.failures.entries.toList()
-          ..sort((a, b) => a.key.id.compareTo(b.key.id));
-        if (failed.isNotEmpty) {
-          final (error, stackTrace) = failed.first.value;
-          final extra = <DisposeFailure>[
-            // The defect `DropLater` drops the rollback failures of the
-            // other members.
-            if (!RuntimeFaults.injects(RuntimeDefect.dropLater))
-              for (final entry in failed.skip(1))
-                ..._Runtime.disposeFailuresOf(entry.value.$1),
-          ];
-          Error.throwWithStackTrace(
-            _Runtime.withDisposeFailures(error, stackTrace, extra),
-            stackTrace,
-          );
+        failure = await _runtime.activateMembers(nodes);
+        if (failure.isEmpty) {
+          // A member can first activate here, after a node that the module
+          // woke publishes a key it needs. It fails the call like a member
+          // that fails during the scheduling above.
+          final sink = _RuntimeFailureSink(nodes.toSet());
+          await _runtime.reconcile(sink: sink);
+          failure = RuntimeCause.all([
+            for (final node
+                in sink.failures.keys.toList()
+                  ..sort((a, b) => a.id.compareTo(b.id)))
+              sink.failures[node]!,
+          ]);
         }
       } on Object catch (error, stackTrace) {
-        final disposeFailures = <DisposeFailure>[];
+        // A throw of the runtime itself fails the call like a member.
+        failure = RuntimeFail(error, stackTrace);
+      }
+      if (!failure.isEmpty) {
+        var rollback = RuntimeCause.empty;
         for (final node in nodes.reversed) {
-          disposeFailures.addAll(
+          rollback = rollback.then(
             await _runtime.deactivate(node, permanent: true),
           );
         }
@@ -191,27 +189,14 @@ final class Scope {
         // Nodes that the module's bindings woke are dormant now; reconcile
         // leaves the runtime consistent for the rest.
         await _runtime.reconcile();
-        if (disposeFailures.isEmpty) {
-          Error.throwWithStackTrace(error, stackTrace);
-        }
-        if (error is ActivationCanceledException) {
-          throw ActivationCanceledException(
-            cause: error.cause,
-            stackTrace: error.stackTrace,
-            rollbackFailures: <DisposeFailure>[
-              ...error.rollbackFailures,
-              ...disposeFailures,
-            ],
-          );
-        }
-        if (error is ActivationException) {
-          throw ActivationException(
-            error.cause,
-            error.stackTrace,
-            <DisposeFailure>[...error.rollbackFailures, ...disposeFailures],
-          );
-        }
-        throw ActivationException(error, stackTrace, disposeFailures);
+        final thrown = failure
+            .then(rollback)
+            .activationError(
+              // The defect `DropLater` drops the rollback failures of the
+              // other members.
+              dropOthers: RuntimeFaults.injects(RuntimeDefect.dropLater),
+            );
+        Error.throwWithStackTrace(thrown.error, thrown.stackTrace);
       }
       _scope
         ..handles = List<ComponentNode<Object?>>.unmodifiable([
@@ -328,7 +313,7 @@ final class Scope {
             }
             return;
           }
-          final disposeFailures = await _runtime.disposeScope(
+          final released = await _runtime.disposeScope(
             _scope,
             // The defect `dropIgnoredReport` skips the report.
             started:
@@ -337,9 +322,7 @@ final class Scope {
                 ? null
                 : () => _runtime.changes.report(IgnoredHoldsException(ignored)),
           );
-          if (disposeFailures.isNotEmpty) {
-            throw DisposeException(disposeFailures);
-          }
+          released.throwDisposeError();
         }),
       );
       result.complete(disposal);
@@ -890,11 +873,11 @@ final class Scope {
         _runtime.finishWithdrawal(node);
         return;
       }
-      final disposeFailures = await _runtime.deactivate(node, permanent: true);
+      final released = await _runtime.deactivate(node, permanent: true);
       // The readers that this withdrawal canceled may activate again now.
       _runtime.finishWithdrawal(node);
       await _runtime.reconcile();
-      if (disposeFailures.isNotEmpty) throw DisposeException(disposeFailures);
+      released.throwDisposeError();
     });
     node.disposal = disposal;
     disposal.then<void>(

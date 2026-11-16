@@ -22,7 +22,7 @@ final class _RuntimeContext implements DiContext {
 
   /// Releases that failed after their activation was gone, which the
   /// cleanup list never saw and so cannot report on its own.
-  final List<DisposeFailure> rollbackFailures = <DisposeFailure>[];
+  RuntimeCause rollback = RuntimeCause.empty;
 
   bool tearingDown = false;
 
@@ -198,7 +198,9 @@ final class _RuntimeContext implements DiContext {
       try {
         await lease.dispose();
       } on Object catch (error, stackTrace) {
-        rollbackFailures.add(DisposeFailure('acquire', error, stackTrace));
+        rollback = rollback.then(
+          RuntimeDie(DisposeFailure('acquire', error, stackTrace)),
+        );
       }
       throw OutsideActivationError('acquire');
     }

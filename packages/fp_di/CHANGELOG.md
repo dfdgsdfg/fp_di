@@ -1,3 +1,11 @@
+## Unreleased
+
+- When several members fail in one `initialize`, the rollback failures of the
+  other failed members now follow those of the rethrown member in declaration
+  order. Before, they followed the order in which the members failed.
+- Internal: the runtime keeps a failure as a cause value until the public
+  error is made. The public exceptions and their fields do not change.
+
 ## 0.2.1
 
 - Performance: `Scope.initialize`, `Module.requires`, and `Module.reads` find

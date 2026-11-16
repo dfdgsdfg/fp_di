@@ -35,37 +35,6 @@ final class _Runtime {
 
   int _nextNode = 0;
 
-  /// The rollback failures that [error] carries.
-  static List<DisposeFailure> disposeFailuresOf(Object error) =>
-      switch (error) {
-        ActivationException(:final rollbackFailures) => rollbackFailures,
-        ActivationCanceledException(:final rollbackFailures) =>
-          rollbackFailures,
-        _ => const <DisposeFailure>[],
-      };
-
-  /// [error] with [extra] rollback failures attached, keeping its kind.
-  static Object withDisposeFailures(
-    Object error,
-    StackTrace stackTrace,
-    List<DisposeFailure> extra,
-  ) {
-    if (extra.isEmpty) return error;
-    return switch (error) {
-      ActivationException() => ActivationException(
-        error.cause,
-        error.stackTrace,
-        <DisposeFailure>[...error.rollbackFailures, ...extra],
-      ),
-      ActivationCanceledException() => ActivationCanceledException(
-        cause: error.cause,
-        stackTrace: error.stackTrace,
-        rollbackFailures: <DisposeFailure>[...error.rollbackFailures, ...extra],
-      ),
-      _ => ActivationException(error, stackTrace, extra),
-    };
-  }
-
   /// The report of [operation], which runs for [elapsed] now.
   SlowMutation _slowMutation(String operation, Duration elapsed) {
     final inFlight = [
@@ -628,16 +597,27 @@ final class _Runtime {
       ? node.disposeRequested
       : node.disposalRequested;
 
-  Future<void> activate(_RuntimeNode node) async {
-    if (node.removed || node.active || node.scope.disposing) return;
+  /// Activates [node] and returns why it did not commit: empty after a commit
+  /// and when the node stays dormant or waits for a withdrawal, a
+  /// [RuntimeInterrupt] after a cancellation, and a [RuntimeFail] after a
+  /// failure. A throw of the runtime itself still throws.
+  Future<RuntimeCause> activate(_RuntimeNode node) async {
+    if (node.removed || node.active || node.scope.disposing) {
+      return RuntimeCause.empty;
+    }
     // Setup never starts for an owner whose disposal was requested.
-    if (_setupRefused(node)) throw ActivationCanceledException();
+    if (_setupRefused(node)) {
+      return RuntimeInterrupt(
+        ActivationCanceledException(),
+        StackTrace.current,
+      );
+    }
     // A component never runs against an unsatisfied environment, so
     // `Dependency.require` inside it cannot fail and no partial effect is ever
     // staged.
-    if (!node.satisfied) return;
+    if (!node.satisfied) return RuntimeCause.empty;
     // A node whose reads a pending withdrawal removes waits for it.
-    if (node.awaiting.isNotEmpty) return;
+    if (node.awaiting.isNotEmpty) return RuntimeCause.empty;
     final activation = _RuntimeContext(this, node);
     node
       ..inFlight = activation
@@ -680,6 +660,7 @@ final class _Runtime {
           waiter.complete(node.value);
         }
       }
+      return RuntimeCause.empty;
     } on Object catch (error, stackTrace) {
       // A step failure is local to this region: cancel its token before the
       // first dispose function, so a worker of a completed step can stop.
@@ -688,16 +669,17 @@ final class _Runtime {
       for (final dependency in activation.dependencies) {
         dependency.dependents.remove(node);
       }
-      final rollbackFailures = <DisposeFailure>[
-        ...activation.rollbackFailures,
-        // The defect `DropLease` skips the release of the journal.
-        if (!RuntimeFaults.injects(RuntimeDefect.dropLease))
-          ...await runCleanups(
+      var rollback = activation.rollback;
+      // The defect `DropLease` skips the release of the journal.
+      if (!RuntimeFaults.injects(RuntimeDefect.dropLease)) {
+        rollback = rollback.then(
+          await runCleanups(
             activation.cleanups.reversed,
             '${node.label} activation rollback',
             episode: activation,
           ),
-      ];
+        );
+      }
       node
         ..value = null
         ..active = false;
@@ -719,8 +701,9 @@ final class _Runtime {
       // The defect `DropLate` drops the rollback failures of a canceled
       // activation.
       if (canceledBy != null && RuntimeFaults.injects(RuntimeDefect.dropLate)) {
-        rollbackFailures.clear();
+        rollback = RuntimeCause.empty;
       }
+      final rollbackFailures = rollback.disposeFailures;
       // The activation ended without a commit. A member of a running
       // `initialize` whose activation failed keeps the phase `activating`:
       // the rollback of that call disposes it.
@@ -734,20 +717,21 @@ final class _Runtime {
         // Not a failure: the node stays inactive and waits for the
         // withdrawal. Releases that failed during the rollback still count.
         end(failed: false);
-        if (rollbackFailures.isNotEmpty) {
-          changes.report(DisposeException(rollbackFailures));
-        }
-        return;
+        changes.reportCause(rollback);
+        return RuntimeCause.empty;
       }
       if (canceledBy != null) {
         end(failed: true);
         final cause = error is ActivationCanceledException
             ? error.cause
             : error;
-        throw ActivationCanceledException(
-          cause: cause,
-          stackTrace: cause == null ? null : stackTrace,
-          rollbackFailures: rollbackFailures,
+        return RuntimeInterrupt(
+          ActivationCanceledException(
+            cause: cause,
+            stackTrace: cause == null ? null : stackTrace,
+            rollbackFailures: rollbackFailures,
+          ),
+          StackTrace.current,
         );
       }
       // A canceled activation is not a failure, so only this path records
@@ -759,12 +743,12 @@ final class _Runtime {
             ? error
             : ActivationException(error, stackTrace);
         end(failed: true);
-        Error.throwWithStackTrace(error, stackTrace);
+        return RuntimeFail(error, stackTrace);
       }
       final failure = ActivationException(error, stackTrace, rollbackFailures);
       node.activationException = failure;
       end(failed: true);
-      throw failure;
+      return RuntimeFail(failure, StackTrace.current);
     } finally {
       if (identical(node.inFlight, activation)) node.inFlight = null;
     }
@@ -901,9 +885,10 @@ final class _Runtime {
   ///
   /// After a failure no further member starts. The method returns only after
   /// every started activation has settled, because a late commit into a
-  /// disposed node would leak its bindings. It then throws the failure of
-  /// the failed member that is first in creation order.
-  Future<void> activateMembers(List<_RuntimeNode> nodes) async {
+  /// disposed node would leak its bindings. It then returns the causes of
+  /// the members in declaration order, so the first failure of the cause is
+  /// the failure of the failed member that is first in creation order.
+  Future<RuntimeCause> activateMembers(List<_RuntimeNode> nodes) async {
     final count = nodes.length;
     // `initialize` has rejected duplicate keys, so each key has one member.
     final publisherOf = <DiKeyBase, int>{
@@ -930,7 +915,8 @@ final class _Runtime {
         for (var i = 0; i < count; i++)
           if (waitingFor[i] == 0) i,
       ]);
-    final failures = <int, (Object, StackTrace)>{};
+    final causes = List<RuntimeCause>.filled(count, RuntimeCause.empty);
+    var failed = false;
     final finished = Completer<void>();
     var inFlight = 0;
     var unstarted = count;
@@ -950,10 +936,12 @@ final class _Runtime {
       unstarted--;
       unawaited(() async {
         try {
-          await activate(nodes[index]);
+          causes[index] = await activate(nodes[index]);
         } on Object catch (error, stackTrace) {
-          failures[index] = (error, stackTrace);
+          // A throw of the runtime itself fails the member.
+          causes[index] = RuntimeFail(error, stackTrace);
         }
+        if (!causes[index].isEmpty) failed = true;
         inFlight--;
         settle(index);
         pump();
@@ -961,7 +949,7 @@ final class _Runtime {
     }
 
     pump = () {
-      if (failures.isEmpty) {
+      if (!failed) {
         while (ready.isNotEmpty) {
           final index = ready.first;
           ready.remove(index);
@@ -971,43 +959,30 @@ final class _Runtime {
           start(started.indexOf(false));
         }
       }
-      if (inFlight == 0 && (failures.isNotEmpty || unstarted == 0)) {
+      if (inFlight == 0 && (failed || unstarted == 0)) {
         if (!finished.isCompleted) finished.complete();
       }
     };
 
     pump();
     await finished.future;
-    if (failures.isEmpty) return;
-    // The first failure in declaration order is the error; the rollback
-    // failures of every other failed member stay attached to it.
-    final first = failures.keys.reduce((a, b) => a < b ? a : b);
-    final (error, stackTrace) = failures[first]!;
-    final extra = <DisposeFailure>[
-      // The defect `DropLater` drops the rollback failures of the other
-      // failed members.
-      if (!RuntimeFaults.injects(RuntimeDefect.dropLater))
-        for (final MapEntry(:key, value: (other, _)) in failures.entries)
-          if (key != first) ...disposeFailuresOf(other),
-    ];
-    Error.throwWithStackTrace(
-      withDisposeFailures(error, stackTrace, extra),
-      stackTrace,
-    );
+    return RuntimeCause.all(causes);
   }
 
-  Future<List<DisposeFailure>> deactivate(
+  /// Deactivates [node], after its live dependents, and returns the dispose
+  /// failures of the dependents, then those of the node.
+  Future<RuntimeCause> deactivate(
     _RuntimeNode node, {
     required bool permanent,
   }) async {
-    if (node.removed) return const <DisposeFailure>[];
+    if (node.removed) return RuntimeCause.empty;
     if (!node.active || node.deactivating) {
       if (permanent && !node.deactivating) {
         removeNode(node);
         // A removed contributor leaves its collection.
         nodeTransition(node, keys: node.declaredPublishes);
       }
-      return const <DisposeFailure>[];
+      return RuntimeCause.empty;
     }
 
     node.deactivating = true;
@@ -1042,11 +1017,11 @@ final class _Runtime {
     // Dependent failures are reported to the caller but must not be charged
     // to this node: only its own dispose functions can leave *its* effects
     // half released, and only that justifies blocking its reactivation.
-    final dependentDisposeFailures = <DisposeFailure>[];
+    var dependentCause = RuntimeCause.empty;
     // The fault skips the release of the dependents.
     if (!RuntimeFaults.breaks(RuntimeSelfCheckFault.dependentFirst)) {
       for (final dependent in orderedDependents) {
-        dependentDisposeFailures.addAll(
+        dependentCause = dependentCause.then(
           await deactivate(dependent, permanent: false),
         );
       }
@@ -1072,15 +1047,11 @@ final class _Runtime {
     }());
 
     node.activationContext?.tearingDown = true;
-    final ownDisposeFailures = await runCleanups(
+    final ownCause = await runCleanups(
       node.cleanups.reversed,
       node.label,
       episode: node.activationContext,
     );
-    final disposeFailures = <DisposeFailure>[
-      ...dependentDisposeFailures,
-      ...ownDisposeFailures,
-    ];
 
     for (final publisher in node.publishers) {
       if (identical(node.scope.bindings[publisher.key], publisher)) {
@@ -1099,7 +1070,7 @@ final class _Runtime {
       ..cleanups.clear()
       ..value = null
       ..active = false
-      ..reactivationBlocked = ownDisposeFailures.isNotEmpty
+      ..reactivationBlocked = !ownCause.isEmpty
       ..deactivating = false
       ..activationContext = null;
     // One transition for the end of the release, also when it removes the
@@ -1109,7 +1080,7 @@ final class _Runtime {
       node,
       keys: permanent ? node.declaredPublishes : const <DiKeyBase>[],
     );
-    return disposeFailures;
+    return dependentCause.then(ownCause);
   }
 
   /// Brings every node to its target: rebuilds active nodes whose resolved
@@ -1147,9 +1118,9 @@ final class _Runtime {
                   if (sink.members.contains(node)) node,
               ];
         if (own.isNotEmpty) {
-          sink!.failures[own.first] = (error, StackTrace.current);
+          sink!.failures[own.first] = RuntimeFail(error, StackTrace.current);
         } else {
-          changes.report(ActivationException(error, StackTrace.current));
+          changes.reportCause(RuntimeFail(error, StackTrace.current));
         }
         return;
       }
@@ -1161,10 +1132,7 @@ final class _Runtime {
       ..sort((left, right) => right.id.compareTo(left.id));
     for (final node in active) {
       if (_targetChanged(node)) {
-        final disposeFailures = await deactivate(node, permanent: false);
-        if (disposeFailures.isNotEmpty) {
-          changes.report(DisposeException(disposeFailures));
-        }
+        changes.reportCause(await deactivate(node, permanent: false));
       }
     }
   }
@@ -1193,29 +1161,20 @@ final class _Runtime {
               .toList()
             ..sort((left, right) => left.id.compareTo(right.id));
       for (final node in dormant) {
-        try {
-          await activate(node);
+        final cause = await activate(node);
+        if (cause.isEmpty) {
           progressed = true;
-        } on Object catch (error, stackTrace) {
-          if (error is! DiError && error is! DiException) rethrow;
-          failed.add(node);
-          if (sink != null && sink.members.contains(node)) {
-            sink.failures[node] = (error, stackTrace);
-          } else if (error is ActivationCanceledException) {
-            // A canceled activation is not a failure; its owner is going
-            // away. Releases that failed during its rollback still count.
-            if (error.rollbackFailures.isNotEmpty) {
-              changes.report(DisposeException(error.rollbackFailures));
-            }
-          } else {
-            // A wiring error that no caller receives is reported as the
-            // failed activation that it caused.
-            changes.report(
-              error is DiException
-                  ? error
-                  : ActivationException(error, stackTrace),
-            );
-          }
+          continue;
+        }
+        failed.add(node);
+        if (sink != null && sink.members.contains(node)) {
+          sink.failures[node] = cause;
+        } else {
+          // A canceled activation is not a failure; its owner is going
+          // away, but releases that failed during its rollback still count.
+          // A wiring error that no caller receives is reported as the
+          // failed activation that it caused.
+          changes.reportCause(cause);
         }
       }
     }
@@ -1268,8 +1227,8 @@ final class _Runtime {
   /// releases finished in.
   /// Inside the cycle fallback, the dependents that a `deactivate` released
   /// report with that node, in its depth-first order.
-  Future<List<DisposeFailure>> _releaseOwned(List<_RuntimeNode> owned) =>
-      RuntimeTeardownScheduler<_RuntimeNode, DisposeFailure>(
+  Future<RuntimeCause> _releaseOwned(List<_RuntimeNode> owned) =>
+      RuntimeTeardownScheduler<_RuntimeNode>(
         // A dependent is done when it is neither active nor releasing. A
         // finished dependent also leaves the publisher's dependents.
         ready: (node) {
@@ -1297,7 +1256,7 @@ final class _Runtime {
 
   /// [started] runs after the transition that starts the disposal, while
   /// the error stream of the root is still open.
-  Future<List<DisposeFailure>> disposeScope(
+  Future<RuntimeCause> disposeScope(
     _RuntimeScope scope, {
     void Function()? started,
   }) async {
@@ -1317,7 +1276,12 @@ final class _Runtime {
     final ownedNodes =
         nodes.where((node) => included.contains(node.scope)).toList()
           ..sort((left, right) => right.id.compareTo(left.id));
-    final disposeFailures = await _releaseOwned(ownedNodes);
+    final released = await _releaseOwned(ownedNodes);
+    // A release that threw leaves the disposal half done: the scopes stay
+    // as they are, and the error stream stays open.
+    if (released.firstFail case final thrown?) {
+      Error.throwWithStackTrace(thrown.error, thrown.stackTrace);
+    }
 
     for (final current in subtree.reversed) {
       current.bindings.clear();
@@ -1336,7 +1300,7 @@ final class _Runtime {
       if (scope.parent == null) _RuntimeInspector.rootDisposed(this);
       return true;
     }());
-    return disposeFailures;
+    return released;
   }
 
   /// The owners whose cleanups run now, in the order they started, for a
@@ -1346,12 +1310,22 @@ final class _Runtime {
 
   /// Releases the journal [cleanups] of [owner], last entry first. [episode]
   /// is the activation that owns the journal, or null.
-  Future<List<DisposeFailure>> runCleanups(
+  Future<RuntimeCause> runCleanups(
     Iterable<DisposeFunction> cleanups,
     String owner, {
     _RuntimeContext? episode,
   }) async {
-    final disposeFailures = <DisposeFailure>[];
+    var failures = RuntimeCause.empty;
+    // A dispose function that threw is a [RuntimeDie]. A [DisposeException]
+    // expands to its failures.
+    void record(Object error, StackTrace stackTrace) {
+      failures = failures.then(
+        error is DisposeException
+            ? RuntimeCause.dying(error.disposeFailures)
+            : RuntimeDie(DisposeFailure(owner, error, stackTrace)),
+      );
+    }
+
     // The fault runs the journal a second time.
     final passes = RuntimeFaults.breaks(RuntimeSelfCheckFault.releaseAtMostOnce)
         ? 2
@@ -1363,10 +1337,8 @@ final class _Runtime {
     Future<void> release(DisposeFunction cleanup) async {
       try {
         await cleanup();
-      } on DisposeException catch (failure) {
-        disposeFailures.addAll(failure.disposeFailures);
       } on Object catch (error, stackTrace) {
-        disposeFailures.add(DisposeFailure(owner, error, stackTrace));
+        record(error, stackTrace);
       }
     }
 
@@ -1388,10 +1360,8 @@ final class _Runtime {
           }
           try {
             await cleanup();
-          } on DisposeException catch (failure) {
-            disposeFailures.addAll(failure.disposeFailures);
           } on Object catch (error, stackTrace) {
-            disposeFailures.add(DisposeFailure(owner, error, stackTrace));
+            record(error, stackTrace);
           }
         }
         if (started.isNotEmpty) await Future.wait(started);
@@ -1399,7 +1369,7 @@ final class _Runtime {
     } finally {
       _releasing.removeAt(_releasing.lastIndexOf(owner));
     }
-    return disposeFailures;
+    return failures;
   }
 
   void addDependency(
@@ -1469,5 +1439,5 @@ final class _RuntimeFailureSink {
   _RuntimeFailureSink(this.members);
 
   final Set<_RuntimeNode> members;
-  final Map<_RuntimeNode, (Object, StackTrace)> failures = {};
+  final Map<_RuntimeNode, RuntimeCause> failures = {};
 }

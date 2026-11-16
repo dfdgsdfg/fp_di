@@ -78,6 +78,12 @@ final class _RuntimeChangeBroadcaster {
     }
   }
 
+  /// Reports what [cause] projects to for [errors], and nothing when the
+  /// projection is null. Every report of a runtime failure goes through here.
+  void reportCause(RuntimeCause cause) {
+    if (cause.reportedError() case final error?) report(error);
+  }
+
   /// Ends one transition: the runtime has replaced the state. Increases
   /// [revision] and calls each listener once. [disposed] is the scope that
   /// the transition disposed; its listeners leave after their calls.

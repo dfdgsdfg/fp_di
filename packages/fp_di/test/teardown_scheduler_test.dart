@@ -4,6 +4,8 @@
 // of them a new publisher, so a public scope never keeps such a cycle.
 import 'dart:async';
 
+import 'package:fp_di/fp_di.dart';
+import 'package:fp_di/src/runtime/runtime_cause.dart';
 import 'package:fp_di/src/runtime/runtime_teardown.dart';
 import 'package:test/test.dart';
 
@@ -39,14 +41,14 @@ final class _Graph {
     node,
   ).every((d) => identical(d, node) || d.state == 'released');
 
-  Future<List<int>> release(_Node node) async {
-    if (node.state != 'live') return const [];
+  Future<RuntimeCause> release(_Node node) async {
+    if (node.state != 'live') return RuntimeCause.empty;
     node.state = 'deactivating';
-    final disposeFailures = <int>[];
+    var disposeFailures = RuntimeCause.empty;
     final dependents = dependentsOf(node).toList()
       ..sort((a, b) => b.id.compareTo(a.id));
     for (final dependent in dependents) {
-      disposeFailures.addAll(await release(dependent));
+      disposeFailures = disposeFailures.then(await release(dependent));
     }
     for (final other in releasing) {
       overlaps.add((other.id, node.id));
@@ -56,20 +58,29 @@ final class _Graph {
     await Future<void>.delayed(Duration.zero);
     releasing.remove(node);
     node.state = 'released';
-    if (fail.contains(node.id)) disposeFailures.add(node.id);
+    if (fail.contains(node.id)) {
+      disposeFailures = disposeFailures.then(
+        RuntimeDie(
+          DisposeFailure('${node.id}', StateError('x'), StackTrace.empty),
+        ),
+      );
+    }
     return disposeFailures;
   }
 
-  Future<List<int>> run() =>
-      RuntimeTeardownScheduler<_Node, int>(
-            ready: ready,
-            release: release,
-            reads: (node) => node.reads,
-          )
-          .releaseAlongReads(
-            nodes.reversed.toList(), // descending creation order
-          )
-          .timeout(const Duration(seconds: 2));
+  Future<List<int>> run() async {
+    final cause =
+        await RuntimeTeardownScheduler<_Node>(
+              ready: ready,
+              release: release,
+              reads: (node) => node.reads,
+            )
+            .releaseAlongReads(
+              nodes.reversed.toList(), // descending creation order
+            )
+            .timeout(const Duration(seconds: 2));
+    return [for (final f in cause.disposeFailures) int.parse(f.owner)];
+  }
 }
 
 void main() {
@@ -134,18 +145,19 @@ void main() {
   test('a release that throws does not stop the others', () async {
     final graph = _Graph(2, {});
     var released = 0;
-    await expectLater(
-      RuntimeTeardownScheduler<_Node, int>(
-        ready: (_) => true,
-        reads: (_) => const [],
-        release: (node) async {
-          released++;
-          if (node.id == 2) throw StateError('release');
-          return const [];
-        },
-      ).releaseAlongReads(graph.nodes.reversed.toList()),
-      throwsStateError,
-    );
+    final cause = await RuntimeTeardownScheduler<_Node>(
+      ready: (_) => true,
+      reads: (_) => const [],
+      release: (node) async {
+        released++;
+        if (node.id == 2) throw StateError('release');
+        return RuntimeCause.empty;
+      },
+    ).releaseAlongReads(graph.nodes.reversed.toList());
+    // The scheduler returns the thrown error as the first failure of the
+    // cause; `disposeScope` rethrows it.
+    expect(cause.firstFail!.error, isStateError);
+    expect(cause.disposeError()!.error, isStateError);
     expect(released, 2);
   });
 }
