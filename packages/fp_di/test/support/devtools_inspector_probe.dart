@@ -14,6 +14,7 @@ Future<void> main() async {
   assert(asserts = true);
 
   final recorder = InspectorRecorder()..install();
+  Scope.debugInspector = true;
   final slowReports = <SlowMutation>[];
 
   // Real traffic: a child that initializes before its root, a failed

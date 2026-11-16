@@ -59,7 +59,8 @@ final class Scope {
   /// and the shape graph show it. It has no other effect.
   ///
   /// A debug build, one that runs with assertions, registers the DevTools
-  /// inspector for the root. See the README.
+  /// inspector for the root only when [debugInspector] is true. See the
+  /// README.
   factory Scope({
     required List<Component<Object?>> components,
     String? debugLabel,
@@ -68,12 +69,15 @@ final class Scope {
   }) {
     // The inspector wraps the listener, so it can post the report first. A root
     // without a listener has no relay, so it starts no timer. The assert
-    // keeps the inspector out of a build without assertions.
+    // keeps the inspector out of a build without assertions, and the switch
+    // keeps it out of a debug build that did not opt in.
     InspectorSlowRelay? relay;
     var listener = onSlowMutation;
     assert(() {
-      relay = InspectorSlowRelay.of(onSlowMutation);
-      listener = relay?.report ?? onSlowMutation;
+      if (debugInspector) {
+        relay = InspectorSlowRelay.of(onSlowMutation);
+        listener = relay?.report ?? onSlowMutation;
+      }
       return true;
     }());
     final runtime = Runtime.create(
@@ -88,11 +92,25 @@ final class Scope {
     });
     runtime.labelScope(id, debugLabel);
     assert(() {
-      Inspector.rootCreated(runtime, id, relay);
+      if (debugInspector) Inspector.rootCreated(runtime, id, relay);
       return true;
     }());
     return Scope._(runtime, id);
   }
+
+  /// Whether a root scope created from now on serves the DevTools inspector.
+  ///
+  /// The default is false. Set it to true before the first root, for example
+  /// at the start of `main`, to inspect the app in the `fp_di` tab of
+  /// DevTools. The runtime reads the switch only inside an `assert`, so a
+  /// build without assertions, such as a release build, never serves the
+  /// inspector.
+  ///
+  /// The first root created while the switch is true registers the service
+  /// extensions of the isolate. A root created while it is false never joins
+  /// the inspector. A later change of the switch does not remove a root that
+  /// joined, and the service extensions stay registered.
+  static bool debugInspector = false;
 
   final Runtime _runtime;
   final ScopeId _id;

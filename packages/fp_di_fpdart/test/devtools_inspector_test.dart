@@ -74,6 +74,7 @@ void main() {
   assert(asserts = true);
 
   setUp(() {
+    Scope.debugInspector = true;
     recorder = InspectorRecorder()..install();
   });
 
@@ -86,6 +87,7 @@ void main() {
     }
     _roots.clear();
     recorder.uninstall();
+    Scope.debugInspector = false;
   });
 
   test('the test run has assertions enabled', () {
@@ -119,6 +121,25 @@ void main() {
         _root(); // a third root joins without a new registration
         expect(recorder.registrations, _names);
         expect(_list((await recorder.call('roots'))['roots']), hasLength(2));
+      },
+    );
+
+    test(
+      'with the switch off, a root registers nothing and posts nothing',
+      () async {
+        expect(asserts, isTrue);
+        Scope.debugInspector = false;
+        final root = _root(
+          debugLabel: 'quiet',
+          onSlowMutation: (_) {},
+          slowMutationThreshold: const Duration(milliseconds: 10),
+        );
+        rightOf(await root.run());
+        rightOf(await root.dispose());
+        await settle();
+        expect(recorder.registrations, isEmpty);
+        expect(recorder.handlers, isEmpty);
+        expect(recorder.events, isEmpty);
       },
     );
 

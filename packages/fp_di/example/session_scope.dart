@@ -137,6 +137,8 @@ Future<Scope> login(Scope app, String userId) =>
     app.child(module: sessionModule(userId)).initialize();
 
 Future<void> main() async {
+  // A debug run serves the DevTools inspector only after this switch.
+  Scope.debugInspector = true;
   print('bootstrap');
   final app = Scope(module: appModule);
   app.addListener(trace(app));

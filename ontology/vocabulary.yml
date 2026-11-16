@@ -77,6 +77,7 @@ nodes:
       - failed
       - graph
       - ignoring
+      - inspector
       - label
       - labels
       - listener

@@ -118,6 +118,8 @@ final class AppScopes extends ValueNotifier<Scope> {
 }
 
 Future<void> main() async {
+  // A debug build serves the DevTools inspector only after this switch.
+  Scope.debugInspector = true;
   final app = await Scope(module: appModule).initialize();
   runApp(SessionApp(scopes: AppScopes(app)));
 }

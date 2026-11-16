@@ -37,6 +37,7 @@ Future<void> main(List<String> args) async {
   directory.createSync(recursive: true);
 
   final recorder = InspectorRecorder()..install();
+  Scope.debugInspector = true;
   final written = <String>[];
   void write(String name, Object? json) {
     const encoder = JsonEncoder.withIndent('  ');

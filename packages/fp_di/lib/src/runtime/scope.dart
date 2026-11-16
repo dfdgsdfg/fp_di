@@ -57,7 +57,9 @@ final class Scope {
   }) {
     _RuntimeInspectorSlowRelay? relay;
     assert(() {
-      relay = _RuntimeInspectorSlowRelay.of(onSlowMutation);
+      if (debugInspector) {
+        relay = _RuntimeInspectorSlowRelay.of(onSlowMutation);
+      }
       return true;
     }());
     final runtime = _Runtime(
@@ -69,11 +71,25 @@ final class Scope {
     scope.public = public;
     runtime.scopes.add(public);
     assert(() {
-      _RuntimeInspector.rootCreated(public, relay);
+      if (debugInspector) _RuntimeInspector.rootCreated(public, relay);
       return true;
     }());
     return public;
   }
+
+  /// Whether a root scope created from now on serves the DevTools inspector.
+  ///
+  /// The default is false. Set it to true before the first root, for example
+  /// at the start of `main`, to inspect the app in the `fp_di` tab of
+  /// DevTools. The runtime reads the switch only inside an `assert`, so a
+  /// build without assertions, such as a release build, never serves the
+  /// inspector.
+  ///
+  /// The first root created while the switch is true registers the service
+  /// extensions of the isolate. A root created while it is false never joins
+  /// the inspector. A later change of the switch does not remove a root that
+  /// joined, and the service extensions stay registered.
+  static bool debugInspector = false;
 
   final _Runtime _runtime;
   final _RuntimeScope _scope;

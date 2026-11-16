@@ -636,7 +636,9 @@ chart of each variant of an application.
 
 ## DevTools inspector
 
-A debug build serves an inspector to Dart DevTools. The inspector is the
+A debug build can serve an inspector to Dart DevTools. The inspector is opt-in:
+set `Scope.debugInspector = true` before the first root, for example at the
+start of `main`. The default is `false`. The inspector is the
 inspector of `fp_di` over the reactive runtime of this package. It has the same
 protocol: the service extensions `ext.fp_di.roots`, `ext.fp_di.state`,
 `ext.fp_di.node`, `ext.fp_di.shape`, and `ext.fp_di.listen`, the events
@@ -646,10 +648,15 @@ of a scenario with the answers that `fp_di` recorded for the extension app
 `packages/fp_di_devtools`. The comparison is equal but for the fields in the
 table below. A run of the app against this package was not made.
 
-- The inspector exists only when Dart assertions are enabled. The factory of
-  `Scope` registers it inside an `assert`, so a release build carries no
-  inspector work. This is the rule of `fp_di`. A root without
-  `onSlowMutation` starts no timer for the inspector.
+- The inspector exists only when Dart assertions are enabled and
+  `Scope.debugInspector` is `true`. The factory of `Scope` reads both inside
+  an `assert`, so a release build carries no inspector work. This is the rule
+  of `fp_di`. A root without `onSlowMutation` starts no timer for the
+  inspector.
+- The first root that is created while the switch is `true` registers the
+  service extensions. A root that is created while the switch is `false` never
+  joins the inspector. A later change of the switch removes no root and no
+  service extension.
 - The inspector changes no state. A query reads the same snapshots as
   `Scope.state`. `listen` with `enabled: true` adds one listener for each root,
   and the first transition of an event-loop turn schedules one
@@ -709,7 +716,8 @@ from the workspace root:
 dart run devtools_extensions validate --package=packages/fp_di_fpdart
 ```
 
-Run the app with assertions (a debug build) and open DevTools. The folder
+Set `Scope.debugInspector = true`, run the app with assertions (a debug
+build), and open DevTools. The folder
 `packages/fp_di_fpdart/extension/` is local build output. Do not commit it.
 
 ## Internals

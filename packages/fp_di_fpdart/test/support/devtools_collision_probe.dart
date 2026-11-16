@@ -9,6 +9,7 @@ import 'package:fp_di_fpdart/fp_di_fpdart.dart';
 import 'package:fp_di_fpdart/src/runtime/inspector_hooks.dart';
 
 Future<void> main() async {
+  Scope.debugInspector = true;
   developer.registerExtension(
     'ext.fp_di.state',
     (method, parameters) async => developer.ServiceExtensionResponse.result(

@@ -12,6 +12,9 @@ import 'devtools_fixture.dart';
 Future<void> main() async {
   var asserts = false;
   assert(asserts = true);
+  // The inspector is opt-in. The probe opts in, so the run without assertions
+  // shows that the assert alone keeps the inspector out.
+  Scope.debugInspector = true;
 
   final recorder = InspectorRecorder()..install();
   final slowReports = <SlowMutation>[];

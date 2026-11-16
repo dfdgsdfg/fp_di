@@ -71,6 +71,7 @@ void main() {
 
   setUp(() {
     recorder = InspectorRecorder()..install();
+    Scope.debugInspector = true;
   });
 
   tearDown(() async {
@@ -82,6 +83,7 @@ void main() {
     }
     _roots.clear();
     recorder.uninstall();
+    Scope.debugInspector = false;
   });
 
   test('the test run has assertions enabled', () {
@@ -125,6 +127,31 @@ void main() {
   });
 
   group('registration (V-T-TL-DT-001)', () {
+    test('without the switch a root serves nothing', () async {
+      Scope.debugInspector = false;
+      final root = _root(
+        module: Module(
+          components: [Component<int>.value(value: 1, key: baseKey)],
+        ),
+      );
+      await root.initialize();
+      await root.dispose();
+      await settle();
+      expect(recorder.registrations, isEmpty);
+      expect(recorder.events, isEmpty);
+
+      Scope.debugInspector = true;
+      _root();
+      expect(
+        recorder.registrations,
+        _names,
+        reason:
+            'the switch is read '
+            'when a root is created',
+      );
+      expect(_list((await recorder.call('roots'))['roots']), hasLength(1));
+    });
+
     test(
       'registers each service extension once and lists the live root',
       () async {

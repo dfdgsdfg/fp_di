@@ -37,8 +37,9 @@ dart run --enable-asserts packages/fp_di/test/support/dump_devtools_fixtures.dar
 ## Manual check (V-Q-TL-DT-001)
 
 1. Build the extension as stated above.
-2. Run `dart run --enable-asserts --observe packages/fp_di/example/session_scope.dart`,
-   and open DevTools from the printed address.
+2. Run `dart run --enable-asserts --observe packages/fp_di/example/session_scope.dart`.
+   The example sets `Scope.debugInspector = true`. An app must set the switch
+   before its first root scope. Open DevTools from the printed address.
 3. Enable the `fp_di` extension in DevTools, and open the `fp_di` tab.
 4. Check that the scope tree, the nodes, the details, the timeline, and the
    graph show the state of the app during startup, a logout, and a failed

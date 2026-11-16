@@ -339,3 +339,10 @@ Current definitions live in YAML. Authoring guidance lives in [AGENTS.md](AGENTS
 - Decision: `workspace.yml` drops the `fp_di_fpdart` node and its edge. `agents/scripts/check_vocabulary.dart` reads only the public libraries of `fp_di` and `fp_di_flutter`. `vocabulary.yml` drops the `fpdart_words` node and the prefix `fpdart`. `failed` moves to `observation_words`, because the node phases of the core use it.
 - Consequences: No ontology node, edge, or vocabulary word describes `fp_di_fpdart`, and the vocabulary check does not read its identifiers. The track of the package adds them again if it needs them.
 - References: [workspace.yml](workspace.yml), [vocabulary.yml](vocabulary.yml), [architecture log](../specs/architecture/log.md).
+
+## [2026-11-16] decision | Add the word inspector to the observation vocabulary
+
+- Context: `Scope.debugInspector` turns on the DevTools inspector in a debug build. The word `inspector` was in no node, so the vocabulary check would reject the identifier. The entry of 2026-11-14 kept the inspector inside `fp_di_core` with no node.
+- Decision: `observation_words` lists `inspector`, with the meaning that the DevTools topic gives it: the service extensions and events that a debug build serves to DevTools.
+- Consequences: The vocabulary check accepts `debugInspector`. The inspector still adds no node to `workspace.yml`.
+- References: [vocabulary.yml](vocabulary.yml), [DevTools log](../specs/tooling/devtools/log.md).

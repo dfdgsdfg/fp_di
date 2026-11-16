@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Breaking (debug builds only): the DevTools inspector is off by default. Set
+  `Scope.debugInspector = true` before the first root scope to serve it. A
+  release build never serves the inspector.
 - When several members fail in one `initialize`, the rollback failures of the
   other failed members now follow those of the rethrown member in declaration
   order. Before, they followed the order in which the members failed.

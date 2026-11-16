@@ -23,12 +23,12 @@ code to read those values, and must stop the app to read them again.
 
 Dart DevTools lets a package add a tab that reads a running app through the
 VM service. A DevTools extension of `fp_di` shows those answers while the app
-runs, without code in the app. It must cost nothing in a release build, and it
-must not make the core package depend on Flutter.
+runs, with one switch in the app. It must cost nothing in a release build, and
+it must not make the core package depend on Flutter.
 
 ## Scope
 
-- An inspector in the core package that a debug build of an app serves to DevTools, with no call in the app.
+- An inspector in the core package that a debug build of an app serves to DevTools after the app sets one switch.
 - A versioned JSON protocol: the live roots, the state tree of a root, the details of one node, the shape of one scope, and events for transitions, errors, and slow mutations.
 - A DevTools extension app that shows the scope tree, the nodes of a scope, the details of a node, a timeline of transitions, and the shape graph.
 - A local build of the extension in the `fp_di` package folder, as the DevTools extension framework requires. The extension is experimental.
@@ -38,6 +38,7 @@ must not make the core package depend on Flutter.
 
 - Any change to the state of a running app from DevTools: no disposal, no new scope, no new value. The inspector reads only.
 - An inspector in a release or profile build.
+- An inspector in a debug build that did not set the switch.
 - A separate extension for `fp_di_flutter`. The widget tree stays the business of the Flutter inspector.
 - A stable public Dart API for the protocol. The protocol is a contract between the inspector and the extension of the same version.
 - The built extension in a release of `fp_di`, while the extension is experimental.
@@ -48,17 +49,17 @@ must not make the core package depend on Flutter.
 - <a id="r-us-tl-dt-002"></a>**R-US-TL-DT-002** — As an application author, I want to see why a value is missing or failed, with the keys that a node waits for and the failure behind a key, so that I find the cause without reading logs.
 - <a id="r-us-tl-dt-003"></a>**R-US-TL-DT-003** — As an application author, I want to see the transitions, the errors, and the slow mutations in the order in which they happened, so that I can follow a startup, a logout, or a failure.
 - <a id="r-us-tl-dt-004"></a>**R-US-TL-DT-004** — As an application author, I want to see the shape graph of a scope with the phase of each member, so that I see which member waits for which and where a chain is long.
-- <a id="r-us-tl-dt-005"></a>**R-US-TL-DT-005** — As an application author, I want the inspector to need no setup and to cost nothing in a release build, so that I keep it in every debug build.
+- <a id="r-us-tl-dt-005"></a>**R-US-TL-DT-005** — As an application author, I want to turn the inspector on with one switch, and I want it to cost nothing when it is off or in a release build, so that a debug build serves it only when I ask.
 
 ## Use Cases
 
 - <a id="r-uc-tl-dt-001"></a>**R-UC-TL-DT-001** — Serve the inspector in a debug build
   - Actor: runtime
-  - Trigger: the creation of the first root scope in an isolate
-  - Preconditions: Dart assertions are enabled, as in a Flutter debug build, `dart run --enable-asserts`, and `package:test`
-  - Main flow: the runtime MUST register the service extensions of the inspector one time in the isolate, inside an assertion. It MUST keep each live root in a registry that holds a weak reference, so that the registry keeps no root alive. A root MUST leave the registry when its disposal ends. The creation and the disposal of a root MUST take constant time in the registry on average, also with many live roots.
-  - Alternative flows: without assertions, the runtime MUST NOT register a service extension, MUST NOT keep a registry, and MUST NOT post an event. A second root MUST NOT register the service extensions again.
-  - Postcondition: the app needs no call to serve the inspector, and a release build carries no inspector work.
+  - Trigger: the creation of the first root scope in an isolate while `Scope.debugInspector` is true
+  - Preconditions: Dart assertions are enabled, as in a Flutter debug build, `dart run --enable-asserts`, and `package:test`. The app set `Scope.debugInspector` to true before it created the root.
+  - Main flow: `Scope.debugInspector` MUST be false by default. The runtime MUST read the switch only inside an assertion, when it creates a root. The runtime MUST register the service extensions of the inspector one time in the isolate, inside an assertion. It MUST keep each live root in a registry that holds a weak reference, so that the registry keeps no root alive. A root MUST leave the registry when its disposal ends. The creation and the disposal of a root MUST take constant time in the registry on average, also with many live roots.
+  - Alternative flows: without assertions, or for a root created while the switch is false, the runtime MUST NOT register a service extension, MUST NOT add the root to a registry, and MUST NOT post an event for the root. A second root MUST NOT register the service extensions again. A later change of the switch MUST NOT remove a root that joined the registry.
+  - Postcondition: a debug build serves the inspector only after the app sets the switch, and a release build carries no inspector work.
 
 - <a id="r-uc-tl-dt-002"></a>**R-UC-TL-DT-002** — Answer a query of the extension
   - Actor: DevTools extension
@@ -102,7 +103,7 @@ must not make the core package depend on Flutter.
 
 ## Verification
 
-- <a id="v-t-tl-dt-001"></a>**V-T-TL-DT-001** `[test]` Given a Dart VM test with assertions and a second run without them, when two roots are created and one is disposed, then with assertions the service extensions are registered once and the registry lists only the live root, and 40000 roots are created and disposed within a time bound; without assertions nothing is registered, nothing is kept, and nothing is posted. Covers: R-US-TL-DT-005, R-UC-TL-DT-001.
+- <a id="v-t-tl-dt-001"></a>**V-T-TL-DT-001** `[test]` Given a Dart VM test with assertions and a second run without them, both with `Scope.debugInspector` set to true, when two roots are created and one is disposed, then with assertions the service extensions are registered once and the registry lists only the live root, and 40000 roots are created and disposed within a time bound; without assertions nothing is registered, nothing is kept, and nothing is posted. With assertions and the switch at its default, a root registers nothing and posts nothing, and a root created after the switch is set registers the service extensions. Covers: R-US-TL-DT-005, R-UC-TL-DT-001.
 - <a id="v-t-tl-dt-002"></a>**V-T-TL-DT-002** `[test]` Given a root with a child initialized before its parent, a waiting node, a node whose automatic activation failed, a node that reads a collection key, and a node disposed alone, when the handlers of `roots`, `state`, `node`, and `shape` are called directly, then each answer has the `format` and `version`, the tree, the node details, the readers, the failure, and the search steps match the runtime, an unknown id gives an error answer, and `revision` is unchanged by the calls. Covers: R-US-TL-DT-001, R-US-TL-DT-002, R-US-TL-DT-004, R-UC-TL-DT-002.
 - <a id="v-t-tl-dt-003"></a>**V-T-TL-DT-003** `[test]` Given a root and a recorder of posted events, when transitions, an error, and a slow mutation happen before and after a call of `listen`, then nothing is posted before it, one transition event is posted for each event-loop turn with the changed node states, the error and the slow mutation are posted, a stack trace over the bound is cut and marked, and `listen` with `enabled: false` stops the events. Covers: R-US-TL-DT-003, R-UC-TL-DT-003.
 - <a id="v-t-tl-dt-004"></a>**V-T-TL-DT-004** `[test]` Given nodes whose values have a `toString` that returns a secret, a long text, and a throw, when the handlers answer with and without the request for values, then no value text appears without the request, a long text is cut, and a throwing `toString` gives the placeholder. Covers: R-UC-TL-DT-004.

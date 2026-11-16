@@ -39,3 +39,10 @@ Append accepted decisions only. Newest at the bottom.
 - Consequences: The package keeps its size, and publishing gives no extension warning. Only an author with a path dependency on the workspace sees the tab, after a local build. The protocol can change without a compatibility duty while the extension is experimental.
 - References: [packaging](spec.md#packaging), [R-UC-TL-DT-006](requirements.md#r-uc-tl-dt-006).
 
+## [2026-11-16] decision | Serve the inspector only after the app opts in
+
+- Context: The decision of 2026-11-14 served the inspector in each debug build, with no way to turn it off. The application author wants the inspector off by default and on only when the app asks for it, and only in a debug build.
+- Decision: Supersedes the decision "Serve the inspector automatically in each debug build". `Scope` has the static switch `debugInspector`, false by default. The constructor of a root reads it inside an `assert`. A root created while the switch is true registers the service extensions and joins the registry, as before. A root created while it is false does neither.
+- Consequences: A debug build that does not set the switch registers no service extension, keeps no registry, and posts no event. A release build is unchanged. An author must set the switch before the first root, and must restart the app to inspect it after a forgotten switch. The inspector tests and the fixture dump set the switch.
+- Alternatives: An opt-out switch keeps the old default and the risk of the 2026-11-14 decision in reverse. A `--dart-define` needs no code in the app, but a test process cannot change it.
+- References: [registration](spec.md#registration), [R-UC-TL-DT-001](requirements.md#r-uc-tl-dt-001).

@@ -21,8 +21,9 @@ for each change. A DevTools **extension app** reads them through the VM
 service and shows the scopes, the nodes, the transitions, and the shape graph
 of the running app ([requirements](requirements.md)). The inspector reads the
 same state as the observation layer of the runtime and changes nothing. It
-exists only when Dart assertions are enabled, so a release build carries no
-inspector work. The extension is experimental, and a release of `fp_di` does
+exists only when Dart assertions are enabled and the app set
+`Scope.debugInspector` to true, so a release build carries no inspector
+work. The extension is experimental, and a release of `fp_di` does
 not ship it. The inspector is
 [`runtime_inspector.dart`](../../../packages/fp_di/lib/src/runtime/runtime_inspector.dart),
 and the extension app is [`fp_di_devtools`](../../../packages/fp_di_devtools/).
@@ -66,14 +67,30 @@ and the stack trace of a failure.
 ```mermaid
 stateDiagram-v2
   [*] --> Absent: isolate starts
-  Absent --> Served: first root created, assertions enabled
-  Absent --> Absent: root created, assertions disabled
+  Absent --> Served: first root created, assertions enabled, switch true
+  Absent --> Absent: root created, assertions disabled or switch false
   Served --> Streaming: listen with enabled true
   Streaming --> Served: listen with enabled false
   Streaming --> Streaming: transition, error, or slow mutation posts an event
 ```
 
-The constructor of a root runs the registration inside an `assert`. The first
+The switch `Scope.debugInspector` is a static field, and it is false by
+default. An app sets it to true before its first root, for example at the
+start of `main`:
+
+```dart
+void main() {
+  Scope.debugInspector = true;
+  runApp(const App());
+}
+```
+
+The constructor of a root reads the switch inside an `assert`. When the switch
+is true, the constructor runs the registration inside the same `assert`. A
+root created while the switch is false never joins the registry, and its
+slow mutations post no event. A later change of the switch does not remove a
+root that joined, and the service extensions stay registered, because
+`dart:developer` cannot remove a registration. The first
 registration in an isolate registers each service extension with
 `registerExtension` of `dart:developer`. Later roots only join the registry. A
 name can be registered one time in an isolate, so the inspector keeps one flag
@@ -214,7 +231,7 @@ to the workspace.
 - **Target:** the registration of the inspector in [Registration](#registration)
 - **Files:** [`devtools_inspector_test.dart`](../../../packages/fp_di/test/devtools_inspector_test.dart), and the subprocess [`devtools_inspector_probe.dart`](../../../packages/fp_di/test/support/devtools_inspector_probe.dart), which the test runs with and without `--enable-asserts`
 - **Fixtures:** the recorder of [`devtools_fixture.dart`](../../../packages/fp_di/test/support/devtools_fixture.dart), installed through `RuntimeInspectorHooks` of [`runtime_inspector_hooks.dart`](../../../packages/fp_di/lib/src/runtime/runtime_inspector_hooks.dart); two roots, one disposed
-- **Pass:** with assertions, each service extension is registered one time and `roots` lists only the live root; without assertions, the hook records nothing
+- **Pass:** with assertions and the switch, each service extension is registered one time and `roots` lists only the live root; without assertions, the hook records nothing; with assertions and the switch at its default, the hook records nothing until a root is created after the switch is set
 - **Evidence:** present
 
 ### <a id="v-t-tl-dt-002"></a>V-T-TL-DT-002 — `[test]` Query answers
@@ -279,11 +296,11 @@ checklist is in the [README of the extension app](../../../packages/fp_di_devtoo
 
 ## Risks & Trade-offs
 
-- **Automatic registration.** The inspector needs no call in the app, so it is
-  there whenever DevTools is. The cost is one registration and a weak registry
-  in each debug isolate; events cost nothing until the extension listens. An
-  opt-in call was rejected: an author forgets it exactly when debugging needs
-  it. See the [decision](log.md).
+- **Opt-in registration.** The inspector serves nothing until the app sets
+  `Scope.debugInspector`, so a debug build that does not ask for it pays no
+  registration and keeps no registry. An author who forgot the switch must set
+  it and restart the app before DevTools shows the tab. The switch replaced the
+  automatic registration; see the [decision](log.md).
 - **Internal access.** The inspector reads internal tables, so a change of the
   runtime can break it. Its tests live with the core tests and run on each
   change.
