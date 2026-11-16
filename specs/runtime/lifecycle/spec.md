@@ -2352,8 +2352,8 @@ conforms.
 - **Layer:** Unit
 - **Target:** `initialize` of large acyclic modules, and the cycle check of a read
 - **Files:** `packages/fp_di/test/module_test.dart`, group `initialize cost`
-- **Fixtures:** a 4000-member chain, a 4000-member module whose members each read the two members before them, a 4000-member star, and the existing cycle fixtures.
-- **Pass:** each module initializes within 1 s, which separates near-linear growth from the quadratic walk; the cycle fixtures still fail with `DependencyCycleError`.
+- **Fixtures:** a 4000-member chain, a 4000-member module whose members each read the two members before them, a 4000-member star, a 32000-member chain, and the existing cycle fixtures.
+- **Pass:** each module initializes within 1 s, which separates near-linear growth from the quadratic walk. The 32000-member chain also disposes within 1 s, which separates a near-linear check of undeclared keys and a near-linear teardown from a quadratic scan. The cycle fixtures still fail with `DependencyCycleError`.
 - **Evidence:** present
 
 ### <a id="v-t-rt-lc-028"></a>V-T-RT-LC-028 — `[test]` Default key and effects

@@ -1284,6 +1284,15 @@ final class _Runtime {
           return true;
         },
         release: (node) => deactivate(node, permanent: true),
+        // A node is a dependent of a publisher through a read of its
+        // committed activation or of its running activation.
+        reads: (node) => {
+          for (final publisher in node.dependencies) publisher.owner,
+          for (final activation in [node.activationContext, node.inFlight])
+            for (final publisher
+                in activation?.dependencies ?? const <_RuntimePublisher>{})
+              publisher.owner,
+        },
       ).releaseAlongReads(owned);
 
   /// [started] runs after the transition that starts the disposal, while

@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Performance: `Scope.initialize`, `Module.requires`, and `Module.reads` find
+  the member that publishes a key with an index, and a scope teardown checks
+  only the nodes that a finished release read. A chain of 16000 members
+  initialized in about 0.6 s and disposed in about 4.9 s (AOT); it now takes
+  about 0.1 s and 0.04 s.
 - Documentation: the example `drain_scope.dart` separates what a logout must
   finish from what it may drop, with a scope for the database of a session,
   a hold for work outside the graph, and a time limit.

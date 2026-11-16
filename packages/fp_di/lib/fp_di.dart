@@ -30,6 +30,6 @@ export 'src/model/exception.dart';
 export 'src/model/key.dart';
 export 'src/model/lease.dart'
     hide Lease, DisposeFunction, createLease, runDependency;
-export 'src/model/module.dart';
+export 'src/model/module.dart' hide publishedByOtherMember;
 export 'src/model/state.dart' hide createNodeState, createScopeState;
 export 'src/runtime/scope.dart';

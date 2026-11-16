@@ -61,7 +61,11 @@ final class _Graph {
   }
 
   Future<List<int>> run() =>
-      RuntimeTeardownScheduler<_Node, int>(ready: ready, release: release)
+      RuntimeTeardownScheduler<_Node, int>(
+            ready: ready,
+            release: release,
+            reads: (node) => node.reads,
+          )
           .releaseAlongReads(
             nodes.reversed.toList(), // descending creation order
           )
@@ -133,6 +137,7 @@ void main() {
     await expectLater(
       RuntimeTeardownScheduler<_Node, int>(
         ready: (_) => true,
+        reads: (_) => const [],
         release: (node) async {
           released++;
           if (node.id == 2) throw StateError('release');

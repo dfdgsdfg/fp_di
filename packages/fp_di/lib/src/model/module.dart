@@ -131,17 +131,23 @@ final class Module {
     Set<DiKeyBase> Function(ComponentBase member) select,
   ) {
     final result = <DiKeyBase>{};
-    for (var i = 0; i < components.length; i++) {
-      for (final key in select(components[i])) {
-        var internal = false;
-        for (var j = 0; j < components.length && !internal; j++) {
-          internal = j != i && components[j].key == key;
-        }
-        if (!internal) result.add(key);
+    for (final member in components) {
+      for (final key in select(member)) {
+        if (!publishedByOtherMember(this, member, key)) result.add(key);
       }
     }
     return Set<DiKeyBase>.unmodifiable(result);
   }
+
+  /// The number of members that publish each key. A module may hold two
+  /// publishers of a key until `Scope.initialize` rejects it.
+  late final Map<DiKeyBase, int> _publisherCounts = () {
+    final counts = <DiKeyBase, int>{};
+    for (final member in components) {
+      if (member.key case final key?) counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }();
 
   /// A module in which [component] takes the place of the one member that
   /// publishes [key].
@@ -381,3 +387,11 @@ final class Module {
       ? 'Module(${components.length})'
       : 'Module($debugLabel)';
 }
+
+/// Whether a member of [module] other than [member] publishes [key]. Not
+/// exported: `Scope.initialize` reads it to find undeclared keys.
+bool publishedByOtherMember(
+  Module module,
+  ComponentBase member,
+  DiKeyBase key,
+) => (module._publisherCounts[key] ?? 0) > (member.key == key ? 1 : 0);

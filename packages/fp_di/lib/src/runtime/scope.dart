@@ -824,15 +824,11 @@ final class Scope {
     }
     final members = module.components;
     final result = <({String label, DiKeyBase key})>[];
-    for (var i = 0; i < members.length; i++) {
-      for (final key in members[i].requires) {
+    for (final member in members) {
+      for (final key in member.requires) {
         if (declared.contains(key)) continue;
-        var published = false;
-        for (var j = 0; j < members.length && !published; j++) {
-          published = j != i && members[j].key == key;
-        }
-        if (!published) {
-          result.add((label: members[i].label, key: key));
+        if (!publishedByOtherMember(module, member, key)) {
+          result.add((label: member.label, key: key));
         }
       }
     }

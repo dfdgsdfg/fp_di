@@ -1528,6 +1528,35 @@ void main() {
         await di.dispose();
       });
     }
+    // A scan of every member for each required key, or of every unstarted
+    // node after each release, makes this quadratic: the chain then takes
+    // seconds.
+    test(
+      'initializes and disposes a chain of 32000 members within 1 s each',
+      () async {
+        const count = 32000;
+        final module = Module(
+          components: [
+            for (var i = 0; i < count; i++)
+              _node('m$i', [if (i > 0) 'm${i - 1}']),
+          ],
+        );
+        final di = Scope(module: module);
+        final watch = Stopwatch()..start();
+        await di.initialize();
+        final initialized = watch.elapsed;
+        watch.reset();
+        await di.dispose();
+        final disposed = watch.elapsed;
+        // ignore: avoid_print
+        print(
+          'initialize($count, chain): ${initialized.inMilliseconds} ms, '
+          'dispose: ${disposed.inMilliseconds} ms',
+        );
+        expect(initialized, lessThan(const Duration(seconds: 1)));
+        expect(disposed, lessThan(const Duration(seconds: 1)));
+      },
+    );
   });
 
   group('members that require absent keys (V-T-RT-LC-036)', () {
