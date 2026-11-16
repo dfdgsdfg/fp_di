@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.1
 
 - Performance: `Scope.initialize`, `Module.requires`, and `Module.reads` find
   the member that publishes a key with an index, and a scope teardown checks
