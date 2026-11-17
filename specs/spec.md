@@ -14,7 +14,8 @@ This navigation document owns no independent requirements or implementation cont
 |---|---|
 | [Project architecture](architecture/spec.md) | Package split, core/Flutter responsibilities, and paper adoption |
 | [Runtime lifecycle](runtime/lifecycle/spec.md) | Activation, rollback, dependency targets, and withdrawal |
-| [Automated tests](verification/test/spec.md) | Test layers, deterministic fixtures, and evidence policy |
+| [Automated tests](verification/test/spec.md) | Test layers, deterministic fixtures, and [fuzz provenance and manifests](verification/test/spec.md#fuzz-evidence-artifacts) |
+| [Benchmark evidence](verification/test/spec.md#benchmark-evidence-artifacts) | Timing protocol, samples, statistics, manifests, and source provenance |
 | [Formal verification](verification/formal/spec.md) | TLA+ model design, properties, bounds, and optional Lean proof boundary |
 | [DevTools extension](tooling/devtools/spec.md) | Inspector protocol that a debug build serves, and the DevTools extension app that shows it |
 | [Ontology format](ontology/spec.md) | Format and vocabulary of the documentation-only [ontology](../ontology/AGENTS.md) |

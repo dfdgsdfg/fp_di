@@ -452,6 +452,200 @@ sequenceDiagram
     end
 ```
 
+### Fuzz evidence artifacts
+
+The repository runner records fuzz evidence automatically when its target
+paths include a lifecycle fuzz suite or its detection controls.
+Both runtime packages use the same recorder in
+[`fuzz_evidence.dart`](../../../verification/fuzz_evidence.dart).
+Existing commands retain their console reporter and test process exit code.
+The manifest classifies evidence separately, so a filter that excludes fuzz
+tests can pass its selected tests without producing passed fuzz evidence.
+
+```sh
+dart run agents/scripts/test_core.dart packages/fp_di/test/lifecycle_fuzz_test.dart
+dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test/lifecycle_fuzz_test.dart
+```
+
+Each invocation creates a distinct directory under `output/fuzz/`.
+The directory is ignored by Git and contains:
+
+| Artifact | Contents |
+|---|---|
+| `manifest.json` | Schema version, timestamps, arguments, selected suites, observed results, exit code, and completion status |
+| `provenance.json` | SDK and operating system, fuzz environment settings, Git revision and status, and actual source hashes |
+| `source.patch` | Tracked source changes relative to the recorded revision |
+| `pubspec.lock` | Dependency versions used by the invocation |
+| `sources/` | Source content associated with the recorded hashes, stored as `<repository-path>.source` |
+| `events.jsonl` | Additional `package:test` JSON reporter output, including configuration prints, test names, errors, and reduced failure reports |
+| `coverage.json` | Reported configuration and coverage counters, attributed to each fuzz suite |
+| `failures.json` | Failure reports and test errors, including graph descriptions and reduced sequences when the harness reports them |
+
+The recorder writes a `running` manifest before it starts the test process.
+An abrupt interruption leaves that manifest as incomplete evidence.
+A final passed result requires a successful process, a successful reporter
+completion, and executed fuzz tests. A skipped or filtered suite supplies no
+passing execution evidence. Missing or malformed events also prevent a pass.
+The recorder preserves the test names that identify graph indices and seeds.
+The JSON event log retains effective settings printed by each harness,
+including package-specific defaults.
+
+The source hashes identify working tree content, including uncommitted edits.
+The hashes use the Git blob algorithm, not a plain file digest.
+The source snapshot and patch retain the measured source state.
+The `.source` suffix prevents analysis and formatting tools from treating
+evidence snapshots as another workspace.
+These records describe bounded test execution and do not establish full
+lifecycle conformance. CI uploads `output/fuzz/` even when a test step fails.
+
+#### Manifest schema
+
+The recorder MUST write `manifest.json` with `schemaVersion: 1`.
+The initial manifest MUST precede provenance collection and child execution.
+The finalized manifest MUST retain its initial fields and add completion fields.
+
+| Phase | Required fields | Meaning |
+|---|---|---|
+| Initial | `schemaVersion`, `status`, `startedAt` | Format version, `running` state, and UTC start time |
+| Initial | `testArgs`, `plannedSuites`, `events` | Test arguments, selected fuzz suite paths, and relative event log path |
+| After provenance collection | `provenanceProblems` | Problems encountered while capturing source and environment identity |
+| Final | `completedAt`, `childExitCode`, `doneSuccess` | UTC completion time, process exit code, and reporter completion result |
+| Final | `completedFuzzTests` | Completed, non-hidden, non-skipped fuzz tests with suite, name, result, and captured messages |
+| Final | `reporterVersions`, `problems` | Observed reporter versions and reasons that prevent passed evidence |
+
+The status rules below apply in order after the initial `running` state.
+
+| Status | Condition |
+|---|---|
+| `running` | The recorder has written the initial manifest but has not finalized the invocation |
+| `failed` | The child exits unsuccessfully, or the event log reports a test failure or error |
+| `passed` | The child exits successfully, the reporter completes successfully, at least one fuzz test completes, and no evidence problem remains |
+| `incomplete` | Finalization reports neither failure nor complete passing evidence |
+
+A retained `running` manifest MUST NOT count as passed evidence.
+Skipped and hidden tests MUST NOT satisfy the completed fuzz test condition.
+The recorder MUST retain event parsing and provenance problems in the final manifest.
+
+#### Provenance schema
+
+`provenance.json` MUST retain the following fields for source attribution.
+
+| Fields | Meaning |
+|---|---|
+| `sdk`, `os`, `osVersion`, `resolvedExecutable`, `executableArguments` | Dart toolchain, host, and VM invocation identity |
+| `machine` | Logical processor count and available CPU model, memory size, and architecture |
+| `testArgs`, `environment` | Test arguments and explicitly supplied fuzz environment settings |
+| `gitHead`, `gitStatus`, `hashAlgorithm` | Source revision, working tree status, and Git object hash algorithm |
+| `sourceHashes`, `sourceSnapshots` | Repository-relative source paths mapped to hashes and paths below `sources/` |
+| `provenanceProblems` | Source or metadata collection failures |
+
+For fuzz invocations, the environment record MUST include only explicitly supplied `FP_DI_FUZZ_SEED`,
+`FP_DI_FUZZ_CYCLES`, `FP_DI_FUZZ_GRAPHS`, and `FP_DI_FUZZ_STEPS` values.
+Effective settings printed by each harness belong in `coverage.json`.
+Those settings include package defaults when no environment override exists.
+
+The source inventory MUST cover each selected runtime package's Dart libraries,
+tests, harnesses, and pubspec. Shared inputs include the workspace pubspec,
+dependency lock, runner, recorder, recorder tests, and shared provenance helper.
+Each captured source MUST have a corresponding hash and snapshot path.
+The recorder MUST compare source content and inventory again during finalization.
+A detected addition, removal, content change, or provenance problem MUST prevent passed evidence.
+
+`coverage.json` MUST preserve configuration and coverage messages with suite attribution.
+Its `values` maps contain parsed integer settings and counters.
+The original messages retain data that those integer maps do not represent.
+`failures.json` MUST retain reported errors and any reported reduced failure sequence.
+The event log remains the complete reporter record for the invocation.
+
+### Benchmark evidence artifacts
+
+The benchmark command executes the existing `fp_di` cost fixtures explicitly.
+It records results under `output/benchmarks/<UTC-prefix>-<unique-suffix>/`.
+Each invocation MUST create a distinct directory and retain a `running` manifest
+before collecting provenance or executing a sample.
+
+```sh
+dart run agents/scripts/benchmark.dart
+dart run agents/scripts/benchmark.dart --samples 10
+```
+
+The default protocol runs five sequential samples in fresh Dart VM processes.
+It uses JIT execution through `package:test`, assertions, and no dedicated warm-up.
+The fixtures run in a fixed order with `--concurrency=1`.
+Earlier fixtures can warm shared code within one sample.
+
+The selected fixtures are the `initialize cost` group in
+[`module_test.dart`](../../../packages/fp_di/test/module_test.dart) and the
+`cost` group in
+[`runtime_state_test.dart`](../../../packages/fp_di/test/runtime_state_test.dart).
+Their eight tests report ten operation metrics:
+
+| Workload | Metrics |
+|---|---|
+| 2,000 members, random dependency order, seed 7 | Initialize and dispose |
+| 4,000-member chain | Initialize |
+| 4,000 members, two predecessors | Initialize |
+| 4,000-member star | Initialize |
+| 32,000-member chain | Initialize and dispose |
+| 4,000-member chain with state reads at each transition | Initialize |
+| 1,000 set contributors and 20 readers, declaration order | Initialize |
+| 1,000 set contributors and 20 readers, reverse order | Initialize |
+
+Each metric MUST use the fixture's printed `Stopwatch` duration in milliseconds.
+Runner elapsed time MUST NOT substitute for an operation measurement.
+Fixture construction precedes timing. Initialization timing excludes later
+assertions and disposal. The fixtures perform no application I/O.
+The collection fixtures each contain 2,020 components, including their link components.
+
+The manifest MUST retain the protocol and planned and completed sample counts.
+Each sample MUST retain its child exit code, reporter events, and console logs.
+Raw measurements MUST retain their metric identity, operation, unit, and sample order.
+Only a complete set of expected metrics from every requested sample can produce
+complete aggregate statistics. Missing, duplicate, skipped, or malformed observations
+MUST prevent passed evidence. A failed process MUST retain the observations
+collected before failure. An interrupted invocation retains `running` status.
+
+| Artifact | Contents |
+|---|---|
+| `manifest.json` | Versioned protocol, requested samples, observed samples, completion status, and aggregate results when complete |
+| `provenance.json` | Toolchain, machine information, source identity, and collection problems |
+| `source.patch`, `pubspec.lock`, `sources/` | Source changes, dependency versions, and source snapshots |
+| `sample-001/events.jsonl` | Raw reporter events for the first sample; later samples increment the number |
+| `sample-001/stdout.log`, `sample-001/stderr.log` | Console output for the sample |
+| `summary.json` | Aggregate metrics, written only when the invocation qualifies as complete passed evidence |
+
+The benchmark manifest uses `schemaVersion: 1` and these fields:
+
+| Fields | Meaning |
+|---|---|
+| `status`, `startedAt`, `completedAt` | Invocation state and UTC timestamps; completion time appears during finalization |
+| `arguments`, `command`, `suiteArguments` | Benchmark invocation and the fixed child test arguments |
+| `plannedSamples`, `completedSamples`, `samples` | Requested count, completed sample numbers, and observed sample records |
+| `metricIds`, `policy` | Expected operation metrics and recorded measurement protocol |
+| `provenanceProblems`, `problems` | Capture problems and final evidence problems |
+| `summary` | Complete aggregates, or `null` when final evidence is failed or incomplete |
+
+Each `samples` record retains its `sampleNumber`, `exitCode`, `status`,
+`metrics`, `problems`, `suiteTests`, and `reporterVersions`.
+Each aggregate retains `id`, `unit`, ordered `samples`, `median`, `min`, and `max`.
+For even sample counts, the median is the mean of the two middle values.
+The original sample order MUST survive sorting for median and range calculations.
+
+Benchmark provenance uses the
+[shared source attribution fields](#provenance-schema) and
+[`run_provenance.dart`](../../../verification/run_provenance.dart).
+The inventory includes the selected package and benchmark tooling.
+Source or provenance problems MUST prevent passed evidence.
+Source snapshots use the `.source` suffix and remain outside Git.
+
+The command preserves the existing fixture regression guards.
+The summary defines no additional performance threshold.
+The [performance results](../../../packages/fp_di/doc/perfomance.md) record
+curated measurement summaries. Machine load, JIT compilation, and garbage collection
+can affect the samples. The protocol does not measure AOT, web, Flutter frame
+timing, memory use, or lookup throughput.
+Manual CI dispatch runs the benchmark command and retains its artifacts.
+
 ## Verification
 
 Each block uses this topic's `VR-TEST` criterion and names the canonical
@@ -526,6 +720,26 @@ those lifecycle IDs; these blocks own the test location and pass evidence.
 - **Fixtures:** `ManualZone`, a zone whose `scheduleMicrotask` fills a queue that drains while a body runs and stops when the body completes; `run` may wait for the real event loop, and `runStrict` fails when the drain alone cannot finish the body; every later call has a two-second `timeout`. In Flutter, a `testWidgets` body with a `setUp` and a `tearDown` of a five-second `timeout`.
 - **Commands:** `dart run agents/scripts/test_core.dart packages/fp_di/test/dead_zone_test.dart` and `flutter test packages/fp_di_flutter/test/test_zone_regression_test.dart`.
 - **Pass:** every later call completes. Before the fix, 20 of the 24 core tests and all 5 Flutter tests hung and timed out. The tests that already passed stay as guards. A timeout is a failure, not incomplete evidence, because the bound is the oracle.
+- **Evidence:** present
+
+### <a id="v-t-vr-test-008"></a>V-T-VR-TEST-008 — `[test]` Persistent fuzz evidence
+
+- **Layer:** Dart unit and runner integration.
+- **Target:** source provenance, durable artifacts, and completion classification for both fuzz packages.
+- **Files:** [`fuzz_evidence_test.dart`](../../../verification/test/fuzz_evidence_test.dart), [`fuzz_evidence.dart`](../../../verification/fuzz_evidence.dart), and [`test_core.dart`](../../../agents/scripts/test_core.dart).
+- **Fixtures:** complete successful events, failed tests, skipped tests, truncated events, distinct invocations, and a source edit.
+- **Commands:** `dart run agents/scripts/test_core.dart verification/test`; the two fuzz commands in [Fuzz evidence artifacts](#fuzz-evidence-artifacts).
+- **Pass:** only complete successful fuzz execution receives a passed manifest; each invocation retains distinct artifacts with its source identity and observed results.
+- **Evidence:** present
+
+### <a id="v-t-vr-test-009"></a>V-T-VR-TEST-009 — `[test]` Persistent benchmark evidence
+
+- **Layer:** Dart unit and runner integration.
+- **Target:** operation timing extraction, sample completeness, statistics, and benchmark source attribution.
+- **Files:** [`benchmark_evidence.dart`](../../../verification/benchmark_evidence.dart), [`benchmark_evidence_test.dart`](../../../verification/test/benchmark_evidence_test.dart), [`benchmark.dart`](../../../agents/scripts/benchmark.dart), and [`run_provenance.dart`](../../../verification/run_provenance.dart).
+- **Fixtures:** complete metric sets, multiple operations in one print, failed and skipped tests, malformed events, missing and duplicate metrics, and odd and even sample counts.
+- **Commands:** `dart run agents/scripts/test_core.dart verification/test`; `dart run agents/scripts/benchmark.dart`.
+- **Pass:** complete execution retains all ten metrics per sample and correct aggregate statistics; incomplete and failed execution cannot supply passed evidence.
 - **Evidence:** present
 
 ### <a id="v-l-vr-test-001"></a>V-L-VR-TEST-001 — `[lint]` Static analysis

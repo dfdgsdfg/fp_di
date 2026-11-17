@@ -73,6 +73,26 @@ jobs:
         working-directory: packages/fp_di_flutter
         run: flutter pub publish --dry-run
 
+      - name: Benchmarks on manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: dart run agents/scripts/benchmark.dart
+
+      - name: Keep benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-evidence
+          path: output/benchmarks/
+          if-no-files-found: ignore
+
+      - name: Keep fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-evidence
+          path: output/fuzz/
+          if-no-files-found: ignore
+
   minimum-sdk:
     name: Published packages on the minimum SDK
     runs-on: ubuntu-latest

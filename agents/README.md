@@ -57,3 +57,32 @@ dart run agents/scripts/check_vocabulary.dart --prose   # public API words again
 
 Check links after moving shared directories. Local plans and agent memory are
 ignored by Git; canonical rules, scripts, specs, and aliases are shareable.
+
+## Fuzz evidence
+
+`test_core.dart` retains lifecycle fuzz results automatically under
+`output/fuzz/`, including runs selected through a package test directory.
+Each invocation creates a distinct manifest, source provenance, event log,
+coverage report, and failure report. CI uploads the directory after failures.
+See the [artifact contract](../specs/verification/test/spec.md#fuzz-evidence-artifacts)
+for the files and completion rules.
+
+```sh
+dart run agents/scripts/test_core.dart packages/fp_di/test/lifecycle_fuzz_test.dart
+dart run agents/scripts/test_core.dart packages/fp_di_fpdart/test/lifecycle_fuzz_test.dart
+```
+
+## Benchmarks
+
+Run the existing operation timing fixtures with a recorded sampling protocol:
+
+```sh
+dart run agents/scripts/benchmark.dart
+dart run agents/scripts/benchmark.dart --samples 10
+```
+
+The default invocation runs five sequential samples in fresh VMs.
+Each invocation retains its manifest, provenance, raw measurements, statistics,
+and per-sample logs under `output/benchmarks/`.
+See the [benchmark contract](../specs/verification/test/spec.md#benchmark-evidence-artifacts)
+and [performance guide](../packages/fp_di/doc/perfomance.md).

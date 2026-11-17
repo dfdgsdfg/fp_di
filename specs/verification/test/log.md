@@ -43,3 +43,17 @@ tags: [verification, testing, decisions]
 - Decision: The core histories gain `OpenHold`, `CloseHold`, and `DisposeIgnoringHolds`, a terminal phase that closes the open holds before it completes the gates, and the checks `NoDisposalWhileHeld`, `NoSetupAfterRequest`, `OpenHoldsCurrent`, and `IgnoredHoldsReported`, each with a deliberate defect. The teardown of a disposal that waits starts when the listener reads `disposing`, and the wait belongs to the owner of the disposal. The adapter histories gain routes below a `ScopeBoundary`, a logout that does not wait, a disposal that ignores the holds, and the check `NoReleaseBeforeUnmount` with its harness defect.
 - Consequences: The window of a wait is checked with real interleavings in both packages. The default core run initializes fewer roots, because hold commands take some steps; the floors still hold. `Lazy` is not in the graphs, so its closing at the request stays with `Lazy.tla` and a fixed test.
 - References: [random lifecycle histories](spec.md#random-lifecycle-histories), [V-T-RT-LC-043](../../runtime/lifecycle/requirements.md#v-t-rt-lc-043), [V-T-AR-UI-011](../../architecture/requirements.md#v-t-ar-ui-011).
+
+## [2026-11-17] decision | Retain source-attributed fuzz evidence per invocation
+
+- Context: Console reports expose seeds and failures but do not retain the executed source identity. A commit alone cannot identify uncommitted code.
+- Decision: Retain a distinct manifest, source provenance, source snapshots, and reporter events for each fuzz invocation under `output/`. Classify evidence completeness separately from the test process result.
+- Consequences: Results remain attributable to their settings and source content. Missing or interrupted execution cannot supply passed evidence. Source snapshots increase local and CI artifact storage. Generated evidence remains outside Git; the specification owns its durable contract.
+- References: [R-UC-VR-TEST-006](requirements.md#r-uc-vr-test-006), [Fuzz evidence artifacts](spec.md#fuzz-evidence-artifacts).
+
+## [2026-11-17] decision | Retain benchmark samples with source provenance
+
+- Context: A curated timing table does not retain machine-readable samples or the source content of later measurements.
+- Decision: Record benchmark samples, aggregate statistics, and source provenance per invocation. Reuse the existing operation timers and record the execution protocol.
+- Consequences: Comparisons can inspect original samples and source identity. Samples from failed or incomplete execution cannot supply passed evidence. Existing test guards remain active. JIT and machine effects still limit comparisons, and source snapshots consume additional storage.
+- References: [R-UC-VR-TEST-007](requirements.md#r-uc-vr-test-007), [Benchmark evidence artifacts](spec.md#benchmark-evidence-artifacts).
